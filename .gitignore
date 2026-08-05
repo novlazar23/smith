@@ -1,0 +1,9 @@
+pycache/
+*.pyc
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.qwen/
+.codegraph/
+.omo/run-continuation

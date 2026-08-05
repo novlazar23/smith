@@ -1,0 +1,208 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trading-orchestra"
+version = "0.1.0"
+description = "Agentenbasiertes Trading-Orchester — Research, Backtesting, Paper-Trading"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [
+    { name = "Trading Orchestra Team" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+    # Web & API
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "python-multipart>=0.0.12",
+    # HTTP & WS clients
+    "httpx>=0.27.0",
+    "websockets>=14.1",
+    "aiohttp>=3.11.0",
+    # LLM & agents
+    "litellm>=1.50.0",
+    # Data & time-series
+    "pandas>=2.2.0",
+    "numpy>=2.1.0",
+    "scipy>=1.14.0",
+    "scikit-learn>=1.5.0",
+    "numba>=0.60.0",
+    # Storage
+    "sqlalchemy>=2.0.36",
+    "asyncpg>=0.30.0",
+    "clickhouse-connect>=0.8.0",
+    "redis[hiredis]>=5.2.0",
+    "boto3>=1.35.0",
+    "aiobotocore>=2.15.0",
+    "minio>=7.2.0",
+    # Messaging
+    "confluent-kafka>=2.6.0",
+    "python-rapidjson>=1.20",
+    # Config & secrets
+    "pyyaml>=6.0.2",
+    "tomli>=2.0.1; python_version<'3.11'",
+    # Observability
+    "opentelemetry-api>=1.28.0",
+    "opentelemetry-sdk>=1.28.0",
+    "opentelemetry-instrumentation-fastapi>=0.49b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.49b0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.28.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.28.0",
+    "prometheus-client>=0.21.0",
+    "structlog>=24.4.0",
+    "python-json-logger>=2.0.0",
+    # ML tracking
+    "mlflow>=2.17.0",
+    # Vector search
+    "qdrant-client>=1.12.0",
+    # Utilities
+    "tenacity>=9.0.0",
+    "click>=8.1.7",
+    "rich>=13.9.0",
+    "pyarrow>=18.0.0",
+    "fastavro>=1.9.0",
+    "ciso8601>=2.3.0",
+    "orjson>=3.10.0",
+    # CCXT
+    "ccxt>=4.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Linting & formatting
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "types-pyyaml>=6.0.12",
+    "types-redis>=5.2.0",
+    "types-boto3>=1.35.0",
+    # Testing
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "hypothesis>=6.120.0",
+    "testcontainers[postgres,clickhouse,redis,minio]>=4.9.0",
+    "responses>=0.25.0",
+    "dirty-equals>=0.9.0",
+    # Coverage
+    "coverage[toml]>=7.6.0",
+    # Migrations
+    "alembic>=1.14.0",
+    # Documentation
+    "mkdocs>=1.6.0",
+]
+paper = [
+    # Paper trading extensions
+    "ta>=0.11.0",
+    "vectorbt>=0.26.0",
+    "empyrical>=0.5.5",
+]
+
+[project.scripts]
+trading-orchestra = "apps.api.main:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["packages", "apps"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["packages", "apps", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "A",     # flake8-builtins
+    "C4",    # flake8-comprehensions
+    "SIM",   # flake8-simplify
+    "TCH",   # flake8-type-checking
+    "TID",   # flake8-tidy-imports
+    "RUF",   # ruff rules
+    "ERA",   # flake8-duplicate-code (no, use ERA for commented-out code)
+    "PIE",   # flake8-pie
+    "PT",    # flake8-pytest-style
+    "FBT",   # flake8-boolean-trap
+    "ANN",   # flake8-annotations
+    "PTH",   # flake8-use-pathlib
+]
+ignore = [
+    "ANN101",  # self type annotation
+    "ANN102",  # cls type annotation
+    "E501",    # line length (handled by formatter)
+    "TCH001",  # typing-only imports
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "TID252"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "--strict-markers",
+    "-vv",
+    "--tb=short",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "replay: marks tests requiring historical data",
+    "unit: marks tests as unit tests",
+    "e2e: marks tests as end-to-end tests",
+]
+
+[tool.coverage.run]
+source = ["packages", "apps"]
+omit = [
+    "*/tests/*",
+    "*/__init__.py",
+    "*/migrations/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+fail_under = 80

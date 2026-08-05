@@ -1,0 +1,46 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff (format)
+        entry: ruff format
+        language: system
+        types: [python]
+        stages: [commit]
+
+      - id: ruff-lint
+        name: ruff (lint)
+        entry: ruff check --fix
+        language: system
+        types: [python]
+        stages: [commit]
+
+      - id: mypy
+        name: mypy
+        entry: mypy
+        language: system
+        types: [python]
+        stages: [commit]
+
+      - id: pytest
+        name: pytest (quick)
+        entry: pytest -m "not slow" -q
+        language: system
+        pass_filenames: false
+        stages: [push]
+
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        types_or: [yaml, json, markdown]
+        exclude: |
+          (?x)^(
+            .harness/|
+            migrations/
+          )
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.0
+    hooks:
+      - id: gitleaks
