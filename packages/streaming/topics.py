@@ -11,6 +11,7 @@ Definiert alle Topics und deren Konfiguration:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,7 @@ class TopicRegistry:
     )
 
     # Topic lookup by event type
-    EVENT_TYPE_TO_TOPIC: dict[str, TopicConfig] = {
+    EVENT_TYPE_TO_TOPIC: ClassVar[dict[str, TopicConfig]] = {
         "MarketEvent": EVENTS,
         "Candle": FEATURES,
         "Trade": EVENTS,
@@ -93,7 +94,7 @@ class TopicRegistry:
         "RiskDecision": RISK,
     }
 
-    ALL_TOPICS: list[TopicConfig] = [
+    ALL_TOPICS: ClassVar[list[TopicConfig]] = [
         EVENTS,
         SOURCE_METADATA,
         DECISIONS,

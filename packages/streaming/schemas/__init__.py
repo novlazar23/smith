@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import uuid as _uuid
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 

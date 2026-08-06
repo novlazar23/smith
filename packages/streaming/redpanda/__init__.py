@@ -11,17 +11,12 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, ClassVar
 
-from ..base import (
-    CompressionType,
-    Consumer,
-    DeadLetterHandler,
-    EventPartitionKey,
-    Producer,
-    StreamConfig,
-)
+from ..base import CompressionType as CompressionType
+from ..base import Consumer, DeadLetterHandler, Producer, StreamConfig
+from ..base import EventPartitionKey as EventPartitionKey
 from ..schemas import (
     Candle,
     MarketEvent,
@@ -37,7 +32,7 @@ logger = logging.getLogger(__name__)
 class EventSerializer:
     """Serialisiert und deserialisiert Events."""
 
-    KNOWN_TYPES = {
+    KNOWN_TYPES: ClassVar[dict[str, type]] = {
         "MarketEvent": MarketEvent,
         "Candle": Candle,
         "Trade": Trade,
@@ -238,7 +233,7 @@ class RedpandaDeadLetterHandler(DeadLetterHandler):
             "event": event,
             "error": str(error),
             "error_type": type(error).__name__,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
         self._dlq_events.append(dlq_entry)
         logger.error("DLQ: event '%s' failed: %s", event.get("event_id", "unknown"), error)
