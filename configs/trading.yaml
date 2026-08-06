@@ -1,0 +1,87 @@
+# Trading Orchestrator — Standardkonfiguration
+# ENV-Variablen (APP_*) überschreiben diese Werte.
+
+app_name: trading-orchestra
+version: "0.1.0"
+environment: development
+
+database:
+  postgresql:
+    host: localhost
+    port: 5432
+    database: trading
+    user: trading
+    password: ""
+    pool_size: 10
+    max_overflow: 5
+    echo: false
+  clickhouse:
+    host: localhost
+    port: 8123
+    database: trading
+    user: default
+    password: ""
+    secure: false
+    compress: true
+  redis:
+    host: localhost
+    port: 6379
+    db: 0
+    password: ""
+    decode_responses: true
+    max_connections: 20
+
+trading:
+  mode: paper
+  risk:
+    max_drawdown: 0.10
+    max_position_size: 0.25
+    max_total_exposure: 1.0
+    max_open_positions: 10
+    max_single_trade_risk: 0.02
+    Kelly_fraction: 0.25
+    min_confidence_threshold: 0.55
+  default_timeframes:
+    - 15m
+    - 1h
+    - 4h
+    - 1d
+  min_candles: 100
+  rebalance_interval: 1h
+
+streaming:
+  redpanda:
+    bootstrap_servers: localhost:9092
+    client_id: trading-orchestra
+    compression_type: none
+    acks: all
+    retry_max: 3
+    request_timeout_ms: 30000
+    enable_idempotence: true
+  consumer:
+    group_id: trading-consumer-group
+    auto_offset_reset: earliest
+    enable_auto_commit: true
+    session_timeout_ms: 30000
+    max_poll_records: 500
+  market_data_topic: market.data
+  analysis_request_topic: analysis.requests
+  agent_report_topic: agents.reports
+  final_decision_topic: trading.decisions
+  order_topic: trading.orders
+  dead_letter_topic: dead.letter
+
+observability:
+  enabled: true
+  prometheus_port: 9090
+  prometheus_path: /metrics
+  prometheus_namespace: trading
+  log_level: INFO
+  log_json: true
+  tracing_enabled: true
+  tracing_service_name: trading-orchestra
+  tracing_otlp_endpoint: http://localhost:4317
+  tracing_sampling_rate: 1.0
+  mlflow_enabled: true
+  mlflow_tracking_uri: http://localhost:5000
+  mlflow_experiment_name: trading-orchestra
