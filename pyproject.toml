@@ -156,6 +156,8 @@ ignore = [
 "tests/**" = ["S101", "PLR2004", "TID252"]
 "packages/validation/validators.py" = ["FBT001", "FBT002"]
 "packages/streaming/redpanda/__init__.py" = ["ANN401"]
+"packages/observability/logging_.py" = ["ANN401"]
+"packages/observability/tracing.py" = ["FBT001", "FBT002"]
 
 [tool.ruff.format]
 quote-style = "double"
