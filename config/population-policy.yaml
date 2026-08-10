@@ -1,0 +1,51 @@
+version: 1
+max_replacement_per_generation: 0.20
+
+evolution_budget:
+  exploitation: 0.70
+  exploration: 0.20
+  radical_exploration: 0.10
+
+promotion:
+  minimum_observations: 100
+  relative_improvement_min: 0.03
+  require_out_of_sample: true
+  require_walk_forward: true
+  require_shadow_mode: true
+  require_positive_ensemble_contribution: true
+  require_security_pass: true
+
+categories:
+  technical:
+    active: 5
+    challengers: 10
+  chart_pattern:
+    active: 3
+    challengers: 6
+  elliott:
+    active: 3
+    challengers: 6
+  fibonacci:
+    active: 3
+    challengers: 6
+  market_structure:
+    active: 4
+    challengers: 8
+  orderflow:
+    active: 4
+    challengers: 8
+  derivatives:
+    active: 3
+    challengers: 6
+  news:
+    active: 3
+    challengers: 6
+  macro:
+    active: 3
+    challengers: 6
+  historical_analog:
+    active: 3
+    challengers: 6
+  statistical:
+    active: 3
+    challengers: 6

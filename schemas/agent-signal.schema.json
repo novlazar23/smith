@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentSignal",
+  "type": "object",
+  "required": [
+    "direction",
+    "confidence",
+    "horizon",
+    "strongest_evidence",
+    "strongest_counter_evidence",
+    "missing_data"
+  ],
+  "properties": {
+    "direction": {
+      "enum": [
+        "LONG",
+        "SHORT",
+        "NEUTRAL"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "horizon": {
+      "enum": [
+        "scalp",
+        "intraday",
+        "swing",
+        "position"
+      ]
+    },
+    "invalidation": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "strongest_evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "strongest_counter_evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "missing_data": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": true
+}
