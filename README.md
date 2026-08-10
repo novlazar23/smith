@@ -573,6 +573,8 @@ TODOs sind nur zulässig, wenn:
 ├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml
+├── uv.lock
+├── .python-version
 ├── .env.example
 ├── config/
 │   ├── risk-policy.yaml
@@ -604,8 +606,7 @@ TODOs sind nur zulässig, wenn:
 - Docker Compose v2
 
 ```bash
-cp .env.example .env
-docker compose up --build
+./scripts/bootstrap.sh --docker
 ```
 
 API:
@@ -630,13 +631,69 @@ http://localhost:8080/docs
 
 # 6. Lokale Entwicklung
 
+Voraussetzungen: Git und
+[uv](https://docs.astral.sh/uv/getting-started/installation/) 0.11.x. `uv` installiert die
+in `.python-version` festgelegte Python-Version bei Bedarf selbst. Der erste Befehl erzeugt eine
+lokale `.env` aus der Vorlage und installiert exakt die in `uv.lock` gesperrten Abhängigkeiten:
+
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-pytest
-uvicorn trading_harness.main:app --reload --port 8080
+./scripts/bootstrap.sh
+make check
+make run
 ```
+
+Ein vollständiger lokaler Check ist auch direkt möglich:
+
+```bash
+./scripts/bootstrap.sh --check
+```
+
+## Entwicklung auf mehreren Geräten
+
+Der reproduzierbare Übergabepunkt ist immer ein Git-Commit. Auf einem neuen Gerät genügt:
+
+```bash
+git clone https://github.com/novlazar23/smith.git
+cd smith
+./scripts/bootstrap.sh
+make check
+```
+
+Vor dem Gerätewechsel Änderungen auf einem eigenen Branch committen und ausdrücklich zu GitHub
+pushen; auf dem Zielgerät denselben Branch auschecken und `./scripts/bootstrap.sh` erneut ausführen.
+`uv.lock`, `.python-version`, Konfigurationen, Schemas und Prompts gehören in Git. `.env`, `.venv`,
+API-Schlüssel, Datenbankinhalte und Docker-Volumes bleiben absichtlich lokal und dürfen nicht
+committet werden. Benötigt ein zweites Gerät denselben Datenbestand, muss dieser separat über einen
+verschlüsselten Datenbank-Backup/Restore-Prozess übertragen werden.
+
+CI verwendet ebenfalls die gesperrte Umgebung und führt `make check` aus. Damit wird derselbe
+Test-, Lint- und Typprüfungs-Gate lokal und auf GitHub ausgeführt.
+
+## Autarke Entwicklung mit OpenCode
+
+OpenCode benötigt keine Codex- oder Harness-Installation. Nach Bootstrap und eigener
+Provider-/Modell-Anmeldung wird es im Repository-Root gestartet:
+
+```bash
+./scripts/bootstrap.sh
+opencode
+```
+
+Die vollständige Einrichtung und Bedienung ist in der
+[OpenCode-Nutzungsanleitung](docs/opencode-nutzung.md) beschrieben.
+
+`AGENTS.md` enthält die verbindlichen Projekt- und Sicherheitsregeln. `opencode.json` erlaubt
+autonome Lese-, Editier-, Test- und Recherchearbeit im Repository, verlangt aber eine Bestätigung
+für `git push` und blockiert Force-Push sowie `git reset --hard`. Die Modellwahl und Zugangsdaten
+bleiben bewusst in der persönlichen OpenCode-Konfiguration und werden nicht in Git gespeichert.
+
+Projektbefehle:
+
+- `/resume` rekonstruiert den Stand ausschließlich aus Git und `docs/handoff.md` und setzt die
+  Entwicklung fort.
+- `/check` führt den vollständigen Qualitäts-Gate aus und behebt Fehler iterativ.
+- `/handoff` prüft, dokumentiert und committet einen übergabefähigen Stand; ein Push benötigt eine
+  ausdrückliche Freigabe.
 
 ---
 

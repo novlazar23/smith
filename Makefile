@@ -1,16 +1,24 @@
-.PHONY: install test lint run compose-up compose-down
+.PHONY: bootstrap sync check test lint typecheck run compose-up compose-down
 
-install:
-	python -m pip install -e ".[dev]"
+bootstrap:
+	./scripts/bootstrap.sh
+
+sync:
+	uv sync --frozen --all-extras
+
+check: test lint typecheck
 
 test:
-	pytest -q
+	uv run pytest -q
 
 lint:
-	ruff check src tests
+	uv run ruff check src tests
+
+typecheck:
+	uv run mypy src
 
 run:
-	uvicorn trading_harness.main:app --reload --port 8080
+	uv run uvicorn trading_harness.main:app --reload --port 8080
 
 compose-up:
 	docker compose up --build
