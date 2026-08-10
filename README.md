@@ -573,6 +573,8 @@ TODOs sind nur zulässig, wenn:
 ├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml
+├── uv.lock
+├── .python-version
 ├── .env.example
 ├── config/
 │   ├── risk-policy.yaml
@@ -604,8 +606,7 @@ TODOs sind nur zulässig, wenn:
 - Docker Compose v2
 
 ```bash
-cp .env.example .env
-docker compose up --build
+./scripts/bootstrap.sh --docker
 ```
 
 API:
@@ -630,13 +631,43 @@ http://localhost:8080/docs
 
 # 6. Lokale Entwicklung
 
+Voraussetzungen: Git und
+[uv](https://docs.astral.sh/uv/getting-started/installation/) 0.11.x. `uv` installiert die
+in `.python-version` festgelegte Python-Version bei Bedarf selbst. Der erste Befehl erzeugt eine
+lokale `.env` aus der Vorlage und installiert exakt die in `uv.lock` gesperrten Abhängigkeiten:
+
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-pytest
-uvicorn trading_harness.main:app --reload --port 8080
+./scripts/bootstrap.sh
+make check
+make run
 ```
+
+Ein vollständiger lokaler Check ist auch direkt möglich:
+
+```bash
+./scripts/bootstrap.sh --check
+```
+
+## Entwicklung auf mehreren Geräten
+
+Der reproduzierbare Übergabepunkt ist immer ein Git-Commit. Auf einem neuen Gerät genügt:
+
+```bash
+git clone https://github.com/novlazar23/smith.git
+cd smith
+./scripts/bootstrap.sh
+make check
+```
+
+Vor dem Gerätewechsel Änderungen auf einem eigenen Branch committen und ausdrücklich zu GitHub
+pushen; auf dem Zielgerät denselben Branch auschecken und `./scripts/bootstrap.sh` erneut ausführen.
+`uv.lock`, `.python-version`, Konfigurationen, Schemas und Prompts gehören in Git. `.env`, `.venv`,
+API-Schlüssel, Datenbankinhalte und Docker-Volumes bleiben absichtlich lokal und dürfen nicht
+committet werden. Benötigt ein zweites Gerät denselben Datenbestand, muss dieser separat über einen
+verschlüsselten Datenbank-Backup/Restore-Prozess übertragen werden.
+
+CI verwendet ebenfalls die gesperrte Umgebung und führt `make check` aus. Damit wird derselbe
+Test-, Lint- und Typprüfungs-Gate lokal und auf GitHub ausgeführt.
 
 ---
 

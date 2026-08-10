@@ -1,7 +1,6 @@
 from trading_harness.models import TradeProposal
 from trading_harness.services.risk_engine import RiskEngine
 
-
 POLICY = {
     "allowed_symbols": ["BTCUSDT"],
     "max_risk_per_trade": 0.005,
@@ -15,20 +14,20 @@ POLICY = {
 
 
 def base_proposal(**updates):
-    values = dict(
-        decision_id="d1",
-        symbol="BTCUSDT",
-        side="BUY",
-        equity=10000,
-        entry_price=100,
-        stop_price=98,
-        target_price=104,
-        requested_leverage=1,
-        open_positions=0,
-        current_daily_loss_fraction=0,
-        current_portfolio_risk_fraction=0,
-        expected_slippage_bps=5,
-    )
+    values = {
+        "decision_id": "d1",
+        "symbol": "BTCUSDT",
+        "side": "BUY",
+        "equity": 10000,
+        "entry_price": 100,
+        "stop_price": 98,
+        "target_price": 104,
+        "requested_leverage": 1,
+        "open_positions": 0,
+        "current_daily_loss_fraction": 0,
+        "current_portfolio_risk_fraction": 0,
+        "expected_slippage_bps": 5,
+    }
     values.update(updates)
     return TradeProposal(**values)
 

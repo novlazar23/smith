@@ -1,7 +1,6 @@
 from trading_harness.models import ChallengerEvaluation
 from trading_harness.services.evolution import PromotionPolicy
 
-
 POLICY = {
     "promotion": {
         "minimum_observations": 100,
@@ -16,20 +15,20 @@ POLICY = {
 
 
 def item(**updates):
-    values = dict(
-        challenger_id="tech-2",
-        incumbent_id="tech-1",
-        category="technical",
-        incumbent_category="technical",
-        observations=200,
-        incumbent_score=0.70,
-        challenger_score=0.75,
-        out_of_sample_pass=True,
-        walk_forward_pass=True,
-        shadow_pass=True,
-        ensemble_contribution=0.01,
-        security_pass=True,
-    )
+    values = {
+        "challenger_id": "tech-2",
+        "incumbent_id": "tech-1",
+        "category": "technical",
+        "incumbent_category": "technical",
+        "observations": 200,
+        "incumbent_score": 0.70,
+        "challenger_score": 0.75,
+        "out_of_sample_pass": True,
+        "walk_forward_pass": True,
+        "shadow_pass": True,
+        "ensemble_contribution": 0.01,
+        "security_pass": True,
+    }
     values.update(updates)
     return ChallengerEvaluation(**values)
 
