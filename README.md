@@ -669,6 +669,29 @@ verschlüsselten Datenbank-Backup/Restore-Prozess übertragen werden.
 CI verwendet ebenfalls die gesperrte Umgebung und führt `make check` aus. Damit wird derselbe
 Test-, Lint- und Typprüfungs-Gate lokal und auf GitHub ausgeführt.
 
+## Autarke Entwicklung mit OpenCode
+
+OpenCode benötigt keine Codex- oder Harness-Installation. Nach Bootstrap und eigener
+Provider-/Modell-Anmeldung wird es im Repository-Root gestartet:
+
+```bash
+./scripts/bootstrap.sh
+opencode
+```
+
+`AGENTS.md` enthält die verbindlichen Projekt- und Sicherheitsregeln. `opencode.json` erlaubt
+autonome Lese-, Editier-, Test- und Recherchearbeit im Repository, verlangt aber eine Bestätigung
+für `git push` und blockiert Force-Push sowie `git reset --hard`. Die Modellwahl und Zugangsdaten
+bleiben bewusst in der persönlichen OpenCode-Konfiguration und werden nicht in Git gespeichert.
+
+Projektbefehle:
+
+- `/resume` rekonstruiert den Stand ausschließlich aus Git und `docs/handoff.md` und setzt die
+  Entwicklung fort.
+- `/check` führt den vollständigen Qualitäts-Gate aus und behebt Fehler iterativ.
+- `/handoff` prüft, dokumentiert und committet einen übergabefähigen Stand; ein Push benötigt eine
+  ausdrückliche Freigabe.
+
 ---
 
 # 7. LLM-Konfiguration
