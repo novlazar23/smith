@@ -4,7 +4,8 @@
 
 No implementation task is currently in progress. The repository provides a reproducible Python 3.12
 environment, a frozen dependency lock, matching local/CI checks, and versioned OpenCode rules and
-commands.
+commands. The complete German OpenCode usage and cross-device workflow is documented in
+`docs/opencode-nutzung.md`.
 
 ## Next priority
 

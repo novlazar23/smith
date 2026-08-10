@@ -679,6 +679,9 @@ Provider-/Modell-Anmeldung wird es im Repository-Root gestartet:
 opencode
 ```
 
+Die vollständige Einrichtung und Bedienung ist in der
+[OpenCode-Nutzungsanleitung](docs/opencode-nutzung.md) beschrieben.
+
 `AGENTS.md` enthält die verbindlichen Projekt- und Sicherheitsregeln. `opencode.json` erlaubt
 autonome Lese-, Editier-, Test- und Recherchearbeit im Repository, verlangt aber eine Bestätigung
 für `git push` und blockiert Force-Push sowie `git reset --hard`. Die Modellwahl und Zugangsdaten
