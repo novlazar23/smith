@@ -167,3 +167,107 @@ class TracingRegistry:
             self._tracer_provider.force_flush(timeout_millis=5000)
             self._tracer_provider.shutdown(timeout_millis=5000)
             self._initialized = False
+
+    # ── EPIC-12: Context-Helper ──────────────────────────────────────
+
+    def set_run_context(self, span: trace.Span, *, run_id: str, request_id: str | None = None) -> None:
+        """Setzt Run- und Request-Kontext-Attribute auf einen Span.
+
+        Args:
+            span: Der zu aktualisierende Span.
+            run_id: Eindeutige ID des Analyse-Laufs.
+            request_id: Optionale Request-ID.
+        """
+        span.set_attribute("run_id", run_id)
+        if request_id:
+            span.set_attribute("request_id", request_id)
+
+    def set_agent_context(self, span: trace.Span, agent_id: str) -> None:
+        """Setzt Agent-Kontext-Attribute auf einen Span.
+
+        Args:
+            span: Der zu aktualisierende Span.
+            agent_id: ID des ausführenden Agents.
+        """
+        span.set_attribute("agent_id", agent_id)
+
+    def set_report_context(self, span: trace.Span, report_id: str) -> None:
+        """Setzt Report-Kontext-Attribute auf einen Span.
+
+        Args:
+            span: Der zu aktualisierende Span.
+            report_id: ID des Reports.
+        """
+        span.set_attribute("report_id", report_id)
+
+    def set_snapshot_context(self, span: trace.Span, snapshot_id: str) -> None:
+        """Setzt Snapshot-Kontext-Attribute auf einen Span.
+
+        Args:
+            span: Der zu aktualisierende Span.
+            snapshot_id: ID des Market-Snapshots.
+        """
+        span.set_attribute("snapshot_id", snapshot_id)
+
+    def create_analysis_span(
+        self,
+        analysis_type: str,
+        run_id: str,
+        attributes: dict[str, Any] | None = None,
+    ) -> trace.Span:
+        """Erstellt einen Span für eine Analyse mit vollem Kontext.
+
+        Args:
+            analysis_type: Typ der Analyse.
+            run_id: Eindeutige ID des Analyse-Laufs.
+            attributes: Zusätzliche Attribute.
+
+        Returns:
+            Der erstellte Span mit run_id und analysis_type.
+        """
+        attrs = {"analysis_type": analysis_type, "run_id": run_id, **(attributes or {})}
+        return self.create_span(f"analysis.{analysis_type}", attributes=attrs)
+
+    def create_agent_span(
+        self,
+        agent_id: str,
+        run_id: str,
+        attributes: dict[str, Any] | None = None,
+    ) -> trace.Span:
+        """Erstellt einen Span für eine Agentenausführung mit vollem Kontext.
+
+        Args:
+            agent_id: ID des Agents.
+            run_id: ID des übergeordneten Analyse-Laufs.
+            attributes: Zusätzliche Attribute.
+
+        Returns:
+            Der erstellte Span mit agent_id und run_id.
+        """
+        attrs = {"agent_id": agent_id, "run_id": run_id, **(attributes or {})}
+        return self.create_span(f"agent.{agent_id}", attributes=attrs)
+
+    def create_decision_span(
+        self,
+        run_id: str,
+        request_id: str,
+        report_id: str | None = None,
+        snapshot_id: str | None = None,
+    ) -> trace.Span:
+        """Erstellt einen Span für eine Handelsentscheidung mit vollem Kontext.
+
+        Args:
+            run_id: ID des Analyse-Laufs.
+            request_id: ID der Anfrage.
+            report_id: Optionale ID des Reports.
+            snapshot_id: Optionale ID des Market-Snapshots.
+
+        Returns:
+            Der erstellte Span mit allen Kontext-Attributen.
+        """
+        attrs = {"run_id": run_id, "request_id": request_id}
+        if report_id:
+            attrs["report_id"] = report_id
+        if snapshot_id:
+            attrs["snapshot_id"] = snapshot_id
+        return self.create_span("trading.decision", attributes=attrs)

@@ -6,7 +6,7 @@ Ein blockiertes Gate kann technisch nicht überschrieben werden.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -59,7 +59,7 @@ class RiskDecision(BaseModel):
     blocking_reasons: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     gates: list[RiskGateResult] = Field(default_factory=list)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def veto(self) -> bool:

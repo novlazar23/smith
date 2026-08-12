@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
 
@@ -36,7 +36,7 @@ class Trade:
     commission: float = 0.0
     filled_price: float = 0.0
     filled_quantity: float = 0.0
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     status: str = "pending"  # pending, filled, cancelled
 
     @property
@@ -78,7 +78,7 @@ class PaperAccount:
     positions: dict[str, PaperPosition] = field(default_factory=dict)
     total_trades: int = 0
     total_commission: float = 0.0
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def equity(self) -> float:

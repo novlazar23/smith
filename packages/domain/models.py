@@ -6,7 +6,7 @@ Beziehungen und domänenspezifischen Methoden.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -129,7 +129,7 @@ class Trade(BaseModel):
     quantity: float = Field(gt=0)
     side: str = Field(..., description="buy / sell.")
     commission: float = Field(ge=0, default=0.0)
-    executed_at: datetime = Field(default_factory=datetime.utcnow)
+    executed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class Order(BaseModel):
@@ -146,7 +146,7 @@ class Order(BaseModel):
     side: str = Field(..., description="buy / sell.")
     order_type: str = Field(default="limit", description="limit / market / stop.")
     status: str = Field(default="pending", description="pending / filled / cancelled / rejected.")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 __all__ = [

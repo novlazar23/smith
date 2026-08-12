@@ -10,6 +10,7 @@ from .base import (
     TradeDirection,
 )
 from .executor import PaperExecutor
+from .position_lifecycle import Fill, PositionLifecycle, PositionStatus
 
 __all__ = [
     "OrderType",
@@ -18,4 +19,7 @@ __all__ = [
     "PaperPosition",
     "Trade",
     "TradeDirection",
+    "Fill",
+    "PositionLifecycle",
+    "PositionStatus",
 ]

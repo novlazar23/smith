@@ -154,6 +154,119 @@ class MetricsRegistry:
         )
         self.up_gauge.set(1)
 
+        # ── EPIC-12: Agent-Metriken ────────────────────────────────────
+        self.agent_runs_total = Counter(
+            f"{namespace}_agent_runs_total",
+            "Gesamtanzahl Agentenausführungen.",
+            ["agent_id", "outcome"],
+            registry=self._registry,
+        )
+
+        self.agent_failures_total = Counter(
+            f"{namespace}_agent_failures_total",
+            "Agent-Ausführungsausfälle.",
+            ["agent_id", "error_type"],
+            registry=self._registry,
+        )
+
+        self.agent_duration = Histogram(
+            f"{namespace}_agent_duration_seconds",
+            "Dauer von Agentenausführungen.",
+            ["agent_id"],
+            buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0),
+            registry=self._registry,
+        )
+
+        self.agent_schema_errors_total = Counter(
+            f"{namespace}_agent_schema_errors_total",
+            "Schemavalidierungsfehler in Agenten-Ausgaben.",
+            ["agent_id"],
+            registry=self._registry,
+        )
+
+        # ── EPIC-12: Analyse-Metriken ──────────────────────────────────
+        self.analysis_runs_total = Counter(
+            f"{namespace}_analysis_runs_total",
+            "Gesamtanzahl durchgeführter Analysen.",
+            ["analysis_type"],
+            registry=self._registry,
+        )
+
+        self.analysis_duration = Histogram(
+            f"{namespace}_analysis_duration_seconds",
+            "Dauer von Analyse-Läufen.",
+            ["analysis_type"],
+            buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0),
+            registry=self._registry,
+        )
+
+        # ── EPIC-12: Data Quality ──────────────────────────────────────
+        self.data_quality_score = Gauge(
+            f"{namespace}_data_quality_score",
+            "Aktueller Datenqualitäts-Score (0-1).",
+            ["data_source"],
+            registry=self._registry,
+        )
+
+        self.orderbook_sequence_gaps_total = Counter(
+            f"{namespace}_orderbook_sequence_gaps_total",
+            "Lücken in Orderbook-Sequence-Nummern.",
+            ["venue", "instrument"],
+            registry=self._registry,
+        )
+
+        # ── EPIC-12: Consensus ─────────────────────────────────────────
+        self.consensus_disagreement = Gauge(
+            f"{namespace}_consensus_disagreement",
+            "Aktueller Konsens-Unsicherheitsgrad (0=Einigkeit, 1=Maximal).",
+            ["window"],
+            registry=self._registry,
+        )
+
+        # ── EPIC-12: Forecast Scoring ──────────────────────────────────
+        self.forecast_brier_score = Gauge(
+            f"{namespace}_forecast_brier_score",
+            "Aktueller Brier-Score für Vorhersagen.",
+            ["agent_id"],
+            registry=self._registry,
+        )
+
+        self.forecast_log_loss = Gauge(
+            f"{namespace}_forecast_log_loss",
+            "Aktueller Log Loss für Vorhersagen.",
+            ["agent_id"],
+            registry=self._registry,
+        )
+
+        # ── EPIC-12: Paper Trading ─────────────────────────────────────
+        self.paper_pnl_gauge = Gauge(
+            f"{namespace}_paper_pnl",
+            "Paper-Trading PnL.",
+            ["pnl_type"],
+            registry=self._registry,
+        )
+
+        self.paper_drawdown = Gauge(
+            f"{namespace}_paper_drawdown",
+            "Paper-Trading Drawdown (0-1).",
+            registry=self._registry,
+        )
+
+        # ── EPIC-12: Risk ──────────────────────────────────────────────
+        self.risk_blocks_total = Counter(
+            f"{namespace}_risk_blocks_total",
+            "Anzahl der vom Risk-Manager blockierten Orders.",
+            ["reason"],
+            registry=self._registry,
+        )
+
+        self.no_trade_ratio = Gauge(
+            f"{namespace}_no_trade_ratio",
+            "Anteil der NO_TRADE-Entscheidungen (0-1).",
+            ["agent_id"],
+            registry=self._registry,
+        )
+
     @property
     def registry(self) -> Registry:
         """Gibt den zugrunde liegenden Prometheus-Registry zurück."""
@@ -324,3 +437,157 @@ class MetricsRegistry:
             "up": bool(self.up_gauge._value.get()),
             "health_components": health_components,
         }
+
+    # ── EPIC-12: Agent-Metrik-Helper ─────────────────────────────────
+
+    def record_agent_run(
+        self,
+        agent_id: str,
+        outcome: str,
+        duration: float = 0.0,
+    ) -> None:
+        """Recordet eine Agentenausführung.
+
+        Args:
+            agent_id: ID des Agents.
+            outcome: "success", "failure", "timeout".
+            duration: Ausführungsdauer in Sekunden.
+        """
+        self.agent_runs_total.labels(agent_id=agent_id, outcome=outcome).inc()
+        if duration > 0:
+            self.agent_duration.labels(agent_id=agent_id).observe(duration)
+
+    def record_agent_failure(
+        self,
+        agent_id: str,
+        error_type: str = "unknown",
+    ) -> None:
+        """Recordet einen Agentenausfall.
+
+        Args:
+            agent_id: ID des Agents.
+            error_type: Art des Fehlers.
+        """
+        self.agent_failures_total.labels(
+            agent_id=agent_id, error_type=error_type,
+        ).inc()
+
+    def record_agent_schema_error(self, agent_id: str) -> None:
+        """Recordet einen Schemavalidierungsfehler.
+
+        Args:
+            agent_id: ID des Agents.
+        """
+        self.agent_schema_errors_total.labels(agent_id=agent_id).inc()
+
+    # ── EPIC-12: Analyse-Metrik-Helper ─────────────────────────────────
+
+    def record_analysis_run(
+        self,
+        analysis_type: str,
+        duration: float = 0.0,
+    ) -> None:
+        """Recordet einen Analyse-Lauf.
+
+        Args:
+            analysis_type: Typ der Analyse.
+            duration: Dauer in Sekunden.
+        """
+        self.analysis_runs_total.labels(analysis_type=analysis_type).inc()
+        if duration > 0:
+            self.analysis_duration.labels(analysis_type=analysis_type).observe(duration)
+
+    # ── EPIC-12: Data Quality Helper ───────────────────────────────────
+
+    def set_data_quality_score(self, data_source: str, score: float) -> None:
+        """Setzt den Datenqualitäts-Score.
+
+        Args:
+            data_source: Datenquelle.
+            score: Score zwischen 0.0 und 1.0.
+        """
+        self.data_quality_score.labels(data_source=data_source).set(score)
+
+    def record_sequence_gap(
+        self,
+        venue: str,
+        instrument: str,
+    ) -> None:
+        """Recordet eine Sequence-Lücke im Orderbook.
+
+        Args:
+            venue: Handelsplatz.
+            instrument: Instrument.
+        """
+        self.orderbook_sequence_gaps_total.labels(
+            venue=venue, instrument=instrument,
+        ).inc()
+
+    # ── EPIC-12: Consensus Helper ──────────────────────────────────────
+
+    def set_consensus_disagreement(self, window: str, value: float) -> None:
+        """Setzt den aktuellen Konsens-Unsicherheitsgrad.
+
+        Args:
+            window: Zeitfenster-Label.
+            value: Unsicherheitsgrad 0-1.
+        """
+        self.consensus_disagreement.labels(window=window).set(value)
+
+    # ── EPIC-12: Forecast Scoring Helper ───────────────────────────────
+
+    def set_forecast_brier(self, agent_id: str, score: float) -> None:
+        """Setzt den Brier-Score eines Agents.
+
+        Args:
+            agent_id: ID des Agents.
+            score: Brier-Score.
+        """
+        self.forecast_brier_score.labels(agent_id=agent_id).set(score)
+
+    def set_forecast_log_loss(self, agent_id: str, score: float) -> None:
+        """Setzt den Log Loss eines Agents.
+
+        Args:
+            agent_id: ID des Agents.
+            score: Log Loss.
+        """
+        self.forecast_log_loss.labels(agent_id=agent_id).set(score)
+
+    # ── EPIC-12: Paper Trading Helper ──────────────────────────────────
+
+    def set_paper_pnl(self, pnl_type: str, value: float) -> None:
+        """Setzt den Paper-Trading PnL.
+
+        Args:
+            pnl_type: "realized" oder "unrealized".
+            value: PnL-Wert.
+        """
+        self.paper_pnl_gauge.labels(pnl_type=pnl_type).set(value)
+
+    def set_paper_drawdown(self, value: float) -> None:
+        """Setzt den Paper-Trading Drawdown.
+
+        Args:
+            value: Drawdown-Wert (0-1).
+        """
+        self.paper_drawdown.set(value)
+
+    # ── EPIC-12: Risk Helper ───────────────────────────────────────────
+
+    def record_risk_block(self, reason: str) -> None:
+        """Recordet eine durch Risk blockierte Order.
+
+        Args:
+            reason: Grund der Blockierung.
+        """
+        self.risk_blocks_total.labels(reason=reason).inc()
+
+    def set_no_trade_ratio(self, agent_id: str, ratio: float) -> None:
+        """Setzt den NO_TRADE-Anteil eines Agents.
+
+        Args:
+            agent_id: ID des Agents.
+            ratio: Anteil 0-1.
+        """
+        self.no_trade_ratio.labels(agent_id=agent_id).set(ratio)

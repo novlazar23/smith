@@ -5,14 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from packages.governance.base import (
+from packages.governance.decision_engine import (
     DecisionRule,
     FinalDecisionData,
     FinalDecisionType,
     GovernanceConfig,
 )
-from packages.governance.blocking import BlockingRules
-from packages.governance.engine import DecisionEngine
+from packages.governance.decision_engine import BlockingRules
+from packages.governance.decision_engine import DecisionEngine
 
 # ---------------------------------------------------------------------------
 # Base types

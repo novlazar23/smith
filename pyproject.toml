@@ -105,7 +105,7 @@ paper = [
     # Paper trading extensions
     "ta>=0.11.0",
     "vectorbt>=0.26.0",
-    "empyrical>=0.5.5",
+    "empyrical-reloaded>=0.5.10",
 ]
 
 [project.scripts]
@@ -153,11 +153,17 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "PLR2004", "TID252"]
+"tests/**" = ["S101", "PLR2004", "TID252", "ANN401", "B017", "PT011", "ANN201"]
 "packages/validation/validators.py" = ["FBT001", "FBT002"]
-"packages/streaming/redpanda/__init__.py" = ["ANN401"]
-"packages/observability/logging_.py" = ["ANN401"]
+"packages/streaming/redpanda/__init__.py" = ["ANN401", "B017", "PT011"]
+"packages/validation/baselines/*.py" = ["ANN401", "B017", "PT011"]
+"packages/observability/logging_.py" = ["ANN401", "B017", "PT011"]
 "packages/observability/tracing.py" = ["FBT001", "FBT002"]
+"apps/api/middleware.py" = ["ANN001", "ANN202"]
+"packages/governance/audit/__init__.py" = ["FBT001"]
+"packages/governance/champion_challenger/__init__.py" = ["FBT001", "FBT002"]
+"packages/governance/quarantine/__init__.py" = ["FBT001"]
+"packages/backtesting/**/*.py" = ["ANN001", "ANN401", "FBT001", "FBT002", "E741", "PTH123", "RUF002", "RUF022"]
 
 [tool.ruff.format]
 quote-style = "double"

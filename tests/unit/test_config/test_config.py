@@ -316,7 +316,7 @@ class TestAppConfig:
         """Testet Laden aus configs/trading.yaml."""
         cfg = AppConfig.from_file(config_dir="configs")
         assert cfg.app_name == "trading-orchestra"
-        assert cfg.environment == "development"
+        assert cfg.environment == "production"
 
     def test_env_override_appconfig(self) -> None:
         """ENV überschreibt AppConfig-Werte."""

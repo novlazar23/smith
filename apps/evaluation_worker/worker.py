@@ -191,3 +191,317 @@ class BacktestEvaluator:
             "return_pct": 0.0,
             "trade_list": [],
         }
+
+
+class ScoringEngine:
+    """Scores agent predictions using Brier score, Log Loss, and classification metrics."""
+
+    @staticmethod
+    def compute_brier_score(
+        predictions: list[float],
+        actuals: list[int],
+    ) -> float:
+        """Compute Brier score for probabilistic predictions.
+
+        Brier score = mean((predicted - actual)^2)
+        Lower is better (0 = perfect, 1 = worst).
+
+        Args:
+            predictions: List of predicted probabilities in [0, 1].
+            actuals: List of actual outcomes (0 or 1).
+
+        Returns:
+            Brier score.
+        """
+        if len(predictions) != len(actuals):
+            raise ValueError("predictions and actuals must have same length")
+        if not predictions:
+            return 0.0
+
+        scores = [(p - a) ** 2 for p, a in zip(predictions, actuals, strict=True)]
+        return float(np.mean(scores))
+
+    @staticmethod
+    def compute_log_loss(
+        predictions: list[float],
+        actuals: list[int],
+        eps: float = 1e-15,
+    ) -> float:
+        """Compute logarithmic loss for probabilistic predictions.
+
+        Args:
+            predictions: List of predicted probabilities in [0, 1].
+            actuals: List of actual outcomes (0 or 1).
+            eps: Epsilon to clip predictions to avoid log(0).
+
+        Returns:
+            Log loss value.
+        """
+        if len(predictions) != len(actuals):
+            raise ValueError("predictions and actuals must have same length")
+        if not predictions:
+            return 0.0
+
+        preds_arr = np.array(predictions, dtype=np.float64)
+        actuals_arr = np.array(actuals, dtype=np.float64)
+        clipped = np.clip(preds_arr, eps, 1.0 - eps)
+        log_losses = -(actuals_arr * np.log(clipped) + (1 - actuals_arr) * np.log(1 - clipped))
+        return float(np.mean(log_losses))
+
+    @staticmethod
+    def compute_confusion_matrix(
+        predictions: list[int],
+        actuals: list[int],
+    ) -> dict[str, int]:
+        """Compute confusion matrix counts.
+
+        Args:
+            predictions: List of predicted class labels (0 or 1).
+            actuals: List of actual class labels (0 or 1).
+
+        Returns:
+            Dict with tp, fp, tn, fn counts.
+        """
+        if len(predictions) != len(actuals):
+            raise ValueError("predictions and actuals must have same length")
+
+        tp = sum(1 for p, a in zip(predictions, actuals, strict=True) if p == 1 and a == 1)
+        fp = sum(1 for p, a in zip(predictions, actuals, strict=True) if p == 1 and a == 0)
+        tn = sum(1 for p, a in zip(predictions, actuals, strict=True) if p == 0 and a == 0)
+        fn = sum(1 for p, a in zip(predictions, actuals, strict=True) if p == 0 and a == 1)
+
+        return {"tp": tp, "fp": fp, "tn": tn, "fn": fn}
+
+    @staticmethod
+    def compute_precision_recall_f1(
+        predictions: list[int],
+        actuals: list[int],
+    ) -> dict[str, float]:
+        """Compute precision, recall, and F1 score.
+
+        Args:
+            predictions: List of predicted class labels.
+            actuals: List of actual class labels.
+
+        Returns:
+            Dict with precision, recall, f1 scores.
+        """
+        cm = ScoringEngine.compute_confusion_matrix(predictions, actuals)
+        tp, fp, fn = cm["tp"], cm["fp"], cm["fn"]
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = (2 * precision * recall / (precision + recall)
+              if (precision + recall) > 0 else 0.0)
+
+        return {
+            "precision": round(precision, 6),
+            "recall": round(recall, 6),
+            "f1": round(f1, 6),
+        }
+
+    def score_agent(
+        self,
+        predictions: list[float],
+        actuals: list[int],
+        thresholds: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """Score an agent's predictions comprehensively.
+
+        Args:
+            predictions: List of predicted probabilities.
+            actuals: List of actual outcomes.
+            thresholds: List of threshold values for classification scores.
+
+        Returns:
+            Dict with all scoring metrics.
+        """
+        brier = float(self.compute_brier_score(predictions, actuals))
+        logloss = float(self.compute_log_loss(predictions, actuals))
+
+        # Default threshold 0.5 for classification
+        if thresholds is None:
+            thresholds = [0.5]
+
+        classification_results: dict[str, dict[str, Any]] = {}
+        for threshold in thresholds:
+            preds_binary = [1 if p >= threshold else 0 for p in predictions]
+            metrics = self.compute_precision_recall_f1(preds_binary, actuals)
+            cm = self.compute_confusion_matrix(preds_binary, actuals)
+            classification_results[f"threshold_{threshold:.1f}"] = {
+                **metrics,
+                **cm,
+                "accuracy": (cm["tp"] + cm["tn"]) / len(actuals) if actuals else 0.0,
+            }
+
+        return {
+            "brier_score": round(brier, 6),
+            "log_loss": round(logloss, 6),
+            "n_samples": len(actuals),
+            "classification": classification_results,
+        }
+
+
+class AgentEvaluator:
+    """Evaluates and compares agent performance over time."""
+
+    def evaluate_agent(
+        self,
+        agent_id: str,
+        predictions: list[float],
+        actuals: list[int],
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Evaluate a single agent's performance.
+
+        Args:
+            agent_id: Agent identifier.
+            predictions: Predicted probabilities.
+            actuals: Actual outcomes.
+            metadata: Optional metadata about the evaluation window.
+
+        Returns:
+            Dict with agent evaluation results.
+        """
+        scoring = ScoringEngine()
+        scores = scoring.score_agent(predictions, actuals)
+
+        return {
+            "agent_id": agent_id,
+            "evaluation": scores,
+            "metadata": metadata or {},
+        }
+
+    def compare_agents(
+        self,
+        agent_results: list[dict[str, Any]],
+        metric: str = "brier_score",
+    ) -> list[dict[str, Any]]:
+        """Compare multiple agents by a scoring metric.
+
+        Args:
+            agent_results: List of agent evaluation dicts.
+            metric: Metric to sort by (lower is better).
+
+        Returns:
+            Sorted list of agent results (best first).
+        """
+        sorted_results = sorted(
+            agent_results,
+            key=lambda r: r["evaluation"].get(metric, float("inf")),
+        )
+
+        for rank, result in enumerate(sorted_results, start=1):
+            result["rank"] = rank
+            result["metric_value"] = result["evaluation"].get(metric, 0.0)
+
+        return sorted_results
+
+    def champion_challenger(
+        self,
+        champion_id: str,
+        challenger_id: str,
+        champion_scores: dict[str, float],
+        challenger_scores: dict[str, float],
+        required_improvement: float = 0.01,
+    ) -> dict[str, Any]:
+        """Run a champion-challenger comparison.
+
+        Args:
+            champion_id: ID of the current champion agent.
+            challenger_id: ID of the challenger agent.
+            champion_scores: Dict of metrics for champion.
+            challenger_scores: Dict of metrics for challenger.
+            required_improvement: Minimum relative improvement needed.
+
+        Returns:
+            Dict with comparison result and promotion recommendation.
+        """
+        improvements: dict[str, bool] = {}
+        for key in set(champion_scores) | set(challenger_scores):
+            champion_val = champion_scores.get(key, 0.0)
+            challenger_val = challenger_scores.get(key, 0.0)
+            if champion_val == 0.0:
+                improvements[key] = challenger_val < champion_val
+            else:
+                rel_change = (champion_val - challenger_val) / abs(champion_val)
+                improvements[key] = rel_change > required_improvement
+
+        overall_promote = all(improvements.values()) if improvements else False
+
+        return {
+            "champion_id": champion_id,
+            "challenger_id": challenger_id,
+            "champion_scores": champion_scores,
+            "challenger_scores": challenger_scores,
+            "improvements": improvements,
+            "promote_challenger": overall_promote,
+            "required_improvement": required_improvement,
+        }
+
+
+class ResolutionEngine:
+    """Resolves expired predictions against market outcomes."""
+
+    @staticmethod
+    def resolve_prediction(
+        prediction: dict[str, Any],
+        outcome: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Resolve a single prediction against the actual outcome.
+
+        Args:
+            prediction: Dict with prediction details (direction, confidence, expiry).
+            outcome: Dict with actual outcome (price, direction, timestamp).
+
+        Returns:
+            Resolved prediction with accuracy and score.
+        """
+        pred_direction = prediction.get("direction", "")
+        actual_direction = outcome.get("direction", "")
+        confidence = prediction.get("confidence", 0.0)
+
+        correct = pred_direction == actual_direction
+        score = confidence if correct else (1.0 - confidence)
+
+        return {
+            "prediction_id": prediction.get("id", "unknown"),
+            "direction": pred_direction,
+            "confidence": confidence,
+            "actual_direction": actual_direction,
+            "correct": correct,
+            "score": round(score, 6),
+            "resolved_at": outcome.get("timestamp", ""),
+        }
+
+    def resolve_batch(
+        self,
+        predictions: list[dict[str, Any]],
+        outcomes: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Resolve a batch of predictions against outcomes.
+
+        Args:
+            predictions: List of prediction dicts.
+            outcomes: List of outcome dicts.
+
+        Returns:
+            List of resolved prediction dicts.
+        """
+        results: list[dict[str, Any]] = []
+        for pred, outcome in zip(predictions, outcomes, strict=True):
+            result = self.resolve_prediction(pred, outcome)
+            results.append(result)
+
+        # Aggregate statistics
+        total = len(results)
+        correct = sum(1 for r in results if r["correct"])
+        avg_score = sum(r["score"] for r in results) / total if total > 0 else 0.0
+
+        return {
+            "resolved": results,
+            "total": total,
+            "correct": correct,
+            "accuracy": round(correct / total, 6) if total > 0 else 0.0,
+            "avg_score": round(avg_score, 6),
+        }

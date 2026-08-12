@@ -21,8 +21,6 @@ services:
       POSTGRES_DB: trading
       POSTGRES_USER: orchestra
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-    ports:
-      - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -32,6 +30,8 @@ services:
       retries: 5
     secrets:
       - postgres_password
+    networks:
+      - backend
 
   # ─── ClickHouse ───────────────────────────────────────────────────────────
   clickhouse:
@@ -41,27 +41,25 @@ services:
       CLICKHOUSE_DB: trading_events
       CLICKHOUSE_USER: orchestra
       CLICKHOUSE_PASSWORD_FILE: /run/secrets/clickhouse_password
-    ports:
-      - "8123:8123"
-      - "9000:9000"
     volumes:
       - ch_data:/var/lib/clickhouse
       - ./infrastructure/clickhouse/config.xml:/etc/clickhouse-server/config.d/logging.xml:ro
+      - ./infrastructure/clickhouse/config.d/ipv4.xml:/etc/clickhouse-server/config.d/ipv4.xml:ro
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     secrets:
       - clickhouse_password
+    networks:
+      - backend
 
   # ─── Redis ────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -69,6 +67,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
 
   # ─── MinIO ────────────────────────────────────────────────────────────────
   minio:
@@ -78,9 +78,6 @@ services:
     environment:
       MINIO_ROOT_USER: orchestra
       MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_password
-    ports:
-      - "9000:9000"
-      - "9001:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -90,10 +87,12 @@ services:
       retries: 5
     secrets:
       - minio_password
+    networks:
+      - backend
 
   # ─── Redpanda ─────────────────────────────────────────────────────────────
   redpanda:
-    image: docker.redpanda.com/vectorized/redpanda:v24.3.6
+    image: docker.io/redpandadata/redpanda:v24.3.6
     restart: unless-stopped
     command:
       - redpanda start
@@ -103,37 +102,31 @@ services:
       - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
       - --rpc-addr redpanda:33145
       - --advertise-rpc-addr redpanda:33145
-      - --smp 1
-      - --memory 1G
-      - --default-num-shards 2
-      - --enable-sasl
-    ports:
-      - "9092:9092"
-      - "8082:8082"
+      - --overprovisioned
     healthcheck:
       test: ["CMD", "rpk", "cluster", "info"]
       interval: 15s
       timeout: 5s
       retries: 5
+    networks:
+      - backend
 
   # ─── MLflow ───────────────────────────────────────────────────────────────
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.17.0
     restart: unless-stopped
     command: mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root /artifacts --host 0.0.0.0
-    ports:
-      - "5000:5000"
     volumes:
       - mlflow_artifacts:/artifacts
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
+    networks:
+      - backend
 
   # ─── Prometheus ───────────────────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:v2.54.0
     restart: unless-stopped
-    ports:
-      - "9090:9090"
     volumes:
       - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -141,13 +134,50 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=30d"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  # ─── API ────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      API_SECRET_KEY_FILE: /run/secrets/api_secret_key
+      API_CORS_ORIGINS: "http://localhost:3000,http://localhost:8080,http://localhost"
+    ports:
+      - "8080:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    secrets:
+      - api_secret_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - backend
 
   # ─── Grafana ──────────────────────────────────────────────────────────────
   grafana:
     image: grafana/grafana:11.2.0
     restart: unless-stopped
-    ports:
-      - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -159,6 +189,13 @@ services:
         condition: service_healthy
     secrets:
       - grafana_password
+    networks:
+      - backend
+
+# ─── Networks ───────────────────────────────────────────────────────────────
+networks:
+  backend:
+    driver: bridge
 
 # ─── Volumes ────────────────────────────────────────────────────────────────
 volumes:
@@ -182,3 +219,5 @@ secrets:
     file: ./configs/secrets/minio_password.txt
   grafana_password:
     file: ./configs/secrets/grafana_password.txt
+  api_secret_key:
+    file: ./configs/secrets/api_secret_key.txt

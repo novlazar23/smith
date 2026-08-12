@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from .base import OrderType, PaperAccount, PaperPosition, Trade, TradeDirection
@@ -154,7 +154,7 @@ class PaperExecutor:
                     quantity=trade.filled_quantity,
                     avg_price=filled_price,
                     total_commission=trade.commission,
-                    opened_at=datetime.utcnow(),
+                    opened_at=datetime.now(UTC),
                 )
 
         elif direction == TradeDirection.SELL:
@@ -183,7 +183,7 @@ class PaperExecutor:
             pos.total_commission += commission
 
             if pos.quantity <= 0:
-                pos.closed_at = datetime.utcnow()
+                pos.closed_at = datetime.now(UTC)
                 pos.quantity = 0.0
                 del account.positions[instrument]
 
@@ -241,7 +241,7 @@ class PaperExecutor:
 
         pos.realized_pnl += realized_pnl
         pos.total_commission += commission
-        pos.closed_at = datetime.utcnow()
+        pos.closed_at = datetime.now(UTC)
         pos.quantity = 0.0
         del account.positions[instrument]
 

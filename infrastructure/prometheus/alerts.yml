@@ -1,0 +1,125 @@
+groups:
+  - name: trading-orchestra-alerts
+    rules:
+      # ─── Infrastructure Health ───────────────────────────────────────────────
+      - alert: ServiceDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.instance }} is down"
+          description: "Service {{ $labels.instance }} of job {{ $labels.job }} has been down for more than 5 minutes."
+
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate on {{ $labels.job }}"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+
+      - alert: HighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency on {{ $labels.job }}"
+          description: "p95 latency is {{ $value }}s (threshold: 1s)"
+
+      # ─── Trading Specific ──────────────────────────────────────────────────
+      - alert: TradingDrawdownHigh
+        expr: trading_portfolio_drawdown > 0.10
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Portfolio drawdown exceeds 10%"
+          description: "Current drawdown: {{ $value }}%"
+
+      - alert: TradingMaxPositions
+        expr: trading_open_positions >= trading_config_max_open_positions
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Max open positions reached"
+          description: "Current positions: {{ $value }}, max: {{ tracing_config_max_open_positions }}"
+
+      - alert: TradingConfidenceLow
+        expr: avg(trading_signal_confidence) < 0.5
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Average signal confidence is low"
+          description: "Current average confidence: {{ $value }}"
+
+      # ─── Database Health ───────────────────────────────────────────────────
+      - alert: PostgresDown
+        expr: up{job="postgres"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL instance {{ $labels.instance }} has been down for more than 2 minutes."
+
+      - alert: PostgresDiskSpaceHigh
+        expr: pg_database_size / 1024 / 1024 / 1024 > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL database size is large"
+          description: "Database size: {{ $value }} GB"
+
+      # ─── Redis Health ───────────────────────────────────────────────────────
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "Redis instance {{ $labels.instance }} has been down for more than 2 minutes."
+
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage is high"
+          description: "Memory usage: {{ $value | humanizePercentage }}"
+
+      # ─── Redpanda Health ────────────────────────────────────────────────────
+      - alert: RedpandaDown
+        expr: up{job="redpanda"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redpanda is down"
+          description: "Redpanda instance {{ $labels.instance }} has been down for more than 2 minutes."
+
+      - alert: RedpandaConsumerLagHigh
+        expr: redpanda_consumer_lag > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redpanda consumer lag is high"
+          description: "Consumer lag: {{ $value }} messages"
+
+      # ─── Disk Space ─────────────────────────────────────────────────────────
+      - alert: DiskSpaceLow
+        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk space is low on {{ $labels.instance }}"
+          description: "Only {{ $value | humanizePercentage }} disk space remaining"

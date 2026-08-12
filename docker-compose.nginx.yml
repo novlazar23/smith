@@ -1,0 +1,126 @@
+# =============================================================================
+# Trading Orchestra — Nginx Reverse Proxy mit SSL-Terminierung
+#
+# Dieser Service terminiert HTTPS und leitet verschlüsselten Traffic an die
+# internen Dienste weiter. In Produktion werden echte Zertifikate via
+# Let's Encrypt / certbot verwendet.
+#
+# Usage:
+#   docker compose --profile nginx up -d
+#   docker compose --profile nginx --profile certbot up -d  # with certbot
+#
+# =============================================================================
+
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/nginx/ssl:/etc/nginx/ssl:ro
+      - certbot_conf:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot
+      - ./infrastructure/nginx/entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "entrypoint.sh"]
+    environment:
+      - NGINX_DOMAIN=${NGINX_DOMAIN:-trading-orchestra.internal}
+      - TZ=Europe/Berlin
+    profiles:
+      - production
+    depends_on:
+      api:
+        condition: service_started
+      prometheus:
+        condition: service_started
+      grafana:
+        condition: service_started
+    networks:
+      - backend
+
+  # ─── API Service (innerer Dienst) ─────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8000"
+    environment:
+      - API_SECRET_KEY=${API_SECRET_KEY}
+    profiles:
+      - production
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - backend
+
+# ─── Certbot — Let's Encrypt Certificate Management ───────────────────────
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    command: |
+      /bin/sh -c '
+        trap exit TERM
+        DOMAIN="${NGINX_DOMAIN:-trading-orchestra.internal}"
+
+        if [ ! -d "/etc/letsencrypt/live/${DOMAIN}" ]; then
+          certbot certonly --webroot \
+            --webroot-path=/var/www/certbot \
+            --register-unsafely-without-email \
+            --agree-tos \
+            --non-interactive \
+            --domains "${DOMAIN}" \
+            --rsa-key-size 2048 \
+            || echo "[certbot] Initial cert request failed (expected in dev without DNS)."
+        fi
+
+        while true; do
+          sleep 43200
+          certbot renew --webroot --webroot-path=/var/www/certbot --quiet \
+            || echo "[certbot] Renewal failed (will retry in 12h)."
+        done
+      '
+    environment:
+      - NGINX_DOMAIN=${NGINX_DOMAIN:-trading-orchestra.internal}
+    profiles:
+      - certbot
+    networks:
+      - backend
+
+# ─── Networks ───────────────────────────────────────────────────────────────
+networks:
+  backend:
+    external: true
+
+# ─── Volumes ────────────────────────────────────────────────────────────────
+volumes:
+  pg_data:
+  ch_data:
+  redis_data:
+  minio_data:
+  mlflow_artifacts:
+  prometheus_data:
+  grafana_data:
+  certbot_conf:
+  certbot_www:
+
+# ─── Secrets ────────────────────────────────────────────────────────────────
+# In Produktion via Docker Secrets oder Vault.
+secrets:
+  postgres_password:
+    file: ./configs/secrets/postgres_password.txt
+  clickhouse_password:
+    file: ./configs/secrets/clickhouse_password.txt
+  minio_password:
+    file: ./configs/secrets/minio_password.txt
+  grafana_password:
+    file: ./configs/secrets/grafana_password.txt

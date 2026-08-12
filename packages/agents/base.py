@@ -22,6 +22,14 @@ class AgentType(StrEnum):
     REGIME = "regime"
     CHART = "chart"
     ORDERFLOW = "orderflow"
+    PATTERN = "pattern"
+    FIBONACCI = "fibonacci"
+    ELLIOTT = "elliott"
+    HISTORICAL_ANALOGY = "historical_analogy"
+    NEWS = "news"
+    CROSS_MARKET = "cross_market"
+    ANOMALY = "anomaly"
+    CONTRARIAN = "contrarian"
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,6 +5,7 @@ Verwaltet PostgreSQL-Verbindungen, Sessions und Metadata.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,7 +22,7 @@ class DatabaseConfig:
     port: int = 5432
     database: str = "trading_orchestra"
     user: str = "trading_user"
-    password: str = "trading_password"
+    password: str = os.environ.get("DB_PASSWORD", "trading_password")
     echo: bool = False
     pool_size: int = 5
     max_overflow: int = 10

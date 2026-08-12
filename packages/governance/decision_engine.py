@@ -1,23 +1,259 @@
-"""DecisionEngine — evaluates consensus + risk → FinalDecisionData.
+"""EPIC-09 Decision Engine — FinalDecision from Consensus + Risk.
 
-The engine follows a strict priority chain:
+Dieses Modul ist Teil von EPIC-09 (Strategy, Portfolio and Risk).
+Es enthält die Decision-Engine Logik für die finale Handelsentscheidung.
 
-    risk_veto > risk_not_approved > insufficient_agents >
-    low_confidence > high_uncertainty > insufficient_edge > approve
+Zentraler Import für EPIC-11 Governance-State-Machine ist `state_machine.py`.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import hashlib
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
-from .base import (
-    DecisionRule,
-    FinalDecisionData,
-    FinalDecisionType,
-    GovernanceConfig,
-)
-from .blocking import BlockingRules
+
+class FinalDecisionType(StrEnum):
+    """Mögliche Endentscheidungen des Analyse-Graphen.
+
+    Entsprechend EPIC-09-WP06, abgeleitet von packages/schemas/final_decision.py.
+    """
+
+    LONG_BIAS = "LONG_BIAS"
+    SHORT_BIAS = "SHORT_BIAS"
+    RANGE = "RANGE"
+
+    NO_TRADE = "NO_TRADE"
+    NO_TRADE_DATA_QUALITY = "NO_TRADE_DATA_QUALITY"
+    NO_TRADE_INSUFFICIENT_EDGE = "NO_TRADE_INSUFFICIENT_EDGE"
+    NO_TRADE_PORTFOLIO = "NO_TRADE_PORTFOLIO"
+    NO_TRADE_RISK = "NO_TRADE_RISK"
+    NO_TRADE_MODEL_UNCERTAINTY = "NO_TRADE_MODEL_UNCERTAINTY"
+
+
+@dataclass(frozen=True)
+class DecisionRule:
+    """Eine einzelne Governance-Regel.
+
+    Attributes:
+        rule_id: Eindeutige Kennung der Regel.
+        condition: Beschreibender Name der Bedingung, z. B.
+                   ``consensus_long_above_threshold``.
+        action: Aktion bei Erfülung — ``approve``, ``block`` oder ``reduce``.
+        threshold: Schwellenwert, ab dem die Regel aktiv wird.
+        blocking: Bestimmt, ob die Regel die Entscheidung blockiert.
+    """
+
+    rule_id: str
+    condition: str
+    action: str
+    threshold: float
+    blocking: bool
+
+
+@dataclass
+class GovernanceConfig:
+    """Konfiguration des Governance-Entscheidungswegs.
+
+    Alle Schwellenwerte sind im Bereich 0.0-1.0, außer ``required_agents``.
+    """
+
+    consensus_long_threshold: float = 0.65
+    consensus_short_threshold: float = 0.65
+    consensus_range_threshold: float = 0.50
+    min_confidence: float = 0.50
+    max_uncertainty: float = 0.30
+    required_agents: int = 2
+    rules: list[DecisionRule] = field(default_factory=list)
+
+
+@dataclass
+class FinalDecisionData:
+    """Datensatz einer finalen Entscheidung.
+
+    Spiegelt das Feld-Layout von ``packages/schemas/final_decision.py`` nach
+    als Dataclass (kein Pydantic).
+    """
+
+    run_id: str
+    instrument: str
+    horizons: list[str]
+    analysis_time: datetime
+    decision: FinalDecisionType
+    reason: str
+    blocking_reasons: list[str] = field(default_factory=list)
+    forecast: dict[str, Any] = field(default_factory=dict)
+    uncertainty: dict[str, Any] = field(default_factory=dict)
+    strategy: dict[str, Any] = field(default_factory=dict)
+    portfolio: dict[str, Any] = field(default_factory=dict)
+    risk: dict[str, Any] = field(default_factory=dict)
+    audit_hash: str | None = None
+
+    def compute_hash(self) -> str:
+        """Berechnet einen SHA-256-Hash über die Schlüssel-Felder."""
+        content = f"{self.run_id}|{self.instrument}|{self.decision}|{self.reason}"
+        self.audit_hash = hashlib.sha256(content.encode()).hexdigest()
+        return self.audit_hash
+
+
+class BlockingRules:
+    """Prüft, ob eine Entscheidung blockiert ist.
+
+    Prüft in fester Prioritätsreihenfolge und gibt eine Liste von
+    Blockier-Gründen zurück.  Eine leere Liste bedeutet: keine Blöcke.
+    """
+
+    def __init__(self, config: GovernanceConfig | None = None) -> None:
+        self.config = config or GovernanceConfig()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def check_blocking_conditions(
+        self,
+        consensus_decision: str,
+        consensus_confidence: float,
+        *,
+        risk_approved: bool,
+        risk_veto: bool,
+        risk_blocking_reasons: list[str],
+        num_active_agents: int,
+        max_uncertainty: float | None = None,
+    ) -> list[str]:
+        """Prüft alle Blockier-Bedingungen in Prioritätsreihenfolge.
+
+        Returns:
+            Liste von Blockier-Gründen (leer wenn nichts blockiert).
+        """
+        blockers: list[str] = []
+
+        # 1. Hard block: Risk veto
+        if risk_veto:
+            reasons = "; ".join(risk_blocking_reasons) if risk_blocking_reasons else "Risk veto active"
+            blockers.append(f"risk_veto: {reasons}")
+
+        # 2. Hard block: Risk not approved
+        if not risk_approved:
+            blockers.append("risk_not_approved")
+
+        # 3. Hard block: Insufficient agents
+        if num_active_agents < self.config.required_agents:
+            blockers.append(
+                f"insufficient_agents: {num_active_agents} < {self.config.required_agents}"
+            )
+
+        # 4. Soft block: Low consensus confidence
+        if consensus_confidence < self.config.min_confidence:
+            blockers.append(
+                f"low_confidence: {consensus_confidence:.2f} < {self.config.min_confidence:.2f}"
+            )
+
+        # 5. Soft block: High uncertainty
+        if max_uncertainty is not None and max_uncertainty > self.config.max_uncertainty:
+            blockers.append(
+                f"high_uncertainty: {max_uncertainty:.2f} > {self.config.max_uncertainty:.2f}"
+            )
+
+        # 6. Soft block: Insufficient edge for any direction
+        long_ok = consensus_decision == "LONG_BIAS" and consensus_confidence >= self.config.consensus_long_threshold
+        short_ok = consensus_decision == "SHORT_BIAS" and consensus_confidence >= self.config.consensus_short_threshold
+        range_ok = consensus_decision == "RANGE" and consensus_confidence >= self.config.consensus_range_threshold
+        if not (long_ok or short_ok or range_ok):
+            blockers.append("insufficient_edge")
+
+        return blockers
+
+    def get_priority_blockers(self, blocking_reasons: list[str]) -> list[str]:
+        """Gibt die kritischsten Blockierer zurück — harte Blöcke zuerst.
+
+        Hard blocks: ``risk_veto``, ``risk_not_approved``, ``insufficient_agents``
+        Soft blocks: ``low_confidence``, ``high_uncertainty``, ``insufficient_edge``
+        """
+        hard_keywords = (
+            "risk_veto",
+            "risk_not_approved",
+            "insufficient_agents",
+        )
+        soft_keywords = (
+            "low_confidence",
+            "high_uncertainty",
+            "insufficient_edge",
+        )
+
+        hard: list[str] = []
+        soft: list[str] = []
+        other: list[str] = []
+
+        for reason in blocking_reasons:
+            if any(kw in reason for kw in hard_keywords):
+                hard.append(reason)
+            elif any(kw in reason for kw in soft_keywords):
+                soft.append(reason)
+            else:
+                other.append(reason)
+
+        return hard + other + soft
+
+    # ------------------------------------------------------------------
+    # Convenience: build a FinalDecisionData from blockers
+    # ------------------------------------------------------------------
+
+    def build_blocked_decision(
+        self,
+        *,
+        consensus_decision: str,
+        consensus_confidence: float,
+        risk_approved: bool,
+        risk_veto: bool,
+        risk_blocking_reasons: list[str],
+        num_active_agents: int,
+        max_uncertainty: float | None = None,
+        instrument: str = "UNKNOWN",
+        run_id: str = "default",
+        horizons: list[str] | None = None,
+    ) -> FinalDecisionData:
+        """Erzeugt eine ``FinalDecisionData``-Instanz aus den Blockier-Gründen.
+
+        Wählt den passenden ``FinalDecisionType`` basierend auf dem ersten
+        Treffer in der BlockingRules-Prioritätskette.
+        """
+        blockers = self.check_blocking_conditions(
+            consensus_decision,
+            consensus_confidence,
+            risk_approved=risk_approved,
+            risk_veto=risk_veto,
+            risk_blocking_reasons=risk_blocking_reasons,
+            num_active_agents=num_active_agents,
+            max_uncertainty=max_uncertainty,
+        )
+
+        if not blockers:
+            raise ValueError("No blocking conditions detected — not a blocked decision")
+
+        first = blockers[0]
+        if "risk_veto" in first or "risk_not_approved" in first:
+            decision = FinalDecisionType.NO_TRADE_RISK
+        elif "insufficient_agents" in first:
+            decision = FinalDecisionType.NO_TRADE_DATA_QUALITY
+        elif "low_confidence" in first or "high_uncertainty" in first:
+            decision = FinalDecisionType.NO_TRADE_MODEL_UNCERTAINTY
+        else:
+            decision = FinalDecisionType.NO_TRADE_INSUFFICIENT_EDGE
+
+        reason = blockers[0] if len(blockers) == 1 else f"{blockers[0]}; {'; '.join(blockers[1:])}"
+
+        return FinalDecisionData(
+            run_id=run_id,
+            instrument=instrument,
+            horizons=horizons or [],
+            analysis_time=datetime.now(),
+            decision=decision,
+            reason=reason,
+            blocking_reasons=blockers,
+        )
 
 
 class DecisionEngine:
@@ -42,6 +278,7 @@ class DecisionEngine:
         consensus_decision: str,
         consensus_confidence: float,
         consensus_vote_distribution: dict[str, float],
+        *,
         risk_approved: bool,
         risk_veto: bool,
         risk_reduction_factor: float,
@@ -83,7 +320,7 @@ class DecisionEngine:
                 run_id=run_id,
                 instrument=instrument,
                 horizons=list(consensus_vote_distribution.keys()),
-                analysis_time=datetime.now(UTC),
+                analysis_time=datetime.now(),
                 decision=FinalDecisionType.NO_TRADE_RISK,
                 reason=reason,
                 blocking_reasons=["risk_veto: " + reason] if risk_blocking_reasons else ["risk_veto"],
@@ -96,7 +333,7 @@ class DecisionEngine:
                 run_id=run_id,
                 instrument=instrument,
                 horizons=list(consensus_vote_distribution.keys()),
-                analysis_time=datetime.now(UTC),
+                analysis_time=datetime.now(),
                 decision=FinalDecisionType.NO_TRADE_DATA_QUALITY,
                 reason=(
                     f"Insufficient agents: {num_active_agents} < {self.config.required_agents} required"
@@ -118,7 +355,7 @@ class DecisionEngine:
                 run_id=run_id,
                 instrument=instrument,
                 horizons=list(consensus_vote_distribution.keys()),
-                analysis_time=datetime.now(UTC),
+                analysis_time=datetime.now(),
                 decision=FinalDecisionType.NO_TRADE_RISK,
                 reason=reason,
                 blocking_reasons=["risk_not_approved"],
@@ -132,7 +369,7 @@ class DecisionEngine:
                 run_id=run_id,
                 instrument=instrument,
                 horizons=list(consensus_vote_distribution.keys()),
-                analysis_time=datetime.now(UTC),
+                analysis_time=datetime.now(),
                 decision=FinalDecisionType.NO_TRADE_MODEL_UNCERTAINTY,
                 reason=(
                     f"Model uncertainty: confidence {consensus_confidence:.2f} "
@@ -151,7 +388,7 @@ class DecisionEngine:
                 run_id=run_id,
                 instrument=instrument,
                 horizons=list(consensus_vote_distribution.keys()),
-                analysis_time=datetime.now(UTC),
+                analysis_time=datetime.now(),
                 decision=FinalDecisionType.NO_TRADE_MODEL_UNCERTAINTY,
                 reason=(
                     f"Model uncertainty: max_uncertainty {effective_max_uncertainty:.2f} "
@@ -173,7 +410,7 @@ class DecisionEngine:
             run_id=run_id,
             instrument=instrument,
             horizons=list(consensus_vote_distribution.keys()),
-            analysis_time=datetime.now(UTC),
+            analysis_time=datetime.now(),
             decision=decision,
             reason=reason,
             forecast={"vote_distribution": consensus_vote_distribution, "confidence": consensus_confidence},
@@ -189,6 +426,7 @@ class DecisionEngine:
         consensus_decision: str,
         consensus_confidence: float,
         consensus_vote_distribution: dict[str, float],
+        *,
         risk_approved: bool,
         risk_veto: bool,
         risk_reduction_factor: float,

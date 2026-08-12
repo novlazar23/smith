@@ -1,0 +1,80 @@
+# Trading Orchestrator — Production Konfiguration
+# ENV-Variablen (APP_*) überschreiben diese Werte.
+
+app_name: trading-orchestra
+version: "0.1.0"
+environment: production
+
+database:
+  postgresql:
+    host: ${DB_HOST:postgres}
+    port: ${DB_PORT:5432}
+    database: ${DB_NAME:trading}
+    user: ${DB_USER:orchestra}
+    password: ${DB_PASSWORD}
+    pool_size: ${DB_POOL_SIZE:20}
+    max_overflow: ${DB_MAX_OVERFLOW:10}
+    echo: false
+  clickhouse:
+    host: ${CH_HOST:clickhouse}
+    port: ${CH_PORT:8123}
+    database: ${CH_DB:trading_events}
+    user: ${CH_USER:orchestra}
+    password: ${CH_PASSWORD}
+    secure: ${CH_SECURE:true}
+    compress: true
+  redis:
+    host: ${REDIS_HOST:redis}
+    port: ${REDIS_PORT:6379}
+    db: ${REDIS_DB:0}
+    password: ${REDIS_PASSWORD}
+    decode_responses: true
+    max_connections: ${REDIS_MAX_CONNECTIONS:30}
+
+trading:
+  mode: paper  # Production: paper (keine Live-Orders)
+  risk:
+    max_drawdown: 0.05  # Strenger für Production
+    max_position_size: 0.15
+    max_total_exposure: 0.75
+    max_open_positions: 5
+    max_single_trade_risk: 0.01
+    Kelly_fraction: 0.15
+    min_confidence_threshold: 0.65  # Höher für Production
+  default_timeframes:
+    - 15m
+    - 1h
+    - 4h
+    - 1d
+  min_candles: 100
+  rebalance_interval: 1h
+
+streaming:
+  redpanda:
+    bootstrap_servers: ${REDPANDA_SERVERS:redpanda:9092}
+    client_id: trading-orchestra-production
+    compression_type: lz4
+    acks: all
+    retry_max: 5
+    request_timeout_ms: 30000
+    enable_idempotence: true
+  consumer:
+    group_id: trading-consumer-group-production
+    auto_offset_reset: earliest
+    enable_auto_commit: true
+    session_timeout_ms: 30000
+    max_poll_records: 500
+  market_data_topic: market.data
+  analysis_request_topic: agents.reports
+  agent_report_topic: agents.reports
+  final_decision_topic: trading.decisions
+  order_topic: trading.orders
+  dead_letter_topic: dead.letter
+
+observability:
+  enabled: true
+  prometheus_port: 9090
+  prometheus_path: /metrics
+  prometheus_namespace: trading_production
+  log_level: WARNING  # Weniger verbose für Production
+  log_json: true

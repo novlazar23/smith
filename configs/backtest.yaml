@@ -1,0 +1,35 @@
+backtest:
+  initial_capital: 100000
+  commission_model: "fixed"
+  slippage_model: "percentage"
+  commission_rate: 0.001
+  slippage_rate: 0.0005
+  commission_fixed: 0.0
+  slippage_bps: 5.0
+  max_position_size: 0.25
+  max_total_exposure: 1.0
+  initial_cash_ratio: 0.1
+  allow_short: true
+  warmup_bars: 50
+  rebalance_interval_seconds: 3600
+  symbol: "BTC/USDT"
+  timeframe: "1d"
+  data_provider: "csv"
+  data_path: "data/btc_usdt_1d.csv"
+
+data:
+  path: "data/btc_usdt_1d.csv"
+  format: "csv"
+
+strategy:
+  type: "macd_crossover"
+  name: "macd_12_26_9"
+  fast_period: 12
+  slow_period: 26
+  signal_period: 9
+  min_confidence: 0.6
+  position_size: 0.1
+
+report:
+  format: ["json", "html", "csv"]
+  output_dir: "output/backtest"

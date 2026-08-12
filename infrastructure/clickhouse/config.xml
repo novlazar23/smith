@@ -1,7 +1,6 @@
-# ClickHouse: Minimal Logging-Konfiguration für Docker-Compose
-# Überschreibt standardmäßige XML-Logging-Struktur für bessere
-# Container-Log-Ausgabe (JSON pro Zeile für Log-Agenten).
+<!-- ClickHouse: Minimal Logging-Konfiguration für Docker-Compose -->
 <clickhouse>
+    <listen_host>0.0.0.0</listen_host>
     <logger>
         <level>warning</level>
         <log>/var/log/clickhouse-server/clickhouse-server.log</log>

@@ -3,7 +3,7 @@
 
 app_name: trading-orchestra
 version: "0.1.0"
-environment: development
+environment: production
 
 database:
   postgresql:

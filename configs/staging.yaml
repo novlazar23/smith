@@ -1,0 +1,80 @@
+# Trading Orchestrator — Staging Konfiguration
+# ENV-Variablen (APP_*) überschreiben diese Werte.
+
+app_name: trading-orchestra-staging
+version: "0.1.0"
+environment: staging
+
+database:
+  postgresql:
+    host: localhost
+    port: 5432
+    database: trading_staging
+    user: orchestra
+    password: ""
+    pool_size: 5
+    max_overflow: 2
+    echo: false
+  clickhouse:
+    host: localhost
+    port: 8123
+    database: trading_events_staging
+    user: orchestra
+    password: ""
+    secure: false
+    compress: true
+  redis:
+    host: localhost
+    port: 6379
+    db: 0
+    password: ""
+    decode_responses: true
+    max_connections: 10
+
+trading:
+  mode: paper
+  risk:
+    max_drawdown: 0.15  # Erhöht für Staging
+    max_position_size: 0.30
+    max_total_exposure: 1.5
+    max_open_positions: 15
+    max_single_trade_risk: 0.03
+    Kelly_fraction: 0.30
+    min_confidence_threshold: 0.50  # Geringer für mehr Signals
+  default_timeframes:
+    - 15m
+    - 1h
+    - 4h
+    - 1d
+  min_candles: 50  # Geringer für schnellere Tests
+  rebalance_interval: 30m  # Häufiger für Staging
+
+streaming:
+  redpanda:
+    bootstrap_servers: localhost:9092
+    client_id: trading-orchestra-staging
+    compression_type: none
+    acks: all
+    retry_max: 3
+    request_timeout_ms: 30000
+    enable_idempotence: true
+  consumer:
+    group_id: trading-consumer-group-staging
+    auto_offset_reset: earliest
+    enable_auto_commit: true
+    session_timeout_ms: 30000
+    max_poll_records: 200  # Geringer für Staging
+  market_data_topic: market.data.staging
+  analysis_request_topic: agents.reports.staging
+  agent_report_topic: agents.reports.staging
+  final_decision_topic: trading.decisions.staging
+  order_topic: trading.orders.staging
+  dead_letter_topic: dead.letter.staging
+
+observability:
+  enabled: true
+  prometheus_port: 9090
+  prometheus_path: /metrics
+  prometheus_namespace: trading_staging
+  log_level: DEBUG  # Detaillierter für Staging
+  log_json: true

@@ -10,7 +10,7 @@ Enthält:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
 
@@ -73,7 +73,7 @@ class PortfolioSummary:
     top_position_weight: float
     portfolio_pnl: float
     positions: list[Position]
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def long_exposure(self) -> float:

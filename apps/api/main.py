@@ -31,6 +31,10 @@ from apps.api.endpoints import (
     analyze_endpoint,
     status_endpoint,
 )
+from apps.api.middleware import (
+    create_auth_middleware,
+    create_rate_limit_middleware,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,19 +92,34 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS Middleware
+    # CORS Middleware — origins from env var (prod) or defaults (dev)
     try:
+        import os
+
         from fastapi.middleware.cors import CORSMiddleware
+
+        origins = os.environ.get(
+            "API_CORS_ORIGINS",
+            "http://localhost:3000,http://localhost:8080",
+        ).split(",")
 
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=origins,
             allow_credentials=True,
-            allow_methods=["*"],
+            allow_methods=["GET", "POST"],
             allow_headers=["*"],
         )
     except ImportError:
         pass
+
+    # Rate Limiting & Auth Middleware
+    rate_middleware = create_rate_limit_middleware()
+    app.middleware("http")(rate_middleware)
+
+    auth_middleware = create_auth_middleware()
+    if auth_middleware is not None:
+        app.middleware("http")(auth_middleware)
 
     # Routes
     @app.post("/analyze", status_code=status.HTTP_200_OK)
