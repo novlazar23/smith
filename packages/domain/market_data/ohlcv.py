@@ -188,9 +188,15 @@ class MultiTimeframeAggregator:
         if target_timeframe not in TIMEFRAME_OFFSETS:
             raise ValueError(f"Unsupported target timeframe: {target_timeframe}")
 
-        # Cache-Key: (instrument, venue, timeframe, window_start)
-        _cache_key = f"{instrument}:{venue}:{target_timeframe}"
-        del _cache_key  # TODO: implement caching
+        # Cache-Key: stabiler Hash basierend auf Input-Daten
+        _candles_hash = tuple(
+            (c.get("open_time"), c.get("open"), c.get("high"), c.get("low"), c.get("close"), c.get("volume"))
+            for c in candles[:100]
+        )
+        _cache_key = f"{instrument}:{venue}:{target_timeframe}:{_candles_hash!s}"
+
+        if _cache_key in self._cache:
+            return self._cache[_cache_key]
 
         groups = _group_candles_into_periods(candles, target_timeframe)
         if not groups:
@@ -198,15 +204,18 @@ class MultiTimeframeAggregator:
 
         # Wenn mehrere Gruppen existieren, aggregiere die letzte Gruppe
         if len(groups) == 1:
-            return CandleAggregation.from_raw_candles(
+            result = CandleAggregation.from_raw_candles(
                 groups[0], target_timeframe, instrument, venue
             )
         else:
             # Bei mehreren Gruppen: nur die letzte (vollständigste) Gruppe zurückgeben
             last_group = groups[-1]
-            return CandleAggregation.from_raw_candles(
+            result = CandleAggregation.from_raw_candles(
                 last_group, target_timeframe, instrument, venue
             )
+
+        self._cache[_cache_key] = result
+        return result
 
     def aggregate_all(
         self,
@@ -241,6 +250,14 @@ class MultiTimeframeAggregator:
                 continue
 
         return results
+
+    def clear_cache(self) -> None:
+        """Leert den In-Memory-Cache aggregierter Kerzen.
+
+        Nützlich für API-Verbraucher, die eine frische Berechnung erzwingen möchten,
+        z. B. nach Datenaktualisierung oder Memory-Management.
+        """
+        self._cache.clear()
 
     def compute_simple_moving_average(
         self,

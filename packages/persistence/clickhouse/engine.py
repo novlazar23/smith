@@ -12,6 +12,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
+from packages.observability.logging_ import get_logger
+
 
 @dataclass(frozen=True)
 class ClickHouseConfig:
@@ -35,7 +38,6 @@ class ClickHouseEngine:
     """ClickHouse-Engine mit Schema-Management.
 
     Nutzt den ClickHouse HTTP-Client für Interaktionen.
-    Für das MVP wird eine einfache HTTP-basierte Implementierung verwendet.
     """
 
     def __init__(self, config: ClickHouseConfig | None = None) -> None:
@@ -199,10 +201,28 @@ class ClickHouseEngine:
     def _execute(self, query: str) -> None:
         """Führt eine Query gegen ClickHouse aus.
 
-        Im echten System würde hier der ClickHouse-HTTP-Client verwendet werden.
-        Für das MVP wird nur die Query gespeichert/protokolliert.
+        Sendet die Query über die ClickHouse HTTP-Schnittstelle
+        und setzt die Verbindung bei Erfolg.
         """
-        # TODO: Implement ClickHouse HTTP client integration
+        logger = get_logger(__name__)
+        logger.info("executing_query", query=query[:200])
+
+        url = f"{self._config.url}/"
+        try:
+            response = httpx.post(
+                url,
+                data=query,
+                timeout=30.0,
+                verify=self._config.verify,
+            )
+            if response.status_code != 200:
+                error_msg = response.text.strip() if response.text else "unknown error"
+                raise Exception(
+                    f"ClickHouse query failed (HTTP {response.status_code}): {error_msg}"
+                )
+            self._connected = True
+        except httpx.ConnectError as e:
+            raise Exception(f"Could not connect to ClickHouse at {url}: {e}") from e
 
 
 # Globale Instanz für einfache Nutzung
