@@ -16,13 +16,16 @@ from pydantic import BaseModel, ConfigDict, Field
 class AnalysisMode(StrEnum):
     """Ausführungsmodus einer Analyse.
 
-    LIVE ist im MVP technisch blockiert (Akzeptanztest AT-014).
+    LIVE ist feature-flag-geschützt und erzeugt nur Order-Vorschläge
+    ohne reale Order-Ausführung. Aktivierung nur in Produktion
+    explizit per Feature-Flag erlaubt.
     """
 
     RESEARCH = "research"
     BACKTEST = "backtest"
     PAPER = "paper"
     SHADOW = "shadow"
+    LIVE = "live"
 
 
 class AnalysisRequest(BaseModel):

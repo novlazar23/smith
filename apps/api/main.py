@@ -3,7 +3,7 @@
 Dieses Modul stellt die FastAPI-Anwendung bereit, die die Analyse-Fähigkeiten
 des Trading-Systems über eine REST-Schnittstelle exponiert. FastAPI und pydantic
 sind optionale Abhängigkeiten — bei Nicht-Verfügbarkeit gibt die API einen
-grazilen Fehler zurück.
+grazielen Fehler zurück.
 """
 
 from __future__ import annotations
@@ -35,6 +35,12 @@ from apps.api.middleware import (
     create_auth_middleware,
     create_rate_limit_middleware,
 )
+
+# Live-Signal Router — optional, behind feature flag
+try:
+    from apps.api.routers import live_signal
+except ImportError:
+    live_signal = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -141,5 +147,9 @@ def create_app() -> FastAPI:
             content={"status": "healthy", "timestamp": datetime.now(UTC).isoformat()},
             status_code=status.HTTP_200_OK,
         )
+
+    # Live-Signal Router — nur verfügbar wenn Router importiert werden konnte
+    if live_signal is not None:
+        app.include_router(live_signal.router)
 
     return app
