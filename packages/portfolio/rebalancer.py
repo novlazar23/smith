@@ -80,7 +80,7 @@ class Rebalancer:
             True wenn Drift über Schwellenwert.
         """
         # Wenn keine Cash-Target und keine Positionen → Rebalancing nötig
-        if "CASH" not in target_weights and not positions:
+        if "CASH" not in target_weights and not positions and target_weights:
             return True
 
         drift = self.calculate_drift(positions, total_equity, target_weights)
