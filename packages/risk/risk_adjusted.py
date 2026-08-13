@@ -23,7 +23,7 @@ class RiskAdjustedReturns:
         annualized_vol = float(np.std(arr, ddof=1)) * math.sqrt(
             RiskAdjustedReturns.TRADING_DAYS
         )
-        if annualized_vol == 0:
+        if annualized_vol < 1e-10:
             return 0.0
         return (annualized_return - risk_free_rate) / annualized_vol
 
