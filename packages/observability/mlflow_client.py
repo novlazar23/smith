@@ -126,7 +126,9 @@ class MLflowClient:
         import mlflow
 
         # Versucht das Modell mit dem passenden Flavor zu loggen
-        mlflow.sklearn.log_model(model, model_name)
+        sklearn = getattr(mlflow, "sklearn", None)
+        if sklearn is not None:
+            sklearn.log_model(model, model_name)
 
     def end_run(self, run_id: str, status: str = "SUCCESS") -> None:
         """Beendet einen MLflow-Run mit Status.
@@ -156,10 +158,10 @@ class MLflowClient:
 
         return mlflow.search_runs(
             experiment_ids=[self._experiment_id] if self._experiment_id else None,
-            filter_string=filter_string,
+            filter_string=filter_string or "",
             max_results=max_results,
             order_by=["metrics.sharpe_ratio DESC"],
-        )
+        )  # type: ignore[return-value]
 
     @property
     def is_available(self) -> bool:

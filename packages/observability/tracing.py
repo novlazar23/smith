@@ -89,16 +89,18 @@ class TracingRegistry:
 
         # Sampler basierend auf Konfiguration
         if self._config.sampling_rate < 1.0:
-            from opentelemetry.trace.sampling import ProbabilitySampler
-            self._tracer_provider.sampler = ProbabilitySampler(self._config.sampling_rate)
+            from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
+            self._tracer_provider.sampler = TraceIdRatioBased(self._config.sampling_rate)
 
         # OTLP-Exporter hinzufügen (wenn Endpunkt konfiguriert)
         if self._config.otlp_endpoint:
             try:
-                from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-                exporter = OTLPSpanExporter(endpoint=self._config.otlp_endpoint)
-                processor = BatchSpanProcessor(exporter)
-                self._tracer_provider.add_span_processor(processor)
+                import importlib.util
+                if importlib.util.find_spec("opentelemetry.exporter.otlp.proto.grpc.trace_exporter") is not None:
+                    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter  # type: ignore[import-not-found,unused-ignore]
+                    exporter = OTLPSpanExporter(endpoint=self._config.otlp_endpoint)
+                    processor = BatchSpanProcessor(exporter)
+                    self._tracer_provider.add_span_processor(processor)
             except ImportError:
                 # Graceful degradation: kein Export wenn OTLP nicht verfügbar
                 pass
@@ -165,7 +167,7 @@ class TracingRegistry:
         """Schließt den TracerProvider und flushed alle Spans."""
         if self._tracer_provider:
             self._tracer_provider.force_flush(timeout_millis=5000)
-            self._tracer_provider.shutdown(timeout_millis=5000)
+            self._tracer_provider.shutdown()
             self._initialized = False
 
     # ── EPIC-12: Context-Helper ──────────────────────────────────────

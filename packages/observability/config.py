@@ -22,7 +22,7 @@ class StructlogConfig(BaseModel):
     """Structlog-Logging-Konfiguration."""
 
     level: str = Field(default="INFO", description="Log-Level.")
-    json: bool = Field(default=True, description="JSON-Formatierung aktivieren.")
+    json_format: bool = Field(default=True, description="JSON-Formatierung aktivieren.")
     timestamp_key: str = Field(default="timestamp", description="Schlüssel für Zeitstempel.")
 
 
@@ -69,7 +69,7 @@ class ObservabilityConfig(BaseModel):
             ),
             logging=StructlogConfig(
                 level=os.getenv("LOG_LEVEL", "INFO").upper(),
-                json=os.getenv("LOG_JSON", "true").lower() == "true",
+                json_format=os.getenv("LOG_JSON", "true").lower() == "true",
                 timestamp_key=os.getenv("LOG_TIMESTAMP_KEY", "timestamp"),
             ),
             tracing=TracingConfig(
