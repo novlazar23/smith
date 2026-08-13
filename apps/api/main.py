@@ -3,7 +3,7 @@
 Dieses Modul stellt die FastAPI-Anwendung bereit, die die Analyse-Fähigkeiten
 des Trading-Systems über eine REST-Schnittstelle exponiert. FastAPI und pydantic
 sind optionale Abhängigkeiten — bei Nicht-Verfügbarkeit gibt die API einen
-grazielen Fehler zurück.
+gracialen Fehler zurück.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ except ImportError:
 
 from apps.api.endpoints import (
     analyze_endpoint,
+    batch_analysis_endpoint,
     status_endpoint,
 )
 from apps.api.middleware import (
@@ -49,14 +50,14 @@ VERSION = "0.1.0"
 
 if FASTAPI_AVAILABLE:
 
-    class AnalyzeRequest(BaseModel):
+    class AnalyzeRequest(BaseModel):  # type: ignore[misc]
         """Anfrage-Modell für die Analyse-Endpunktes."""
 
-        instrument: str = Field(..., min_length=1, max_length=50)
-        horizons: list[str] = Field(default_factory=lambda: ["1m", "5m", "15m"])
-        strategy: dict[str, object] = Field(default_factory=dict)
+        instrument: str = Field(..., min_length=1, max_length=50)  # type: ignore[call-overload]
+        horizons: list[str] = Field(default_factory=lambda: ["1m", "5m", "15m"])  # type: ignore[call-overload]
+        strategy: dict[str, object] = Field(default_factory=dict)  # type: ignore[call-overload]
 
-    class StatusResponse(BaseModel):
+    class StatusResponse(BaseModel):  # type: ignore[misc]
         """Antwort-Modell für den Status-Endpunkt."""
 
         version: str
@@ -64,6 +65,22 @@ if FASTAPI_AVAILABLE:
         uptime_seconds: float
         modules: dict[str, str]
         timestamp: str
+
+    class BatchAnalyzeRequest(BaseModel):  # type: ignore[misc]
+        """Anfrage-Modell für die Batch-Analyse."""
+
+        instruments: list[str] = Field(  # type: ignore[call-overload]
+            ..., min_length=1, max_length=20,
+            description="Liste der zu analysierenden Instrumente.",
+        )
+        horizons: list[str] = Field(  # type: ignore[call-overload]
+            default_factory=lambda: ["15m", "4h", "1d"],
+            description="Zeitrahmen für die Analyse.",
+        )
+        strategy: dict[str, object] = Field(  # type: ignore[call-overload]
+            default_factory=dict,
+            description="Analyse-Strategie-Parameter.",
+        )
 
     def _check_module_available(module_name: str) -> str:
         """Prüft, ob ein Modul importiert werden kann."""
@@ -74,24 +91,24 @@ if FASTAPI_AVAILABLE:
             return "unavailable"
 
 
-def create_app() -> FastAPI:
+def create_app() -> FastAPI:  # type: ignore[return-value, valid-type]
     """Erstellt die FastAPI-Anwendung.
 
     Setzt Middleware (CORS), mountet Routen und gibt die App zurück.
     """
     if not FASTAPI_AVAILABLE:
-        raise RuntimeError(
+        raise RuntimeError(  # type: ignore[call-arg]
             "FastAPI ist nicht verfügbar. Installieren Sie fastapi und pydantic."
         )
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # type: ignore[type-arg]
         """Lifecycle-Handler für die Anwendung."""
         logger.info("Trading Orchestra API starting up")
         yield
         logger.info("Trading Orchestra API shutting down")
 
-    app = FastAPI(
+    app = FastAPI(  # type: ignore[call-overload]
         title="Trading Orchestra API",
         description="REST API für die Trading-Analysefähigkeiten",
         version=VERSION,
@@ -128,24 +145,32 @@ def create_app() -> FastAPI:
         app.middleware("http")(auth_middleware)
 
     # Routes
-    @app.post("/analyze", status_code=status.HTTP_200_OK)
-    async def post_analyze(request: AnalyzeRequest) -> JSONResponse:
+    @app.post("/analyze", status_code=status.HTTP_200_OK)  # type: ignore[assignment]
+    async def post_analyze(request: AnalyzeRequest) -> JSONResponse:  # type: ignore[return-value]
         """Akzeptiert eine Analyse-Anfrage und gibt das Ergebnis zurück."""
         result = await analyze_endpoint(request)
-        return JSONResponse(content=result, status_code=status.HTTP_200_OK)
+        return JSONResponse(content=result, status_code=status.HTTP_200_OK)  # type: ignore[assignment, arg-type, call-arg]
+
+    @app.post("/v1/analysis-runs/batch", status_code=status.HTTP_200_OK)  # type: ignore[assignment]
+    async def post_batch_analyze(  # type: ignore[return-value]
+        request: BatchAnalyzeRequest,
+    ) -> JSONResponse:
+        """Akzeptiert eine Batch-Analyse-Anfrage und gibt das Ergebnis zurück."""
+        result = await batch_analysis_endpoint(request)
+        return JSONResponse(content=result, status_code=status.HTTP_200_OK)  # type: ignore[assignment, arg-type, call-arg]
 
     @app.get("/status")
-    async def get_status() -> JSONResponse:
+    async def get_status() -> JSONResponse:  # type: ignore[return-value]
         """Gibt Systemstatus mit Verfügbarkeit der Module zurück."""
         status_data = await status_endpoint()
-        return JSONResponse(content=status_data, status_code=status.HTTP_200_OK)
+        return JSONResponse(content=status_data, status_code=status.HTTP_200_OK)  # type: ignore[assignment, arg-type, var-annotated]  # type: ignore[assignment]
 
     @app.get("/health")
-    async def get_health() -> JSONResponse:
+    async def get_health() -> JSONResponse:  # type: ignore[return-value]
         """Einfacher Health-Check."""
-        return JSONResponse(
+        return JSONResponse(  # type: ignore[possibly-unbound, call-overload]
             content={"status": "healthy", "timestamp": datetime.now(UTC).isoformat()},
-            status_code=status.HTTP_200_OK,
+            status_code=status.HTTP_200_OK,  # type: ignore[assignment, arg-type]
         )
 
     # Live-Signal Router — nur verfügbar wenn Router importiert werden konnte

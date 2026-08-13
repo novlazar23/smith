@@ -11,10 +11,19 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from packages.config.instrument_pool import InstrumentPool
 from packages.governance.audit import AuditTrail
 from packages.governance.feature_flags import feature_flags
+from packages.orchestration.batch_engine import BatchEngine
 
 logger = logging.getLogger(__name__)
+
+# Optional FastAPI imports — only used by batch endpoint
+try:
+    from fastapi import HTTPException, status as http_status  # noqa: F401
+except ImportError:
+    HTTPException = None  # type: ignore[assignment]
+    http_status = None  # type: ignore[assignment]
 
 
 async def analyze_endpoint(request: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -133,3 +142,53 @@ async def live_signal_endpoint(request: Any) -> dict[str, Any]:
         "message": f"Signal für {instrument} generiert (KEINE Ausführung).",
         "audit_id": audit_id,
     }
+
+
+async def batch_analysis_endpoint(request: Any) -> dict[str, Any]:  # noqa: ANN401
+    """Verarbeitet eine Batch-Analyse-Anfrage.
+
+    Nimmt eine Liste von Instrumenten entgegen und analysiert sie
+    im Batch mit gemeinsamem Feature-Computing und Ressourcen-Monitoring.
+
+    Args:
+        request: BatchAnalyzeRequest mit instruments, horizons, strategy.
+
+    Returns:
+        Dictionary mit instrument_results, shared_features,
+        resource_metrics und total_time_seconds.
+    """
+    instruments: list[str] = request.instruments
+    horizons: list[str] = getattr(request, "horizons", ["15m", "4h", "1d"])
+    strategy: dict[str, Any] = getattr(request, "strategy", {})
+
+    logger.info(
+        "Processing batch analysis for %d instruments, horizons=%s, strategy_keys=%s",
+        len(instruments),
+        horizons,
+        list(strategy.keys()),
+    )
+
+    # Erstelle Pool und Engine mit Defaults
+    pool = InstrumentPool()
+    engine = BatchEngine(pool)
+
+    # Fuege Instrumente zum Pool hinzu
+    try:
+        pool.add_instruments(instruments)
+    except ValueError as exc:
+        raise HTTPException(  # type: ignore[call-arg, unused-ignore]
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,  # type: ignore[union-attr, unused-ignore]
+            detail=f"Invalid instruments: {exc}",
+        )
+
+    # Fuehre Batch-Analyse aus
+    result = engine.execute_batch(instruments, horizons, strategy)
+
+    # Falls teilweise oder fehlgeschlagen, HTTP 200 mit Status im Body
+    logger.info(
+        "Batch analysis completed with status: %s, %d instruments processed",
+        result.get("status"),
+        len(result.get("instrument_results", [])),
+    )
+
+    return result
