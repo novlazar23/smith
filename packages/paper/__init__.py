@@ -10,16 +10,21 @@ from .base import (
     TradeDirection,
 )
 from .executor import PaperExecutor
+from .fill_model import FillModel, FillStatus
+from .latency_simulator import LatencySimulator
 from .position_lifecycle import Fill, PositionLifecycle, PositionStatus
 
 __all__ = [
+    "Fill",
+    "FillModel",
+    "FillStatus",
+    "LatencySimulator",
     "OrderType",
     "PaperAccount",
     "PaperExecutor",
     "PaperPosition",
-    "Trade",
-    "TradeDirection",
-    "Fill",
     "PositionLifecycle",
     "PositionStatus",
+    "Trade",
+    "TradeDirection",
 ]
