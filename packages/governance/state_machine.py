@@ -110,7 +110,7 @@ class GovernanceStateMachine:
         self._agents[agent_id] = record
         self.audit.log_state_transition(
             agent_id=agent_id,
-            previous_state=None,
+            previous_state="N/A",
             new_state=AgentState.SHADOW,
             actor="system",
             details={"reason": "initial_registration", "version": version},
@@ -135,7 +135,7 @@ class GovernanceStateMachine:
         from_state = record.state
 
         allowed = VALID_TRANSITIONS.get(from_state)
-        if to_state not in allowed:
+        if allowed is None or to_state not in allowed:
             raise ValueError(
                 f"Transition {from_state} → {to_state} is not allowed "
                 f"for agent {agent_id}. Allowed: {allowed}"
@@ -179,7 +179,7 @@ class GovernanceStateMachine:
         if record is None:
             return False
         allowed = VALID_TRANSITIONS.get(record.state)
-        return to_state in allowed
+        return allowed is not None and to_state in allowed
 
     def get_agent(self, agent_id: str) -> AgentRecord | None:
         """Liefert den Record eines Agents oder None."""
