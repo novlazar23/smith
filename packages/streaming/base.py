@@ -140,3 +140,4 @@ class DeadLetterHandler(Protocol):
 
     async def list_dead_events(self, limit: int = 100) -> list[dict[str, Any]]:
         """Listet tote Events."""
+        return []

@@ -19,7 +19,7 @@ class EventClusterer:
         if not events:
             return []
 
-        clusters: list[list[NewsEvent]] = []
+        clusters: list[NewsCluster] = []
         assigned: set[str] = set()
 
         for i, event in enumerate(events):

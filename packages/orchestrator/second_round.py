@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from packages.consensus import ConsensusDecision, ConsensusResult
+from packages.consensus import ConsensusDecision, ConsensusResult, VoteDirection
 from packages.orchestrator.graph import (
     OrchestratorGraph,
     PipelineStage,
@@ -283,8 +283,8 @@ def compute_consensus(
         return ConsensusResult(
             decision=ConsensusDecision.NO_TRADE,
             vote_distribution={
-                "long": 0.0, "short": 0.0, "range": 0.0, "abstain": 0.0,
-            },
+                    VoteDirection.LONG: 0.0, VoteDirection.SHORT: 0.0, VoteDirection.RANGE: 0.0, VoteDirection.ABSTAIN: 0.0,
+                },
             agent_weights={},
             agent_agreements=[],
             agent_disagreements=[],

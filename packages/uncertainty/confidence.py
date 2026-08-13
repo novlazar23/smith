@@ -53,15 +53,15 @@ class BayesianConfidence:
         if alpha_ci <= 0 or beta_ci <= 0:
             return cls(mean=mean, lower=0.0, upper=1.0, width=1.0)
 
-        lower = scipy_stats.beta.ppf(
+        lower = float(scipy_stats.beta.ppf(
             (1 - confidence_level) / 2, alpha_ci, beta_ci
-        )
-        upper = scipy_stats.beta.ppf(
+        ))
+        upper = float(scipy_stats.beta.ppf(
             1 - (1 - confidence_level) / 2, alpha_ci, beta_ci
-        )
+        ))
 
         return cls(
-            mean=mean,
+            mean=float(mean),
             lower=max(lower, 0.0),
             upper=min(upper, 1.0),
             width=upper - lower,

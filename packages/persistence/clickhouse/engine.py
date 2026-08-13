@@ -211,7 +211,7 @@ class ClickHouseEngine:
         try:
             response = httpx.post(
                 url,
-                data=query,
+                content=query,
                 timeout=30.0,
                 verify=self._config.verify,
             )

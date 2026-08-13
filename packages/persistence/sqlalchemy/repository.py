@@ -60,7 +60,7 @@ class SQLAlchemyRepository(Repository[_T]):
                 if hasattr(entity, key):
                     setattr(entity, key, value)
             if hasattr(entity, "updated_at"):
-                entity.updated_at = datetime.now(UTC)
+                setattr(entity, "updated_at", datetime.now(UTC))
             self._session.commit()
             self._session.refresh(entity)
             return entity
