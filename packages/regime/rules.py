@@ -87,7 +87,7 @@ class RuleBasedRegimeDetector(BaseRegimeDetector):
         idx = valid_indices[-1]
         adx_val = adx[idx]
         rsi_val = rsi[idx]
-        is_uptrend = sma_fast[idx] > sma_slow[idx]
+        is_uptrend = bool(sma_fast[idx] > sma_slow[idx])
 
         # Bull score
         trend_score = min(adx_val / (self.adx_bull_threshold * 2), 1.0) if adx_val > self.adx_choppy_threshold else 0.0
