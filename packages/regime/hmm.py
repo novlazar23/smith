@@ -43,16 +43,20 @@ class HiddenMarkovModel(BaseRegimeDetector):
         close = data["close"]
         high = data.get("high", close)
         low = data.get("low", close)
+        n = len(close)
 
         # RSI — compute relative strength index over 14 periods
-        delta = np.diff(close)
-        gain = np.where(delta > 0, delta, 0.0)
-        loss = np.where(delta < 0, -delta, 0.0)
-        avg_gain = np.concatenate([[np.mean(gain[:14])], np.zeros(len(gain) - 14)])
-        avg_loss = np.concatenate([[np.mean(loss[:14])], np.zeros(len(loss) - 14)])
-        for i in range(14, len(gain)):
-            avg_gain[i] = (avg_gain[i - 1] * 13 + gain[i]) / 14
-            avg_loss[i] = (avg_loss[i - 1] * 13 + loss[i]) / 14
+        delta = np.diff(close)  # len = n-1
+        gain = np.where(delta > 0, delta, 0.0)  # len = n-1
+        loss = np.where(delta < 0, -delta, 0.0)  # len = n-1
+        avg_gain = np.zeros(n)
+        avg_loss = np.zeros(n)
+        if n > 14:
+            avg_gain[13] = float(np.mean(gain[:14]))
+            avg_loss[13] = float(np.mean(loss[:14]))
+            for i in range(14, n):
+                avg_gain[i] = (avg_gain[i - 1] * 13 + gain[i - 1]) / 14
+                avg_loss[i] = (avg_loss[i - 1] * 13 + loss[i - 1]) / 14
         rs = avg_gain / np.where(avg_loss == 0, 1e-10, avg_loss)
         rsi = 100.0 - (100.0 / (1.0 + rs))
 
@@ -114,7 +118,7 @@ class HiddenMarkovModel(BaseRegimeDetector):
         for c in range(self.n_components):
             mask = last_assignments == c
             if np.any(mask):
-                rsi_vals = features[mask, 0]
+                rsi_vals = features[-window:][mask, 0]
                 cluster_rsi_means.append(float(np.mean(rsi_vals)))
             else:
                 cluster_rsi_means.append(0.0)
