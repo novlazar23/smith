@@ -11,6 +11,7 @@ from .base import ConfigLoader
 from .database import ClickHouseConfig, DatabaseConfig, PostgreSQLConfig, RedisConfig
 from .observability import ObservabilityConfig
 from .streaming import RedpandaConfig, StreamingConfig
+from .instrument_pool import InstrumentPool
 from .trading import RiskConfig, TradingConfig
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "ClickHouseConfig",
     "ConfigLoader",
     "DatabaseConfig",
+    "InstrumentPool",
     "ObservabilityConfig",
     "PostgreSQLConfig",
     "RedisConfig",
