@@ -110,7 +110,7 @@ class RuleBasedRegimeDetector(BaseRegimeDetector):
             MarketRegime.CHOPPY: float(choppy_score),
         }
 
-        best = max(scores, key=scores.get)
+        best = max(scores, key=lambda k: scores.get(k, 0.0))
         return RegimeResult(
             regime=best,
             confidence=scores[best],
