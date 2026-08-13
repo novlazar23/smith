@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -110,7 +111,7 @@ class HistoricalAnalogyAgent(BaseAgent):
         window: int = 20,
         min_window: int = 20,
         minimum_matches: int = 3,
-        historical_data: dict[str, NDArray[np.float64]] | None = None,
+        historical_data: dict[str, NDArray[np.float64] | None] | None = None,
     ) -> None:
         if config is None:
             config = AgentConfig(
@@ -199,6 +200,8 @@ class HistoricalAnalogyAgent(BaseAgent):
             sample_size=sample_size,
             raw_confidence=confidence,
             status=self.config.status,
+            expected_return=None,
+            calibrated_confidence=0.0,
         )
 
     # ── private helpers ──────────────────────────────────────────────────
@@ -209,7 +212,7 @@ class HistoricalAnalogyAgent(BaseAgent):
         high: NDArray[np.float64] | None,
         low: NDArray[np.float64] | None,
         volume: NDArray[np.float64] | None,
-    ) -> dict[str, NDArray[np.float64]]:
+    ) -> dict[str, NDArray[np.float64] | None]:
         """Resolve data source — external historical or pseudo-historical from own data."""
         if self._historical_data is not None:
             return self._historical_data
@@ -265,11 +268,13 @@ class HistoricalAnalogyAgent(BaseAgent):
 
     def _scan_history(
         self,
-        hist: dict[str, NDArray[np.float64]],
+        hist: dict[str, NDArray[np.float64] | None],
         current: dict,
     ) -> list[dict]:
         """Sliding-window scan over historical data for candidate periods."""
         h_close = hist["close"]
+        if h_close is None:
+            return []
         h_high = hist.get("high")
         h_low = hist.get("low")
         h_volume = hist.get("volume")
@@ -445,7 +450,7 @@ class HistoricalAnalogyAgent(BaseAgent):
         """Counter-evidence: least similar match in opposite direction."""
         counter: list = []
 
-        dominant = max(probability, key=probability.get)
+        dominant = max(probability, key=lambda k: probability.get(k, 0.0))
         opposing = "down" if dominant == "up" else ("up" if dominant == "down" else "range")
 
         # Find least similar match with opposing outcome
@@ -537,7 +542,7 @@ class HistoricalAnalogyAgent(BaseAgent):
         probability: dict[str, float],
     ) -> str:
         """Build hypothesis string."""
-        dominant = max(probability, key=probability.get)
+        dominant = max(probability, key=lambda k: probability.get(k, 0.0))
         avg_sim = (
             sum(m["similarity"] for m in matches) / len(matches)
             if matches else 0.0

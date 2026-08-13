@@ -138,6 +138,8 @@ class AnomalyAgent(BaseAgent):
             invalidations=invalidations,
             raw_confidence=confidence,
             status=self.config.status,
+            expected_return=None,
+            calibrated_confidence=0.0,
         )
 
     # ── Score computation ──────────────────────────────────────────────────
@@ -633,4 +635,6 @@ class AnomalyAgent(BaseAgent):
             invalidations=self._build_invalidations(),
             raw_confidence=confidence,
             status=self.config.status,
+            expected_return=None,
+            calibrated_confidence=0.0,
         )

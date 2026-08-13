@@ -130,6 +130,8 @@ class FibonacciAgent(BaseAgent):
             invalidations=invalidations,
             status=self.config.status,
             raw_confidence=self._compute_confidence(areas),
+            expected_return=None,
+            calibrated_confidence=0.0,
         )
 
     # ── private helpers ──────────────────────────────────────────────────

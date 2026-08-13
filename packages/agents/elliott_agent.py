@@ -87,6 +87,8 @@ class ElliottAgent(BaseAgent):
             invalidations=invalidations,
             status=self.config.status,
             raw_confidence=self._compute_confidence(scenarios),
+            expected_return=None,
+            calibrated_confidence=0.0,
         )
 
     # ── private helpers ──────────────────────────────────────────────────

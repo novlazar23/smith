@@ -121,6 +121,8 @@ class NewsAgent(BaseAgent):
             invalidations=invalidations,
             raw_confidence=confidence,
             status=self.config.status,
+            expected_return=None,
+            calibrated_confidence=0.0,
         )
 
     # ── private helpers ──────────────────────────────────────────────────

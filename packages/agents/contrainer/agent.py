@@ -181,7 +181,7 @@ class ContrarianAgent:
     @staticmethod
     def _contrarian_opposite(direction: str) -> str:
         """Return the contrarian opposite of a direction."""
-        mapping = {
+        mapping: dict[str, str] = {
             VoteDirection.LONG: VoteDirection.SHORT,
             VoteDirection.SHORT: VoteDirection.LONG,
             VoteDirection.RANGE: VoteDirection.LONG,
@@ -273,6 +273,7 @@ class ContrarianAgent:
             status=AgentStatus.SHADOW,
             raw_confidence=confidence,
             calibrated_confidence=confidence,
+            expected_return=None,
         )
 
     def _create_abstain_report(
@@ -309,6 +310,7 @@ class ContrarianAgent:
             status=AgentStatus.SHADOW,
             raw_confidence=0.0,
             calibrated_confidence=0.0,
+            expected_return=None,
         )
 
     @staticmethod

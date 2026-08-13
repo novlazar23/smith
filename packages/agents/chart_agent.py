@@ -186,4 +186,6 @@ class ChartAgent(BaseAgent):
             invalidations=invalidations,
             status=self.config.status,
             raw_confidence=round(min(0.9, 0.3 + 0.1 * len(pivots)), 4),
+            expected_return=None,
+            calibrated_confidence=0.0,
         )

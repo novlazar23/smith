@@ -128,4 +128,6 @@ class RegimeAgent(BaseAgent):
             invalidations=invalidations,
             status=self.config.status,
             raw_confidence=round(confidence, 4),
+            expected_return=None,
+            calibrated_confidence=0.0,
         )

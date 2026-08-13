@@ -97,14 +97,14 @@ class MultiTimeframeAgent:
         direction_votes: Counter[str] = Counter()
         total_weight = 0.0
         for sig in signals:
-            direction_votes[sig.direction] += sig.weight
+            direction_votes[sig.direction] += int(sig.weight)
             total_weight += sig.weight
 
         if total_weight == 0 or not direction_votes:
             return self._create_abstain_report()
 
         # Determine overall direction by weight
-        overall_direction = max(direction_votes, key=direction_votes.get)
+        overall_direction = max(direction_votes, key=lambda k: direction_votes.get(k, 0))
 
         # Calculate conflicts
         conflicts = self._detect_conflicts(signals)
@@ -203,6 +203,7 @@ class MultiTimeframeAgent:
             status=AgentStatus.SHADOW,
             raw_confidence=0.0,
             calibrated_confidence=0.0,
+            expected_return=None,
         )
         return report, agent_report
 
@@ -276,4 +277,5 @@ class MultiTimeframeAgent:
             status=AgentStatus.SHADOW,
             raw_confidence=report.confidence,
             calibrated_confidence=report.confidence,
+            expected_return=None,
         )
