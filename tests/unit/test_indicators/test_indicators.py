@@ -7,18 +7,17 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
 from packages.indicators import (
     ADX,
     ATR,
-    BollingerBands,
     EMA,
     MACD,
     OBV,
     RSI,
     SMA,
-    StochasticOscillator,
     VWAP,
+    BollingerBands,
+    StochasticOscillator,
 )
 
 
@@ -49,7 +48,7 @@ class TestBase:
         class Dummy(Indicator):
             name = "dummy"
 
-            def compute(self, data: dict[str, np.ndarray]) -> "Indicator.IndicatorResult":  # type: ignore[name-defined]
+            def compute(self, data: dict[str, np.ndarray]) -> Indicator.IndicatorResult:  # type: ignore[name-defined]
                 return Indicator.IndicatorResult(name="dummy", values=np.array([0.0]))
 
         with pytest.raises(ValueError, match="Missing required"):
