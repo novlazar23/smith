@@ -272,15 +272,15 @@ class PurgedKFold:
             # Purge: remove observations in training that overlap with test
             # (for strategies with look-ahead in features)
             purge_size = max(1, int(len(test_indices) * self.embargo_pct))
-            test_start_ts = datetime.fromisoformat(candles[test_start].timestamp)
-            test_end_ts = datetime.fromisoformat(candles[test_end - 1].timestamp)
+            test_start_ts = candles[test_start].timestamp
+            test_end_ts = candles[test_end - 1].timestamp
             train_indices = [
                 idx for idx in train_indices
                 if abs(
-                    datetime.fromisoformat(candles[idx].timestamp) - test_start_ts
+                    candles[idx].timestamp - test_start_ts
                 ).total_seconds() > purge_size
                 or abs(
-                    datetime.fromisoformat(candles[idx].timestamp) - test_end_ts
+                    candles[idx].timestamp - test_end_ts
                 ).total_seconds() > purge_size
             ]
 

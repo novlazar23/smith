@@ -107,13 +107,14 @@ class PortfolioSnapshot:
     positions: list[Position] = field(default_factory=list)
     trades: list[Trade] = field(default_factory=list)
 
+    _drawdown: float = 0.0
+
     @property
     def drawdown(self) -> float:
         """Current drawdown as fraction of peak equity."""
         if self.total_equity <= 0:
             return 0.0
-        # Drawdown will be set externally after tracking peaks
-        return self._drawdown if hasattr(self, "_drawdown") else 0.0
+        return self._drawdown
 
     @property
     def gross_exposure(self) -> float:
@@ -186,7 +187,7 @@ class BacktestConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def validate(self) -> BacktestConfig:
+    def _validate_config(self) -> BacktestConfig:
         if self.initial_cash_ratio > 1.0:
             raise ValueError("initial_cash_ratio must be <= 1.0")
         if self.max_position_size > 1.0:

@@ -66,8 +66,8 @@ class BaseStrategy(ABC):
         return self._history
 
     @abstractmethod
-    def on_bar(self, candle: Candle) -> StrategySignal:
-        """Called with each new candle. Return a StrategySignal."""
+    def on_bar(self, candle: Candle) -> StrategySignal | None:
+        """Called with each new candle. Return a StrategySignal or None."""
         raise NotImplementedError
 
     def on_bars(self, candles: list[Candle]) -> list[StrategySignal]:

@@ -124,7 +124,7 @@ class BacktestEngine:
                     "price": pos.avg_price,
                     "timestamp": (
                         closed_at.isoformat() if closed_at
-                        else _ensure_aware(candle.timestamp).isoformat()
+                        else _ensure_aware(candles[-1].timestamp).isoformat()
                     ),
                     "holding_days": (
                         (closed_at - opened_at).days

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -95,6 +96,10 @@ class CsvDataFeed(DataFeed):
                     ts = pd.Timestamp(ts_str).to_pydatetime()
                 except (ValueError, TypeError):
                     continue
+                if ts is pd.NaT or not isinstance(ts, datetime):
+                    continue
+                # pyright cannot narrow this, but the isinstance check above guarantees it
+                ts_actual: datetime = ts
 
                 try:
                     o = float(row[self.open_col])
@@ -107,7 +112,7 @@ class CsvDataFeed(DataFeed):
 
                 candles.append(
                     Candle(
-                        timestamp=ts,
+                        timestamp=ts_actual,
                         symbol=self.symbol,
                         open=o,
                         high=h,
@@ -205,19 +210,22 @@ class ParquetDataFeed(DataFeed):
         candles: list[Candle] = []
         for _, row in df.iterrows():
             try:
-                ts = pd.Timestamp(row["timestamp"]).to_pydatetime()
+                ts = pd.Timestamp(str(row["timestamp"])).to_pydatetime()
+                if ts is pd.NaT or not isinstance(ts, datetime):
+                    continue
+                ts_actual: datetime = ts
             except (ValueError, TypeError, KeyError):
                 continue
 
             candles.append(
                 Candle(
-                    timestamp=ts,
+                    timestamp=ts_actual,
                     symbol=self.symbol,
                     open=float(row["open"]),
                     high=float(row["high"]),
                     low=float(row["low"]),
                     close=float(row["close"]),
-                    volume=float(row.get("volume", 0)),
+                    volume=float(row.get("volume", 0) or 0),
                 )
             )
 
