@@ -1,0 +1,44 @@
+{
+  "epic_id": "EPIC-17",
+  "title": "Production Hardening — Infrastructure, Security, DR",
+  "phase": "epic-ready",
+  "priority": "P1",
+  "dependencies": ["EPIC-01", "EPIC-02", "EPIC-03", "EPIC-04", "EPIC-05", "EPIC-06", "EPIC-07", "EPIC-08", "EPIC-09", "EPIC-10", "EPIC-11", "EPIC-12", "EPIC-13", "EPIC-14", "EPIC-15", "EPIC-16"],
+  "work_packages": [
+    {
+      "id": "WP01",
+      "title": "Production Infrastructure",
+      "files": ["infrastructure/k8s/", "packages/persistence/postgresql/replication.py", "packages/persistence/clickhouse/replication.py", "packages/streaming/redpanda/config.py"]
+    },
+    {
+      "id": "WP02",
+      "title": "Security Hardening",
+      "files": ["packages/security/rbac.py", "packages/security/vault.py", "packages/security/network_zones.py", "packages/security/audit.py"]
+    },
+    {
+      "id": "WP03",
+      "title": "Disaster Recovery",
+      "files": ["packages/persistence/postgresql/wal_archiver.py", "packages/persistence/clickhouse/snapshot.py", "scripts/dr/", "docs/runbooks/"]
+    },
+    {
+      "id": "WP04",
+      "title": "Performance Engineering",
+      "files": ["tests/performance/", "scripts/profile/", "packages/persistence/postgresql/index_optimizer.py"]
+    },
+    {
+      "id": "WP05",
+      "title": "Compliance & Audit",
+      "files": ["packages/compliance/trade_log.py", "packages/compliance/mifid2.py", "packages/compliance/gdpr.py", "packages/compliance/retention.py"]
+    }
+  ],
+  "acceptance_criteria": [
+    "WP01: Helm Charts deployed, HPA active, PostgreSQL replication, ClickHouse replication, Redpanda RF=3, Multi-Region",
+    "WP02: 6 RBAC roles, AES-256 API key vault, network zones, immutable audit trail, 0 critical snyk/semgrep",
+    "WP03: WAL archiving + restore, ClickHouse snapshots, 3 tested runbooks, automated backup verify, RTO<15min, RPO<5min",
+    "WP04: 1000 candles/sec ingestion, 100 analysis runs/sec, health<500ms, analysis<5s, memory stable",
+    "WP05: Hash-chain trade log, MiFID II reports, GDPR right-to-erasure, data export, retention policies, SOC 2 checklist"
+  ],
+  "critical_path": "WP02 → WP04 | WP03 → WP05 | WP01 → WP04",
+  "parallel_groups": ["WP01 (infrastructure) | WP02+WP05 (security/compliance) | WP03+WP04 (dr/performance)"],
+  "rollback_strategy": "Docker Compose fallback, blue/green Kubernetes deployment, versioned reversible commits"
+}

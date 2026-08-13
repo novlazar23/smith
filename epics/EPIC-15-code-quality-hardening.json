@@ -1,0 +1,126 @@
+{
+  "epic_id": "EPIC-15",
+  "title": "Code Quality Hardening — Fix all pyright errors",
+  "phase": "execution-ready",
+  "priority": "P2",
+  "dependencies": ["EPIC-01", "EPIC-02", "EPIC-03", "EPIC-04", "EPIC-05", "EPIC-06", "EPIC-07", "EPIC-08", "EPIC-09", "EPIC-10", "EPIC-11", "EPIC-12", "EPIC-13", "EPIC-14"],
+  "work_packages": [
+    {
+      "id": "WP01",
+      "title": "Agent Report Schema Fixes",
+      "description": "Add missing expected_return and calibrated_confidence parameters to ALL agent files that construct AgentReport. Also fix contrainer dict key type mismatch (str → VoteDirection) and multi_timeframe Counter[float] issue.",
+      "files": [
+        "packages/agents/anomaly_agent.py",
+        "packages/agents/chart_agent.py",
+        "packages/agents/contrainer/agent.py",
+        "packages/agents/cross_market_agent.py",
+        "packages/agents/elliott_agent.py",
+        "packages/agents/fibonacci_agent.py",
+        "packages/agents/historical_analogy_agent.py",
+        "packages/agents/indicator_agent.py",
+        "packages/agents/multi_timeframe/agent.py",
+        "packages/agents/news_agent.py",
+        "packages/agents/orderflow_agent.py",
+        "packages/agents/regime_agent.py"
+      ],
+      "error_count": 17
+    },
+    {
+      "id": "WP02",
+      "title": "Dict max() Pattern Fixes",
+      "description": "Fix max(dict.get(...)) anti-pattern across multiple files. Replace with proper max(d, key=d.get).",
+      "files": [
+        "packages/agents/historical_analogy_agent.py",
+        "packages/agents/multi_timeframe/agent.py",
+        "packages/regime/hmm.py",
+        "packages/regime/rules.py"
+      ],
+      "error_count": 6
+    },
+    {
+      "id": "WP03",
+      "title": "Backtesting Package Fixes",
+      "description": "Fix core.py drawdown attribute, datafeed datetime/series typing, engine possibly unbound, strategies method override return type, validation datetime/fromisoformat.",
+      "files": [
+        "packages/backtesting/core.py",
+        "packages/backtesting/datafeed.py",
+        "packages/backtesting/engine.py",
+        "packages/backtesting/strategies.py",
+        "packages/backtesting/validation.py"
+      ],
+      "error_count": 11
+    },
+    {
+      "id": "WP04",
+      "title": "Governance/State Machine Fixes",
+      "description": "Fix None type in log_state_transition and frozenset|None membership tests in state_machine.py.",
+      "files": [
+        "packages/governance/state_machine.py"
+      ],
+      "error_count": 3
+    },
+    {
+      "id": "WP05",
+      "title": "Observability/Misc Fixes",
+      "description": "Fix opentelemetry missing imports, mlflow import guards and return types, json field override, tracing timeout_millis, streaming/base.py return path, clickhouse type, sqlalchemy repository typing, uncertainty ndarray→float casting, news clustering type mismatch, pipeline SealRecord types, second_round vote_distribution types, historical_analogy_agent ndarray return.",
+      "files": [
+        "packages/observability/config.py",
+        "packages/observability/mlflow_client.py",
+        "packages/observability/tracing.py",
+        "packages/orchestrator/pipeline.py",
+        "packages/orchestrator/second_round.py",
+        "packages/persistence/clickhouse/engine.py",
+        "packages/persistence/sqlalchemy/repository.py",
+        "packages/streaming/base.py",
+        "packages/uncertainty/confidence.py",
+        "packages/domain/news/clustering.py"
+      ],
+      "error_count": 17
+    },
+    {
+      "id": "WP06",
+      "title": "Tests — Verification of Zero Pyright Errors",
+      "description": "Write tests to cover the fixes and verify 0 pyright errors across the entire packages/ directory.",
+      "files": [
+        "tests/unit/test_agent_report_fixes.py",
+        "tests/unit/test_backtesting_fixes.py",
+        "tests/unit/test_governance_fixes.py",
+        "tests/unit/test_observability_fixes.py",
+        "tests/unit/test_misc_fixes.py",
+        "tests/pyright_verification.py"
+      ],
+      "error_count": 0,
+      "acceptance": "pyright packages/ reports 0 errors"
+    },
+    {
+      "id": "WP07",
+      "title": "Documentation — Evidence File",
+      "description": "Create evidence file documenting the fixes, error categories, and verification results.",
+      "files": [
+        ".harness/projects/smith/evidence/EPIC-15-code-quality-evidence.md"
+      ],
+      "error_count": 0
+    }
+  ],
+  "acceptance_criteria": [
+    "pyright packages/ reports exactly 0 errors",
+    "All AgentReport constructions include expected_return and calibrated_confidence",
+    "All dict max() patterns use proper key function",
+    "All backtesting type annotations are correct",
+    "Governance state machine handles None previous_state gracefully",
+    "All observability imports resolve correctly or are guarded",
+    "No ndarray passed where float expected",
+    "No type mismatches in clustering, pipeline, or second_round"
+  ],
+  "critical_path": "WP01 → WP02 → WP03 → WP04 → WP05",
+  "parallel_groups": [
+    "A:WP01 (parallelizable per file)",
+    "B:WP02 (parallelizable per file)",
+    "C:WP03 (sequential within package)",
+    "D:WP04 (single file)",
+    "E:WP05 (parallelizable per file)",
+    "F:WP06 (after all fixes)",
+    "G:WP07 (after tests pass)"
+  ],
+  "rollback_strategy": "Commit-basierter Rollback pro WP, Pyright-Check als Regressionstest"
+}

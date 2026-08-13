@@ -1,0 +1,97 @@
+{
+  "epic_id": "EPIC-18",
+  "title": "Continuous Optimization — ML, Auto-Tuning, Market Expansion",
+  "phase": "epic-ready",
+  "priority": "P2",
+  "dependencies": [
+    "EPIC-01", "EPIC-02", "EPIC-03", "EPIC-04", "EPIC-05", "EPIC-06",
+    "EPIC-07", "EPIC-08", "EPIC-09", "EPIC-10", "EPIC-11", "EPIC-12",
+    "EPIC-13", "EPIC-14", "EPIC-15", "EPIC-16", "EPIC-17"
+  ],
+  "work_packages": [
+    {
+      "id": "WP01",
+      "title": "ML Model Integration — SHAP, Adaptive Weights, Anomaly Detection, RL Execution",
+      "files": [
+        "packages/ml/__init__.py",
+        "packages/ml/shap_analyzer.py",
+        "packages/ml/adaptive_weights.py",
+        "packages/ml/anomaly_detector.py",
+        "packages/ml/rl_execution.py"
+      ]
+    },
+    {
+      "id": "WP02",
+      "title": "Auto-Tuning Engine — Hyperparameter Optimization, Backtest-to-Live Pipeline, Promotion, Rollback",
+      "files": [
+        "packages/autotuning/__init__.py",
+        "packages/autotuning/hyperparameter_optimizer.py",
+        "packages/autotuning/backtest_pipeline.py",
+        "packages/autotuning/promotion_engine.py",
+        "packages/autotuning/rollback_manager.py"
+      ]
+    },
+    {
+      "id": "WP03",
+      "title": "Market Expansion — Multi-Asset, Multi-Venue, Correlation Clustering, Cross-Asset Regime Detection",
+      "files": [
+        "packages/market_expansion/__init__.py",
+        "packages/market_expansion/asset_universe.py",
+        "packages/market_expansion/venue_manager.py",
+        "packages/market_expansion/correlation_cluster.py",
+        "packages/market_expansion/regime_detector.py"
+      ]
+    },
+    {
+      "id": "WP04",
+      "title": "Intelligence Layer — Sentiment Pipeline, Whale Alerts, Macro Calendar, Social Consensus Agent",
+      "files": [
+        "packages/intelligence/__init__.py",
+        "packages/intelligence/sentiment_pipeline.py",
+        "packages/intelligence/whale_alert.py",
+        "packages/intelligence/macro_calendar.py",
+        "packages/intelligence/social_consensus.py"
+      ]
+    },
+    {
+      "id": "WP05",
+      "title": "Knowledge Base — Auto Documentation, Pattern Library, Performance Leaderboard, Quarterly Review",
+      "files": [
+        "packages/knowledge_base/__init__.py",
+        "packages/knowledge_base/auto_documenter.py",
+        "packages/knowledge_base/pattern_library.py",
+        "packages/knowledge_base/performance_leaderboard.py",
+        "packages/knowledge_base/quarterly_review.py"
+      ]
+    }
+  ],
+  "acceptance_criteria": [
+    "SHAP-Feature-Importance für alle Agenten berechnet und dokumentiert",
+    "Adaptive Konsens-Gewichte weekly retrainiert, OOS-Performance verbessert sich gegenüber statischen Gewichten",
+    "Anomalie-Erkennung detektiert mindestens 1 historischen Regime-Shift (z.B. March 2020, FTX Crash)",
+    "RL-Execution mindestens 5% price improvement gegenüber fixed-limit placement im Backtest",
+    "Hyperparameter-Tuning verbessert mindestens einen Agenten (OOS Sharpe +0.1)",
+    "Backtest-to-Live Pipeline funktioniert für mindestens einen neuen Agenten (shadow → paper → live)",
+    "Shadow-to-Paper Promotion mit statistischem Test (p < 0.05)",
+    "Rollback-System detektiert und rollt bei simulierter Degradation korrekt zurück",
+    "Multi-Asset: mindestens Equities + FX parallel gemanagt (3 Asset-Klassen)",
+    "Multi-Venue: mindestens 2 zusätzliche Exchanges integriert",
+    "Correlation Clustering für 50+ Instruments berechnet",
+    "Sentiment-Pipeline liefert strukturierte Features (mindestens Twitter/X + Reddit)",
+    "Whale Alerts integriert und als Feature im Agenten-Input verfügbar",
+    "Macro Calendar integriert, Event-Risk-Scoring aktiv",
+    "Social Sentiment Consensus Agent generiert Signal mit Confidence Bands",
+    "Pattern Library enthält mindestens 10 gelernte Patterns",
+    "Agent Leaderboard mit Trendanalyse funktioniert",
+    "Quarterly Review Automation generiert Review-Report",
+    "Alle Tests bestanden, ruff clean"
+  ],
+  "critical_path": "WP01 → WP02 (ML-Modelle und adaptive Gewichte als Basis für Backtest-to-Live)",
+  "parallel_groups": [
+    "A:WP01 (ML Integration)",
+    "B:WP03 (Market Expansion) — parallel zu WP01, WP02",
+    "C:WP04 (Intelligence Layer) — parallel zu WP01-WP03",
+    "D:WP05 (Knowledge Base) — parallel zu allen, benötigt nur Read-Access auf WP01-WP04 Ergebnisse"
+  ],
+  "rollback_strategy": "ML-Modelle: manual revert auf letzte validierte Version; Adaptive Gewichte: zurücksetzen auf statische Gewichte; Auto-Tuning: Promotion stoppen, Rollback zu bekannt gutem Config; Sentiment: Pipeline pausieren, nur traditionelle Features verwenden; Multi-Asset: auf einzelne Asset-Klasse zurückfallen"
+}
