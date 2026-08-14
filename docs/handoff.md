@@ -57,9 +57,11 @@ Phase 1 Persistence (PostgreSQL-backed stores) additions committed:
 
 ## Next priority
 
-Phase 1 remaining:
-- **Outcome Generator persistence migration** — `OutcomeGenerator` currently only stores in-memory; needs PostgreSQL-backed store using the existing `outcomes` table
-- **Structured agent output queries via API routes** — expose existing `PersistedAgentAnalysisStore` data through endpoints (`GET /agent/analyses`, `GET /agent/analyses/run/{run_id}`, `GET /agent/analyses/agent/{agent_id}`, `GET /agent/analyses/snapshot/{snapshot_id}`)
+Phase 1: ✅ COMPLETE. Outcome Generator migrated to production with in-memory store (`InMemoryOutcomeStore`), PostgreSQL-backed store (`PersistedOutcomeStore`) available, and API routes for agent analysis queries.
+
+- **Outcome Generator persistence migration** — moved `OutcomeGenerator` from `tests/_test_utils.py` to `src/trading_harness/services/outcome_generator.py`; `OutcomeGenerator` accepts `OutcomeStore` protocol (default: `InMemoryOutcomeStore`); `PersistedOutcomeStore` in `outcome_store.py` already implements the protocol; tests: 18 tests in `test_outcome_generator.py`
+- **Structured agent output queries via API routes** — 4 new endpoints: `GET /agent/analyses`, `GET /agent/analyses/run/{run_id}`, `GET /agent/analyses/agent/{agent_id}`, `GET /agent/analyses/snapshot/{snapshot_id}` — wired to `PersistedAgentAnalysisStore`
+- **Bugfix: ParameterMutation** — fixed random attribute selection (was ~1/6 chance of correct attr), dead key (`weighting_strategies` vs `weighting_strategy`), and conditional generation increment — all `MutationType` → `ParameterMutation` mappings now pass explicit `attr` parameter
 
 Phase 2 — Evaluation: ✅ EvaluationService results persistence wired — `PersistedEvaluationResultStore` added, injected into `EvaluationService` via `routes.py`, `add()` called after every `evaluate_agent()`, test suite with 8 tests, `make check` clean.
 
