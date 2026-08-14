@@ -6,6 +6,7 @@ from trading_harness.config import get_settings
 from trading_harness.models import (
     AgentAnalysisResult,
     AgentGenome,
+    AgentStatus,
     ChallengerEvaluation,
     MarketRegime,
     MarketSnapshot,
@@ -50,6 +51,23 @@ result_store = PersistedEvaluationResultStore(_db)
 evaluation_service = EvaluationService(outcome_store, performance_store, result_store)
 analysis_store: PersistedAgentAnalysisStore = PersistedAgentAnalysisStore(_db)
 agent_runtime = AgentRuntime(analysis_store)
+
+# ---------------------------------------------------------------------------
+# Phase 3 — Evolution services
+# ---------------------------------------------------------------------------
+
+from trading_harness.services.agent_factory import AgentFactory
+from trading_harness.services.agent_genome_store import AgentGenomeStore
+from trading_harness.services.evolution_service import EvolutionService
+
+evolution_genome_store = AgentGenomeStore()
+evolution_factory = AgentFactory(load_yaml(settings.population_policy_path))
+evolution_service = EvolutionService(
+    evolution_genome_store,
+    promotion_policy,
+    load_yaml(settings.population_policy_path),
+    factory=evolution_factory,
+)
 
 
 @router.get("/health")
@@ -343,3 +361,216 @@ def analyses_by_agent(agent_id: str) -> list[dict]:
 @router.get("/agent/analyses/snapshot/{snapshot_id}", response_model=list[dict])
 def analyses_by_snapshot(snapshot_id: str) -> list[dict]:
     return [r.model_dump() for r in analysis_store.by_snapshot(snapshot_id)]
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — Evolution endpoints
+# ---------------------------------------------------------------------------
+
+# --- Mutation & Recombination ---
+
+
+@router.post("/evolution/mutate")
+def mutate_agent(payload: dict) -> dict:
+    parent_id: str = payload["parent_id"]
+    mutation_type = payload.get("mutation_type", "INDICATOR_ADD")
+    hypothesized_advantage = payload.get("hypothesized_advantage", "")
+    expected_failure_modes = payload.get("expected_failure_modes", [])
+    parent = evolution_genome_store.get(parent_id)
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"Parent agent {parent_id} not found")
+    child, record = evolution_service.generate_mutant(
+        parent,
+        mutation_type=mutation_type,
+        hypothesized_advantage=hypothesized_advantage,
+        expected_failure_modes=expected_failure_modes,
+    )
+    return {
+        "child": child.model_dump(),
+        "mutation": record.model_dump(),
+    }
+
+
+@router.post("/evolution/recombine")
+def recombine_agents(payload: dict) -> dict:
+    parent_a_id: str = payload["parent_a_id"]
+    parent_b_id: str = payload["parent_b_id"]
+    hypothesized_advantage = payload.get("hypothesized_advantage", "")
+    expected_failure_modes = payload.get("expected_failure_modes", [])
+    parent_a = evolution_genome_store.get(parent_a_id)
+    parent_b = evolution_genome_store.get(parent_b_id)
+    if parent_a is None or parent_b is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agents {parent_a_id} / {parent_b_id} not found",
+        )
+    child, record = evolution_service.recombine(
+        parent_a,
+        parent_b,
+        hypothesized_advantage=hypothesized_advantage,
+        expected_failure_modes=expected_failure_modes,
+    )
+    return {
+        "child": child.model_dump(),
+        "mutation": record.model_dump(),
+    }
+
+
+# --- Challenger Pool ---
+
+
+@router.post("/evolution/challengers/{agent_id}/add")
+def add_challenger(agent_id: str) -> dict:
+    agent = evolution_genome_store.get(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    result = evolution_service.add_challenger(agent)
+    return result.model_dump()
+
+
+@router.get("/evolution/challengers/pairs/{category}", response_model=list[dict])
+def get_challenger_pairs(category: str) -> list[dict]:
+    return [p.model_dump() for p in evolution_service.get_challenger_pairs(category)]
+
+
+@router.post("/evolution/challengers/evaluate")
+def evaluate_challenger_endpoint(payload: dict) -> dict:
+    return evolution_service.evaluate_challenger(
+        challenger_id=payload["challenger_id"],
+        champion_id=payload["champion_id"],
+        category=payload["category"],
+        challenger_score=payload["challenger_score"],
+        incumbent_score=payload["incumbent_score"],
+        observations=payload.get("observations", 0),
+        out_of_sample_pass=payload.get("out_of_sample_pass", True),
+        walk_forward_pass=payload.get("walk_forward_pass", True),
+        shadow_pass=payload.get("shadow_pass", True),
+        ensemble_contribution=payload.get("ensemble_contribution", 0.0),
+        security_pass=payload.get("security_pass", True),
+    ).model_dump()
+
+
+@router.post("/evolution/challengers/promote")
+def promote_challenger_endpoint(payload: dict) -> dict:
+    return evolution_service.promote_challenger(
+        payload["challenger_id"],
+        payload["incumbent_id"],
+        payload["category"],
+    ).model_dump()
+
+
+@router.post("/evolution/challengers/demote")
+def demote_challenger_endpoint(payload: dict) -> dict:
+    agent_id: str = payload["agent_id"]
+    reason = payload.get("reason", "PROMOTION_FAILED")
+    evolution_service.demote_to_probation(agent_id, reason)
+    agent = evolution_genome_store.get(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    return agent.model_dump()
+
+
+# --- Hall of Fame ---
+
+
+@router.post("/evolution/hall-of-fame")
+def add_to_hall_of_fame(payload: dict) -> dict:
+    hall_of_fame = evolution_service.hall_of_fame
+    record = hall_of_fame.add(
+        agent_id=payload["agent_id"],
+        category=payload["category"],
+        score=payload["final_score"],
+        observations=payload.get("generation", 0),
+    )
+    return record.model_dump()
+
+
+@router.get("/evolution/hall-of-fame", response_model=list[dict])
+def list_hall_of_fame() -> list[dict]:
+    return [r.model_dump() for r in evolution_service.hall_of_fame.list_all()]
+
+
+@router.get("/evolution/hall-of-fame/{category}", response_model=list[dict])
+def list_hall_of_fame_category(category: str) -> list[dict]:
+    return [r.model_dump() for r in evolution_service.hall_of_fame.by_category(category)]
+
+
+@router.get("/evolution/hall-of-fame/top/{category}", response_model=dict | None)
+def get_top_hall_of_fame(category: str) -> dict | None:
+    record = evolution_service.hall_of_fame.get_best(category)
+    return record.model_dump() if record else None
+
+
+# --- Graveyard ---
+
+
+@router.post("/evolution/graveyard")
+def add_to_graveyard(payload: dict) -> dict:
+    graveyard = evolution_service.graveyard
+    record = graveyard.add(
+        agent_id=payload["agent_id"],
+        category=payload["category"],
+        final_score=payload.get("final_score", 0.0),
+        reason=payload.get("reason", "UNSPECIFIED"),
+    )
+    return record.model_dump()
+
+
+@router.get("/evolution/graveyard", response_model=list[dict])
+def list_graveyard() -> list[dict]:
+    return [r.model_dump() for r in evolution_service.graveyard.list_all()]
+
+
+@router.get("/evolution/graveyard/{category}", response_model=list[dict])
+def list_graveyard_category(category: str) -> list[dict]:
+    return [r.model_dump() for r in evolution_service.graveyard.by_category(category)]
+
+
+# --- Promotion History & Rollbacks ---
+
+
+@router.get("/evolution/promotion-history/{category}", response_model=list[dict])
+def get_promotion_history(category: str) -> list[dict]:
+    return [r.model_dump() for r in evolution_service.get_promotion_history(category)]
+
+
+@router.get("/evolution/rollbacks", response_model=list[dict])
+def list_rollbacks() -> list[dict]:
+    return [r.model_dump() for r in evolution_service.get_rollbacks()]
+
+
+@router.get("/evolution/rollbacks/{agent_id}", response_model=list[dict])
+def list_rollbacks_for_agent(agent_id: str) -> list[dict]:
+    return [r.model_dump() for r in evolution_service.get_rollbacks_for_agent(agent_id)]
+
+
+@router.post("/evolution/rollback")
+def rollback_agent_status(payload: dict) -> dict:
+    try:
+        target = AgentStatus(payload["target_status"])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Invalid status: {payload.get('target_status')}"
+        ) from exc
+    entry = evolution_service.rollback_agent_status(
+        payload["agent_id"],
+        target,
+        payload.get("reason", "MANUAL_ROLLBACK"),
+    )
+    return entry.model_dump()
+
+
+# --- Population Stats ---
+
+
+@router.get("/evolution/population-stats/{category}", response_model=dict)
+def get_population_stats(category: str) -> dict:
+    return evolution_service.get_population_stats(category)
+
+
+@router.get("/evolution/population-stats", response_model=list[dict])
+def list_all_population_stats() -> list[dict]:
+    categories = set()
+    for agent in evolution_genome_store.list_all():
+        categories.add(agent.category)
+    return [evolution_service.get_population_stats(cat) for cat in sorted(categories)]

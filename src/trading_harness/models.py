@@ -262,3 +262,81 @@ class AgentAnalysisResult(BaseModel):
     prompt_version: str
     model_profile: str
     raw_response: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — Evolution
+# ---------------------------------------------------------------------------
+
+
+class MutationType(StrEnum):
+    INDICATOR_ADD = "INDICATOR_ADD"
+    INDICATOR_REMOVE = "INDICATOR_REMOVE"
+    TIMEFRAME_MODIFY = "TIMEFRAME_MODIFY"
+    FEATURE_PREFERENCE_MODIFY = "FEATURE_PREFERENCE_MODIFY"
+    STATISTICAL_METHOD_MODIFY = "STATISTICAL_METHOD_MODIFY"
+    WEIGHTING_STRATEGY = "WEIGHTING_STRATEGY"
+    CONFIDENCE_CALIBRATION = "CONFIDENCE_CALIBRATION"
+    RISK_ATTITUDE = "RISK_ATTITUDE"
+    CONTEXT_WINDOW = "CONTEXT_WINDOW"
+    OUTPUT_SCHEMA = "OUTPUT_SCHEMA"
+    MODEL_PROFILE = "MODEL_PROFILE"
+    TEMPERATURE_MODIFY = "TEMPERATURE_MODIFY"
+    RECOMBINATION = "RECOMBINATION"
+
+
+class GenomeMutation(BaseModel):
+    agent_id: str
+    generation: int
+    mutation_type: MutationType
+    description: str
+    hypothesized_advantage: str = ""
+    expected_failure_modes: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class HallOfFameRecord(BaseModel):
+    agent_id: str
+    category: str
+    score: float
+    observations: int
+    added_at: datetime = Field(default_factory=utcnow)
+    reason: str = ""
+
+
+class GraveyardRecord(BaseModel):
+    agent_id: str
+    category: str
+    final_score: float
+    reason: str
+    retired_at: datetime = Field(default_factory=utcnow)
+
+
+class ChampionChallenger(BaseModel):
+    champion_id: str
+    challenger_id: str
+    category: str
+    champion_score: float
+    challenger_score: float
+    observations: int
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class EvolutionRun(BaseModel):
+    id: str = Field(default_factory=lambda: f"evo-{uuid4()}")
+    category: str
+    method: str
+    new_agent_ids: list[str] = Field(default_factory=list)
+    parent_agent_ids: list[str] = Field(default_factory=list)
+    score_delta: float = 0.0
+    observations: int = 0
+    started_at: datetime = Field(default_factory=utcnow)
+    finished_at: datetime | None = None
+
+
+class RollbackEntry(BaseModel):
+    agent_id: str
+    previous_status: AgentStatus
+    new_status: AgentStatus
+    reason: str
+    timestamp: datetime = Field(default_factory=utcnow)

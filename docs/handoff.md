@@ -63,8 +63,61 @@ Phase 1 remaining:
 
 Phase 2 — Evaluation: ✅ EvaluationService results persistence wired — `PersistedEvaluationResultStore` added, injected into `EvaluationService` via `routes.py`, `add()` called after every `evaluate_agent()`, test suite with 8 tests, `make check` clean.
 
-Phase 3 — Evolution: Agent Factory, Genome Persistenz, Mutationen, Recombination,
-Challenger Pool, Hall of Fame, Graveyard, Champion/Challenger, Rollback.
+Phase 3 — Evolution: ✅ COMPLETE. 8 core services, 6 test files, 24 API endpoints wired.
+
+Services:
+- `AgentGenomeStore` — in-memory genome persistence (CRUD, filtering by category/status/generation)
+- `PersistedAgentGenomeStore` — PostgreSQL-backed variant with schema migration
+- `AgentFactory` — mutation strategies (INDICATOR_ADD, INDICATOR_REMOVE, TIMEFRAME_ADD,
+  TIMEFRAME_REMOVE, PARAMETER_MUTATION, TEMPERATURE_MUTATION, RECOMBINATION, SPECIALIZATION,
+  SIMPLIFICATION, DIVERSITY_INJECTION)
+- `ChallengerPool` — champion/challenger pairing, promotion evaluation, promotion execution,
+  demotion, category stats
+- `HallOfFame` — top-performer tracking with max-entry limit, category filtering, best lookup
+- `Graveyard` — retired/rejected agent tracking with category filtering
+- `EvolutionService` — orchestrator tying factory + pool + hall-of-fame + graveyard + rollback
+- `PromotionPolicy` — minimum_observations >= 10, relative_improvement_min >= 0.03,
+  out-of-sample, walk-forward, shadow mode, ensemble contribution, security gates
+
+Models added to `models.py`:
+- `MutationType` enum (10 mutation types)
+- `GenomeMutation` — mutation record with type, changes, and hypothesis
+- `ChampionChallenger` — pair record for evaluation
+- `EvolutionRun` — promotion/retirement run record
+- `PromotionDecision` — decision with approved/rejected and reasons
+- `RollbackEntry` — status transition audit record
+- `HallOfFameRecord` / `GraveyardRecord` — lifecycle archives
+
+Test suites (1193 lines total):
+- `test_agent_genome_store.py` — 15 tests (CRUD, filtering, hash)
+- `test_agent_factory.py` — 10+ tests (all mutation strategies, recombination)
+- `test_challenger_pool.py` — 10+ tests (pairing, promotion eval, demotion, stats)
+- `test_hall_of_fame.py` — 9 tests (add, sorting, limits, lookups)
+- `test_graveyard.py` — 6 tests (add, retrieve, category filter)
+- `test_evolution_service.py` — 18+ tests (mutant generation, recombination, challenger mgmt,
+  promotion decisions, retire/reject, probation, rollback)
+
+API endpoints added to `routes.py` (24 new endpoints):
+- `POST /evolution/mutate` — generate mutant from parent
+- `POST /evolution/recombine` — recombine two parents
+- `POST /evolution/challengers/{agent_id}/add` — add challenger to pool
+- `GET /evolution/challengers/pairs/{category}` — list champion/challenger pairs
+- `POST /evolution/challengers/evaluate` — evaluate promotion criteria
+- `POST /evolution/challengers/promote` — execute promotion
+- `POST /evolution/challengers/demote` — demote to probation
+- `POST /evolution/hall-of-fame` — add to hall of fame
+- `GET /evolution/hall-of-fame` — list all hall of fame records
+- `GET /evolution/hall-of-fame/{category}` — list by category
+- `GET /evolution/hall-of-fame/top/{category}` — get best in category
+- `POST /evolution/graveyard` — add to graveyard
+- `GET /evolution/graveyard` — list all graveyard records
+- `GET /evolution/graveyard/{category}` — list by category
+- `GET /evolution/promotion-history/{category}` — list promotion runs
+- `GET /evolution/rollbacks` — list all rollbacks
+- `GET /evolution/rollbacks/{agent_id}` — list rollbacks for agent
+- `POST /evolution/rollback` — rollback agent status
+- `GET /evolution/population-stats/{category}` — category population stats
+- `GET /evolution/population-stats` — all category stats
 
 Address the security and correctness gaps documented in the README development sequence before
 adding paper- or live-trading capabilities. Live execution remains out of scope.
