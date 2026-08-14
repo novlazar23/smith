@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any
+from typing import Any, Protocol
 
 from trading_harness.config import get_settings
 from trading_harness.llm.client import OpenAICompatibleClient
@@ -124,6 +124,12 @@ def parse_signal_response(raw: dict[str, Any], run_id: str, agent_id: str, snaps
 # Agent Runtime Service
 # ---------------------------------------------------------------------------
 
+class _AnalysisStoreProtocol(Protocol):
+    """Minimal protocol for analysis result persistence."""
+
+    def add(self, result: AgentAnalysisResult) -> AgentAnalysisResult: ...
+
+
 class AgentRuntime:
     """Runs agent analysis on market snapshots via LLM.
 
@@ -132,16 +138,22 @@ class AgentRuntime:
     2. Build prompt from genome config
     3. Call LLM via OpenAI-compatible client
     4. Parse response into structured signal
-    5. Return complete analysis result
+    5. Persist result if store provided
+    6. Return complete analysis result
     """
 
-    def __init__(self, llm_client: OpenAICompatibleClient | None = None) -> None:
+    def __init__(
+        self,
+        analysis_store: _AnalysisStoreProtocol | None = None,
+        llm_client: OpenAICompatibleClient | None = None,
+    ) -> None:
         settings = get_settings()
         self._client = llm_client or OpenAICompatibleClient(
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key,
         )
         self._model_profile = settings.llm_model_main
+        self._store = analysis_store
 
     async def analyze(
         self,
@@ -187,7 +199,7 @@ class AgentRuntime:
                 confidence=0.0,
                 reasoning=f"LLM call failed: {exc}",
             )
-            return AgentAnalysisResult(
+            result = AgentAnalysisResult(
                 run_id=run_id,
                 agent_id=agent.id,
                 signal=signal,
@@ -195,11 +207,14 @@ class AgentRuntime:
                 model_profile=self._model_profile,
                 raw_response={"error": str(exc)},
             )
+            if self._store is not None:
+                self._store.add(result)
+            return result
 
         # Parse signal from LLM response
         signal = parse_signal_response(raw_response, run_id, agent.id, snapshot.id)
 
-        return AgentAnalysisResult(
+        result = AgentAnalysisResult(
             run_id=run_id,
             agent_id=agent.id,
             signal=signal,
@@ -207,6 +222,12 @@ class AgentRuntime:
             model_profile=self._model_profile,
             raw_response=raw_response,
         )
+
+        # Persist result if store provided
+        if self._store is not None:
+            self._store.add(result)
+
+        return result
 
     async def analyze_batch(
         self,

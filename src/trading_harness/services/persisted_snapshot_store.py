@@ -7,6 +7,7 @@ from typing import Any
 
 from trading_harness.models import MarketSnapshot
 from trading_harness.services.db import Database
+from trading_harness.services.snapshot_store import SnapshotStore
 
 
 def _parse_ts(value: str | Any) -> datetime:
@@ -23,7 +24,7 @@ class PersistedSnapshotStore:
 
     def __init__(self, db: Database | None = None) -> None:
         self._db = db
-        self._fallback: dict[str, MarketSnapshot] = {}
+        self._fallback = SnapshotStore()
 
     @staticmethod
     def _hash(snapshot: MarketSnapshot) -> str:
@@ -54,7 +55,7 @@ class PersistedSnapshotStore:
                 snapshot.content_hash,
             )
         else:
-            self._fallback[snapshot.id] = snapshot
+            self._fallback.add(snapshot)
         return snapshot
 
     def get(self, snapshot_id: str) -> MarketSnapshot | None:

@@ -94,6 +94,23 @@ CREATE TABLE IF NOT EXISTS evaluation_results (
     details JSONB NOT NULL DEFAULT '{}',
     timestamp TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS agent_analysis_results (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    snapshot_id TEXT NOT NULL,
+    category TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    reasoning TEXT NOT NULL DEFAULT '',
+    signals JSONB NOT NULL DEFAULT '[]',
+    risks JSONB NOT NULL DEFAULT '[]',
+    prompt_version TEXT NOT NULL DEFAULT '1',
+    model_profile TEXT NOT NULL DEFAULT 'local-main',
+    raw_response JSONB NOT NULL DEFAULT '{}',
+    timestamp TIMESTAMPTZ NOT NULL
+);
 """
 
 

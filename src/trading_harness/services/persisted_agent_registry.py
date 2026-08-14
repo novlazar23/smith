@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from trading_harness.models import AgentGenome, AgentStatus
+from trading_harness.services.agent_registry import AgentRegistry
 from trading_harness.services.db import Database
 
 _SCHEMA_VERSION = "1"
@@ -71,13 +72,13 @@ class PersistedAgentRegistry:
 
     def __init__(self, db: Database | None = None) -> None:
         self._db = db
-        self._fallback: dict[str, AgentGenome] = {}
+        self._fallback = AgentRegistry()
 
     def list(self) -> list[AgentGenome]:
         if self._db and self._db.is_available:
             rows = self._db.execute("SELECT * FROM agents ORDER BY id")
             return [_row_to_genome(r) for r in rows]
-        return list(self._fallback.values())
+        return self._fallback.list()
 
     def get(self, agent_id: str) -> AgentGenome | None:
         if self._db and self._db.is_available:
@@ -101,7 +102,7 @@ class PersistedAgentRegistry:
                 *[row[c] for c in cols],
             )
         else:
-            self._fallback[agent.id] = agent
+            self._fallback.add(agent)
         return agent
 
     def get_version(self, agent_id: str) -> str:
@@ -112,4 +113,4 @@ class PersistedAgentRegistry:
             if rows:
                 return str(rows[0]["c"])
             return "0"
-        return str(int(agent_id in self._fallback))
+        return "1" if self._fallback.get(agent_id) is not None else "0"

@@ -14,6 +14,7 @@ from trading_harness.models import (
     RunOutcome,
     TradeProposal,
 )
+from trading_harness.services.agent_analysis_store import PersistedAgentAnalysisStore
 from trading_harness.services.agent_registry import AgentRegistry
 from trading_harness.services.agent_runtime import AgentRuntime
 from trading_harness.services.db import Database
@@ -42,7 +43,8 @@ trading_run_service = TradingRunService()
 performance_store = PerformanceStore()
 outcome_generator = OutcomeGenerator()
 evaluation_service = EvaluationService(outcome_generator, performance_store)
-agent_runtime = AgentRuntime()
+analysis_store: PersistedAgentAnalysisStore = PersistedAgentAnalysisStore(_db)
+agent_runtime = AgentRuntime(analysis_store)
 
 
 @router.get("/health")

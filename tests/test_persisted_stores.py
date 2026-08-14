@@ -1,4 +1,8 @@
+from __future__ import annotations
+
 from datetime import UTC, datetime
+
+import pytest
 
 from trading_harness.models import AgentGenome, AgentStatus, MarketSnapshot
 from trading_harness.services.db import Database
@@ -164,15 +168,17 @@ def test_persisted_snapshot_store_hash_consistency():
 
 
 def test_persisted_agent_registry_fallback_duplicate():
-    """Adding a duplicate agent should not raise in fallback mode."""
+    """Adding a duplicate agent should raise in fallback mode (thread-safe registry)."""
     db = Database("postgresql://nonexistent:5432/test")
     db._ensure_pool()
     reg = PersistedAgentRegistry(db)
 
     agent = _make_agent(id="agent-dup-1")
     reg.add(agent)
-    # In fallback mode, duplicate adds should silently succeed (upsert)
+    # Fallback uses AgentRegistry which raises on duplicates (thread-safe)
     agent2 = _make_agent(id="agent-dup-1", generation=2)
-    reg.add(agent2)
+    with pytest.raises(ValueError, match="already exists"):
+        reg.add(agent2)
     result = reg.get("agent-dup-1")
     assert result is not None
+    assert result.generation == 1  # First agent preserved (default generation=1)
