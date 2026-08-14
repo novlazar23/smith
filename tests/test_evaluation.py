@@ -1,9 +1,9 @@
 from datetime import UTC, datetime
 
+from tests._test_utils import OutcomeGenerator
 from trading_harness.models import MarketRegime, OutcomeRecord
 from trading_harness.services.evaluation import (
     EvaluationService,
-    OutcomeGenerator,
     _compute_classification_metrics,
     _compute_ece,
     _compute_mfe_mae,
