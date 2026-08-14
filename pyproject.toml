@@ -14,7 +14,7 @@ dependencies = [
   "pydantic-settings>=2.10,<3",
   "httpx>=0.28,<1",
   "redis>=6,<7",
-  "psycopg[binary]>=3.2,<4",
+  "psycopg[binary,pool]>=3.2,<4",
   "PyYAML>=6.0,<7",
 ]
 
@@ -40,3 +40,8 @@ target-version = "py312"
 
 [tool.uv]
 required-version = ">=0.11.27,<0.12"
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.4.0",
+]

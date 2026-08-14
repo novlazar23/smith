@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from trading_harness.config import get_settings
 from trading_harness.models import (
+    AgentAnalysisResult,
     AgentGenome,
     ChallengerEvaluation,
     MarketRegime,
@@ -14,6 +15,7 @@ from trading_harness.models import (
     TradeProposal,
 )
 from trading_harness.services.agent_registry import AgentRegistry
+from trading_harness.services.agent_runtime import AgentRuntime
 from trading_harness.services.db import Database
 from trading_harness.services.evaluation import EvaluationService, OutcomeGenerator
 from trading_harness.services.evolution import PromotionPolicy
@@ -40,6 +42,7 @@ trading_run_service = TradingRunService()
 performance_store = PerformanceStore()
 outcome_generator = OutcomeGenerator()
 evaluation_service = EvaluationService(outcome_generator, performance_store)
+agent_runtime = AgentRuntime()
 
 
 @router.get("/health")
@@ -283,3 +286,24 @@ def list_evaluation_results() -> list[dict]:
 @router.get("/evaluation/results/agent/{agent_id}")
 def list_evaluation_results_for_agent(agent_id: str) -> list[dict]:
     return [r.model_dump() for r in evaluation_service.get_results(agent_id)]
+
+
+# ---------------------------------------------------------------------------
+# Agent analysis endpoint
+# ---------------------------------------------------------------------------
+
+@router.post("/agent/analyze", response_model=AgentAnalysisResult)
+async def analyze_agent(
+    agent_id: str,
+    snapshot_id: str,
+    run_id: str | None = None,
+) -> AgentAnalysisResult:
+    """Run agent analysis on a snapshot and return structured signal."""
+    agent = agent_store.get(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+    snapshot = snapshot_store_inst.get(snapshot_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail=f"Snapshot {snapshot_id} not found")
+    result = await agent_runtime.analyze(agent, snapshot, run_id=run_id)
+    return result

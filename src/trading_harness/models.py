@@ -12,6 +12,44 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+class RunState(StrEnum):
+    CREATED = "CREATED"
+    DATA_READY = "DATA_READY"
+    ANALYSIS_RUNNING = "ANALYSIS_RUNNING"
+    ADVERSARIAL_REVIEW = "ADVERSARIAL_REVIEW"
+    CONSENSUS = "CONSENSUS"
+    RISK_REVIEW = "RISK_REVIEW"
+    DECISION = "DECISION"
+    COMPLETE = "COMPLETE"
+    FAILED = "FAILED"
+
+
+class RunOutcome(StrEnum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+    WAIT = "WAIT"
+    NO_TRADE = "NO_TRADE"
+
+
+ALLOWED_TRANSITIONS: dict[RunState, set[RunState]] = {
+    RunState.CREATED: {RunState.DATA_READY, RunState.FAILED},
+    RunState.DATA_READY: {RunState.ANALYSIS_RUNNING, RunState.FAILED},
+    RunState.ANALYSIS_RUNNING: {RunState.ADVERSARIAL_REVIEW, RunState.FAILED},
+    RunState.ADVERSARIAL_REVIEW: {RunState.CONSENSUS, RunState.FAILED},
+    RunState.CONSENSUS: {RunState.RISK_REVIEW, RunState.FAILED},
+    RunState.RISK_REVIEW: {RunState.DECISION, RunState.FAILED},
+    RunState.DECISION: {RunState.COMPLETE, RunState.FAILED},
+    RunState.COMPLETE: set(),
+    RunState.FAILED: set(),
+}
+
+
+def transition(current: RunState, target: RunState) -> RunState:
+    if target not in ALLOWED_TRANSITIONS[current]:
+        raise ValueError(f"Invalid transition {current} -> {target}")
+    return target
+
+
 class AgentStatus(StrEnum):
     GENERATED = "GENERATED"
     CANDIDATE = "CANDIDATE"
@@ -96,3 +134,131 @@ class PromotionDecision(BaseModel):
     promote: bool
     reason: str
     relative_improvement: float = 0.0
+
+
+class TradingRun(BaseModel):
+    id: str = Field(default_factory=lambda: f"run-{uuid4()}")
+    snapshot_id: str
+    state: RunState = RunState.CREATED
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
+    outcome: RunOutcome | None = None
+    outcome_reason: str | None = None
+    error: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class PerformanceRecord(BaseModel):
+    id: str = Field(default_factory=lambda: f"perf-{uuid4()}")
+    run_id: str
+    agent_id: str
+    snapshot_id: str
+    direction: str
+    confidence: float
+    outcome: str | None = None
+    realized_pnl: float = 0.0
+    mfe: float = 0.0
+    mae: float = 0.0
+    timestamp: datetime = Field(default_factory=utcnow)
+
+
+class AuditEntry(BaseModel):
+    id: str = Field(default_factory=lambda: f"audit-{uuid4()}")
+    actor: str
+    action: str
+    entity_type: str
+    entity_id: str
+    previous_state: str | None = None
+    new_state: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=utcnow)
+
+
+class MarketRegime(StrEnum):
+    STRONG_BULL = "strong_bull"
+    WEAK_BULL = "weak_bull"
+    RANGE = "range"
+    WEAK_BEAR = "weak_bear"
+    STRONG_BEAR = "strong_bear"
+    HIGH_VOLATILITY = "high_volatility"
+    LOW_VOLATILITY = "low_volatility"
+    CRASH = "crash"
+    RECOVERY = "recovery"
+    UNKNOWN = "unknown"
+
+
+class OutcomeRecord(BaseModel):
+    """Actual market outcome for a prediction, enabling evaluation."""
+
+    id: str = Field(default_factory=lambda: f"outcome-{uuid4()}")
+    prediction_id: str
+    agent_id: str
+    run_id: str
+    snapshot_id: str
+    symbol: str
+    direction_predicted: str
+    direction_actual: str
+    confidence_predicted: float
+    entry_price: float
+    exit_price: float
+    mfe: float = 0.0
+    mae: float = 0.0
+    holding_period_bars: int = 0
+    realized_pnl: float = 0.0
+    regime: MarketRegime = MarketRegime.UNKNOWN
+    timestamp: datetime = Field(default_factory=utcnow)
+
+
+class EvaluationResult(BaseModel):
+    """Result of evaluating predictions against outcomes."""
+
+    id: str = Field(default_factory=lambda: f"eval-{uuid4()}")
+    run_id: str
+    agent_id: str
+    metric_name: str
+    metric_value: float
+    observations: int
+    details: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=utcnow)
+
+
+class WalkForwardResult(BaseModel):
+    """Result of a single walk-forward window evaluation."""
+
+    window_id: str
+    train_start: str
+    train_end: str
+    test_start: str
+    test_end: str
+    metric_name: str
+    train_metric: float
+    test_metric: float
+    stability: float = 0.0
+    timestamp: datetime = Field(default_factory=utcnow)
+
+
+class AgentSignal(BaseModel):
+    """Structured analysis output from an agent's LLM analysis."""
+
+    id: str = Field(default_factory=lambda: f"signal-{uuid4()}")
+    run_id: str
+    agent_id: str
+    snapshot_id: str
+    category: str
+    direction: str  # LONG, SHORT, NO_TRADE
+    confidence: float = Field(ge=0.0, le=1.0)
+    reasoning: str
+    signals: list[dict[str, Any]] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    timestamp: datetime = Field(default_factory=utcnow)
+
+
+class AgentAnalysisResult(BaseModel):
+    """Complete result of running an agent's analysis on a snapshot."""
+
+    run_id: str
+    agent_id: str
+    signal: AgentSignal
+    prompt_version: str
+    model_profile: str
+    raw_response: dict[str, Any] = Field(default_factory=dict)

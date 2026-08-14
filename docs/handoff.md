@@ -54,8 +54,9 @@ Phase 1 Persistence (PostgreSQL-backed stores) additions committed:
 
 ## Next priority
 
-Phase 1 remaining: persistent Agent Registry (PostgreSQL), Market Snapshot Store (PostgreSQL),
-Agent Runtime, structured Agent Outputs.
+Phase 1 remaining: Agent Registry persistence migration (replacing PersistedAgentRegistry
+back to AgentRegistry for non-PG mode), Market Snapshot Store persistence migration,
+LLM Gateway integration (OpenAICompatibleClient), structured agent output persistence.
 
 Phase 3 — Evolution: Agent Factory, Genome Persistenz, Mutationen, Recombination,
 Challenger Pool, Hall of Fame, Graveyard, Champion/Challenger, Rollback.
