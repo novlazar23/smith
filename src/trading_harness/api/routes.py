@@ -19,6 +19,9 @@ from trading_harness.services.agent_registry import AgentRegistry
 from trading_harness.services.agent_runtime import AgentRuntime
 from trading_harness.services.db import Database
 from trading_harness.services.evaluation import EvaluationService
+from trading_harness.services.evaluation_result_store import (
+    PersistedEvaluationResultStore,
+)
 from trading_harness.services.evolution import PromotionPolicy
 from trading_harness.services.execution_gateway import ExecutionGateway
 from trading_harness.services.orchestrator import TradingRunService
@@ -43,7 +46,8 @@ kill_switch = settings.kill_switch_default
 trading_run_service = TradingRunService()
 performance_store = PersistedPerformanceStore(_db)
 outcome_store: PersistedOutcomeStore = PersistedOutcomeStore(_db)
-evaluation_service = EvaluationService(outcome_store, performance_store)
+result_store = PersistedEvaluationResultStore(_db)
+evaluation_service = EvaluationService(outcome_store, performance_store, result_store)
 analysis_store: PersistedAgentAnalysisStore = PersistedAgentAnalysisStore(_db)
 agent_runtime = AgentRuntime(analysis_store)
 

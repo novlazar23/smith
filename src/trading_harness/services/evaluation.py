@@ -10,6 +10,9 @@ from trading_harness.models import (
     OutcomeRecord,
     WalkForwardResult,
 )
+from trading_harness.services.evaluation_result_store import (
+    PersistedEvaluationResultStore,
+)
 
 
 class OutcomeStore(Protocol):
@@ -293,9 +296,11 @@ class EvaluationService:
         self,
         outcome_store: OutcomeStore,
         performance_store: Any = None,  # PerformanceStore
+        result_store: PersistedEvaluationResultStore | None = None,
     ) -> None:
         self._outcomes = outcome_store
         self._performance_store = performance_store
+        self._result_store = result_store
         self._results: list[EvaluationResult] = []
         self._lock = RLock()
 
@@ -366,6 +371,8 @@ class EvaluationService:
         )
         with self._lock:
             self._results.append(eval_result)
+        if self._result_store:
+            self._result_store.add(eval_result)
 
         return result
 

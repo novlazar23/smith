@@ -61,7 +61,7 @@ Phase 1 remaining:
 - **Outcome Generator persistence migration** — `OutcomeGenerator` currently only stores in-memory; needs PostgreSQL-backed store using the existing `outcomes` table
 - **Structured agent output queries via API routes** — expose existing `PersistedAgentAnalysisStore` data through endpoints (`GET /agent/analyses`, `GET /agent/analyses/run/{run_id}`, `GET /agent/analyses/agent/{agent_id}`, `GET /agent/analyses/snapshot/{snapshot_id}`)
 
-Phase 2 — Evaluation: Wire EvaluationService results persistence (evaluation_results table exists).
+Phase 2 — Evaluation: ✅ EvaluationService results persistence wired — `PersistedEvaluationResultStore` added, injected into `EvaluationService` via `routes.py`, `add()` called after every `evaluate_agent()`, test suite with 8 tests, `make check` clean.
 
 Phase 3 — Evolution: Agent Factory, Genome Persistenz, Mutationen, Recombination,
 Challenger Pool, Hall of Fame, Graveyard, Champion/Challenger, Rollback.
