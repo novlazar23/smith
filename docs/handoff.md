@@ -55,9 +55,33 @@ Phase 1 Persistence (PostgreSQL-backed stores) additions committed:
 - Performance store test suite: 11 tests covering fallback add/get/all filter methods, upsert/overwrite, and defaults
 - `GET /performance/summary/snapshot/{snapshot_id}` endpoint added to routes
 
+Phase 4 — Paper Trading: ✅ COMPLETE. 12 Dateien, 2840 Zeilen, 323 Tests grün.
+
+Phase 5 — Live Execution: ✅ CORE SERVICES COMPLETE. 7 Services, 6 Testdateien, 78 Tests grün.
+
+Services implementiert:
+- `KillSwitch` — thread-safe, SQLite-persistiert, 11 Tests
+- `RateLimiter` — Token Bucket, global + pro Symbol, RLock, 8 Tests
+- `OrderDeduplicator` — memory-bounded deque, periodischer Trim, 11 Tests
+- `ExchangeAdapter` — abstrakte Schnittstelle + StubExchangeAdapter, 8 Tests
+- `LiveExecutionService` — orchestrates KillSwitch→RateLimiter→Deduplicator→Exchange, 13 Tests
+- `ExecutionLogStore` — JSON-Persistenz, in-memory Fallback, 7 Tests
+- API Routes: `POST /execution/orders`, `POST /execution/kill-switch/{enabled}`, `GET /execution/status`, `GET /execution/logs` — 15 Tests
+
+Sicherheitsgrenzen:
+- Live Execution: standardmäßig `default: false`
+- Kill Switch: standardmäßig `default: true` (aktiviert)
+- Exchange Adapter: absichtlich `StubExchangeAdapter` (NOT_IMPLEMENTED)
+- Keine echte Exchange-Integration im MVP
+
 ## Next priority
 
-Phase 1: ✅ COMPLETE. Outcome Generator migrated to production with in-memory store (`InMemoryOutcomeStore`), PostgreSQL-backed store (`PersistedOutcomeStore`) available, and API routes for agent analysis queries.
+Phase 5 — Live Execution: 🔨 IN PROGRESS. Core Services abgeschlossen, API Routes implementiert.
+Nächste Schritte: Exchange-Adapter Integration (Paper Trading), Read/Trade API Trennung.
+
+See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
+
+Live-Execution bleibt standardmäßig deaktiviert — keine Änderungen an Sicherheitsgrenzen ohne explizite Freigabe.
 
 - **Outcome Generator persistence migration** — moved `OutcomeGenerator` from `tests/_test_utils.py` to `src/trading_harness/services/outcome_generator.py`; `OutcomeGenerator` accepts `OutcomeStore` protocol (default: `InMemoryOutcomeStore`); `PersistedOutcomeStore` in `outcome_store.py` already implements the protocol; tests: 18 tests in `test_outcome_generator.py`
 - **Structured agent output queries via API routes** — 4 new endpoints: `GET /agent/analyses`, `GET /agent/analyses/run/{run_id}`, `GET /agent/analyses/agent/{agent_id}`, `GET /agent/analyses/snapshot/{snapshot_id}` — wired to `PersistedAgentAnalysisStore`

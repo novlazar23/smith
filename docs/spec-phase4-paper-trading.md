@@ -77,7 +77,42 @@ des Snapshots, um Look-Ahead zu vermeiden).
 
 **R4.15** Muss In-Memory-Fallback haben, wenn PostgreSQL nicht verfügbar ist.
 
-### 2.6 API-Routen
+### 2.6 API-Routen (Phase 5 Preview)
+
+Phase 5 (Live Execution) wird folgende zusätzliche Endpunkte einführen (nicht in Phase 4):
+- `POST /execution/orders` — Order gegen Exchange durchreichen
+- `POST /execution/kill-switch` — Globaler Kill Switch
+- `GET /execution/status` — Execution Service Status
+- `GET /execution/rate-limits` — Aktuelle Rate-Limit-Konfiguration
+
+Diese Endpunkte sind **ausdrücklich nicht in Phase 4 enthalten** und bleiben in Phase 4 stubbed.
+
+---
+
+## 3. Nicht-Ziele für Phase 4
+
+- Keine spezifische Exchange-Integration (CCXT, GDAX, etc.)
+- Keine Margin-Management-Logik
+- Keine Fill-Progress Tracking / Partial Fills (nur einfache Fill)
+- Keine API-Integration für Paper Trading (stubbed in WI-P4-6)
+
+## 4. Architektur-Entscheidungen
+
+**AD-1** PaperExchange implementiert eigenes Interface, nicht den späteren Exchange Adapter.
+→ Ermöglicht Tests ohne Exchange-Abhängigkeit.
+
+**AD-2** PortfolioState wird in einer eigenen Tabelle persistiert (nicht zusammen mit Positions).
+→ Ermöglicht unabhängige Queries und Migrationen.
+
+**AD-3** Position Lifecycle wird von PositionManager gesteuert, nicht vom PaperExchange.
+→ Trennung von Execution (PaperExchange) und Lifecycle (PositionManager).
+
+## 5. Definition of Done
+
+- Alle Anforderungen R4.1–R4.17 implementiert
+- make check clean (Tests, Linting, Type Checking)
+- docs/handoff.md aktualisiert
+- Paper Trading vollständig testbar ohne externe Abhängigkeiten
 
 **R4.16** Muss API-Endpunkte bereitstellen:
 

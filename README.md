@@ -719,14 +719,27 @@ Aktuell:
 
 ```text
 Live Execution: DISABLED
-Paper/Shadow: vorgesehen
+Paper/Shadow: Paper Trading Phase 4 ✅
+Phase 5 Core Services: ✅ COMPLETE (KillSwitch, RateLimiter, Deduplicator, ExchangeAdapter,
+                        LiveExecutionService, ExecutionLogStore, API Routes)
 Risk Engine: vorhanden
 Evolution Policy: vorhanden
 Agent Registry: In-Memory MVP
 Database: Infrastruktur vorbereitet
 Redis: Infrastruktur vorbereitet
-Exchange Adapter: absichtlich nicht implementiert
+Exchange Adapter: StubExchangeAdapter (NOT_IMPLEMENTED)
 ```
+
+Phase 5 Core Services implementiert:
+- `KillSwitch` — thread-safe, SQLite-persistiert, standardmäßig aktiviert
+- `RateLimiter` — Token Bucket, global + pro Symbol
+- `OrderDeduplicator` — memory-bounded, periodischer Trim
+- `ExchangeAdapter` — abstrakte Schnittstelle, StubExchangeAdapter als Fallback
+- `LiveExecutionService` — Pipeline: KillSwitch→RateLimiter→Deduplicator→Exchange
+- `ExecutionLogStore` — JSON-Persistenz, in-memory Fallback
+- API Routes: `/execution/orders`, `/execution/kill-switch/{enabled}`, `/execution/status`, `/execution/logs`
+
+78 Tests, 0 failures. Keine echte Exchange-Integration im MVP.
 
 Das ist beabsichtigt.
 

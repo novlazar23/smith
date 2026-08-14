@@ -574,3 +574,67 @@ def list_all_population_stats() -> list[dict]:
     for agent in evolution_genome_store.list_all():
         categories.add(agent.category)
     return [evolution_service.get_population_stats(cat) for cat in sorted(categories)]
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Live Execution endpoints
+# ---------------------------------------------------------------------------
+
+from trading_harness.services.execution_store import ExecutionLogStore
+from trading_harness.services.kill_switch import KillSwitch
+from trading_harness.services.live_execution_service import (
+    ExecutionConfig,
+    LiveExecutionService,
+)
+
+execution_log_store = ExecutionLogStore()
+execution_kill_switch = KillSwitch()
+execution_config = ExecutionConfig(
+    live_execution_enabled=settings.live_execution_enabled,
+)
+live_execution_service = LiveExecutionService(
+    kill_switch=execution_kill_switch,
+    config=execution_config,
+)
+
+
+@router.post("/execution/orders")
+def submit_execution_order(payload: dict) -> dict:
+    """Submit execution order."""
+    try:
+        return live_execution_service.submit_order(
+            decision_id=payload["decision_id"],
+            run_id=payload.get("run_id", ""),
+            symbol=payload["symbol"],
+            side=payload["side"],
+            quantity=float(payload["quantity"]),
+            price=float(payload["price"]),
+        )
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
+
+
+@router.post("/execution/kill-switch/{enabled}")
+def toggle_execution_kill_switch(enabled: bool) -> dict:
+    """Toggle kill switch."""
+    if enabled:
+        execution_kill_switch.activate()
+    else:
+        execution_kill_switch.deactivate()
+    return {"kill_switch": execution_kill_switch.is_active()}
+
+
+@router.get("/execution/status")
+def get_execution_status() -> dict:
+    """Execution status."""
+    return {
+        "live_execution_enabled": live_execution_service.is_live_enabled,
+        "kill_switch": execution_kill_switch.is_active(),
+        "execution_logs_count": execution_log_store.count,
+    }
+
+
+@router.get("/execution/logs")
+def get_execution_logs(decision_id: str | None = None) -> list[dict]:
+    """Execution logs."""
+    return live_execution_service.get_logs(decision_id=decision_id)
