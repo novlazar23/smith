@@ -18,11 +18,12 @@ from trading_harness.services.agent_analysis_store import PersistedAgentAnalysis
 from trading_harness.services.agent_registry import AgentRegistry
 from trading_harness.services.agent_runtime import AgentRuntime
 from trading_harness.services.db import Database
-from trading_harness.services.evaluation import EvaluationService, OutcomeGenerator
+from trading_harness.services.evaluation import EvaluationService
 from trading_harness.services.evolution import PromotionPolicy
 from trading_harness.services.execution_gateway import ExecutionGateway
 from trading_harness.services.orchestrator import TradingRunService
-from trading_harness.services.performance import PerformanceStore
+from trading_harness.services.outcome_store import PersistedOutcomeStore
+from trading_harness.services.performance_store import PersistedPerformanceStore
 from trading_harness.services.persisted_agent_registry import PersistedAgentRegistry
 from trading_harness.services.persisted_snapshot_store import PersistedSnapshotStore
 from trading_harness.services.policy_loader import load_yaml
@@ -40,9 +41,9 @@ promotion_policy = PromotionPolicy(load_yaml(settings.population_policy_path))
 execution_gateway = ExecutionGateway(settings.live_execution_enabled)
 kill_switch = settings.kill_switch_default
 trading_run_service = TradingRunService()
-performance_store = PerformanceStore()
-outcome_generator = OutcomeGenerator()
-evaluation_service = EvaluationService(outcome_generator, performance_store)
+performance_store = PersistedPerformanceStore(_db)
+outcome_store: PersistedOutcomeStore = PersistedOutcomeStore(_db)
+evaluation_service = EvaluationService(outcome_store, performance_store)
 analysis_store: PersistedAgentAnalysisStore = PersistedAgentAnalysisStore(_db)
 agent_runtime = AgentRuntime(analysis_store)
 
@@ -197,6 +198,11 @@ def performance_by_agent(agent_id: str) -> list[dict]:
     return [r.model_dump() for r in performance_store.by_agent(agent_id)]
 
 
+@router.get("/performance/summary/snapshot/{snapshot_id}", response_model=list[dict])
+def performance_by_snapshot(snapshot_id: str) -> list[dict]:
+    return [r.model_dump() for r in performance_store.by_snapshot(snapshot_id)]
+
+
 @router.get("/audit")
 def get_audit_log() -> list[dict]:
     return [e.model_dump() for e in trading_run_service.get_audit_log()]
@@ -209,22 +215,22 @@ def get_audit_log_for_entity(entity_id: str) -> list[dict]:
 
 @router.post("/outcomes", response_model=dict)
 def create_outcome(record: OutcomeRecord) -> dict:
-    return outcome_generator.add(record).model_dump()
+    return outcome_store.add(record).model_dump()
 
 
 @router.get("/outcomes", response_model=list[dict])
 def list_outcomes() -> list[dict]:
-    return [o.model_dump() for o in outcome_generator.all()]
+    return [o.model_dump() for o in outcome_store.all()]
 
 
 @router.get("/outcomes/agent/{agent_id}", response_model=list[dict])
 def outcomes_by_agent(agent_id: str) -> list[dict]:
-    return [o.model_dump() for o in outcome_generator.by_agent(agent_id)]
+    return [o.model_dump() for o in outcome_store.by_agent(agent_id)]
 
 
 @router.get("/outcomes/run/{run_id}", response_model=list[dict])
 def outcomes_by_run(run_id: str) -> list[dict]:
-    return [o.model_dump() for o in outcome_generator.by_run(run_id)]
+    return [o.model_dump() for o in outcome_store.by_run(run_id)]
 
 
 @router.get("/outcomes/regime/{regime}", response_model=list[dict])
@@ -233,7 +239,7 @@ def outcomes_by_regime(regime: str) -> list[dict]:
         m_regime = MarketRegime(regime)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid regime: {regime}")
-    return [o.model_dump() for o in outcome_generator.by_regime(m_regime)]
+    return [o.model_dump() for o in outcome_store.by_regime(m_regime)]
 
 
 @router.post("/evaluation/agent/{agent_id}")
@@ -275,7 +281,7 @@ def evaluate_oos(payload: dict) -> dict:
 def evaluate_walk_forward(agent_id: str, payload: dict) -> dict:
     window_size = payload.get("window_size", 50)
     step_size = payload.get("step_size", 10)
-    outcomes = outcome_generator.by_agent(agent_id)
+    outcomes = outcome_store.by_agent(agent_id)
     result = evaluation_service.evaluate_walk_forward(agent_id, outcomes, window_size, step_size)
     return result
 
@@ -309,3 +315,27 @@ async def analyze_agent(
         raise HTTPException(status_code=404, detail=f"Snapshot {snapshot_id} not found")
     result = await agent_runtime.analyze(agent, snapshot, run_id=run_id)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Agent analysis query endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/agent/analyses", response_model=list[dict])
+def list_agent_analyses() -> list[dict]:
+    return [r.model_dump() for r in analysis_store.all()]
+
+
+@router.get("/agent/analyses/run/{run_id}", response_model=list[dict])
+def analyses_by_run(run_id: str) -> list[dict]:
+    return [r.model_dump() for r in analysis_store.by_run(run_id)]
+
+
+@router.get("/agent/analyses/agent/{agent_id}", response_model=list[dict])
+def analyses_by_agent(agent_id: str) -> list[dict]:
+    return [r.model_dump() for r in analysis_store.by_agent(agent_id)]
+
+
+@router.get("/agent/analyses/snapshot/{snapshot_id}", response_model=list[dict])
+def analyses_by_snapshot(snapshot_id: str) -> list[dict]:
+    return [r.model_dump() for r in analysis_store.by_snapshot(snapshot_id)]

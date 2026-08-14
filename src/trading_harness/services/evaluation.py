@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from threading import RLock
-from typing import Any
+from typing import Any, Protocol
 
 from trading_harness.models import (
     EvaluationResult,
@@ -10,6 +10,15 @@ from trading_harness.models import (
     OutcomeRecord,
     WalkForwardResult,
 )
+
+
+class OutcomeStore(Protocol):
+    """Protocol for outcome stores used by evaluation."""
+
+    def get(self, outcome_id: str) -> OutcomeRecord | None: ...
+    def by_agent(self, agent_id: str) -> list[OutcomeRecord]: ...
+    def by_run(self, run_id: str) -> list[OutcomeRecord]: ...
+    def by_regime(self, regime: MarketRegime) -> list[OutcomeRecord]: ...
 
 
 class OutcomeGenerator:
@@ -282,7 +291,7 @@ class EvaluationService:
 
     def __init__(
         self,
-        outcome_store: OutcomeGenerator,
+        outcome_store: OutcomeStore,
         performance_store: Any = None,  # PerformanceStore
     ) -> None:
         self._outcomes = outcome_store

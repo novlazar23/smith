@@ -43,20 +43,23 @@ Phase 2 (Evaluation) additions committed:
 
 Phase 1 Persistence (PostgreSQL-backed stores) additions committed:
 - `Database` (`db.py`) — async PostgreSQL connection pool with schema migration (agents, market_snapshots,
-  audit_log, trading_runs, outcomes, evaluation_results), graceful fallback to in-memory on connection failure
+  audit_log, trading_runs, outcomes, evaluation_results, performance_records), graceful fallback to in-memory on connection failure
 - `PersistedAgentRegistry` — PostgreSQL-backed agent registry with in-memory fallback; supports add/list/get/version
 - `PersistedSnapshotStore` — PostgreSQL-backed market snapshot store with content-hash (SHA-256) integrity;
   in-memory fallback when DB unavailable
+- `PersistedPerformanceStore` — PostgreSQL-backed performance records store with in-memory fallback;
+  supports add/get/all/by_run/by_agent/by_snapshot and upsert-on-conflict
 - All stores use `is_available` guard so they never silently swallow errors or block on failed connections
 - `datetime` fields correctly parse to `datetime` objects (not strings) from Postgres
 - API routes wired to persistent stores; fallback mode works without Postgres running
-- Full test suite for persistence: 11 tests covering fallback add/list/get/duplicate/version/hash
+- Performance store test suite: 11 tests covering fallback add/get/all filter methods, upsert/overwrite, and defaults
+- `GET /performance/summary/snapshot/{snapshot_id}` endpoint added to routes
 
 ## Next priority
 
-Phase 1 remaining: Performance store persistence migration, Outcome Generator persistence migration,
-structured agent output queries via API routes (`GET /agent/analyses`, `GET /agent/analyses/run/{run_id}`,
-`GET /agent/analyses/agent/{agent_id}`, `GET /agent/analyses/snapshot/{snapshot_id}`).
+Phase 1 remaining:
+- **Outcome Generator persistence migration** — `OutcomeGenerator` currently only stores in-memory; needs PostgreSQL-backed store using the existing `outcomes` table
+- **Structured agent output queries via API routes** — expose existing `PersistedAgentAnalysisStore` data through endpoints (`GET /agent/analyses`, `GET /agent/analyses/run/{run_id}`, `GET /agent/analyses/agent/{agent_id}`, `GET /agent/analyses/snapshot/{snapshot_id}`)
 
 Phase 2 — Evaluation: Wire EvaluationService results persistence (evaluation_results table exists).
 

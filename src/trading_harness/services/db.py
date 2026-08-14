@@ -111,6 +111,20 @@ CREATE TABLE IF NOT EXISTS agent_analysis_results (
     raw_response JSONB NOT NULL DEFAULT '{}',
     timestamp TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS performance_records (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    snapshot_id TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    outcome TEXT,
+    realized_pnl REAL NOT NULL DEFAULT 0,
+    mfe REAL NOT NULL DEFAULT 0,
+    mae REAL NOT NULL DEFAULT 0,
+    timestamp TIMESTAMPTZ NOT NULL
+);
 """
 
 
