@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import random
 from datetime import UTC, datetime
+from typing import ClassVar
 from uuid import uuid4
 
 from trading_harness.models import (
@@ -129,27 +130,29 @@ class TimeframeMutation(MutationStrategy):
 
 
 class ParameterMutation(MutationStrategy):
+    PARAM_MAP: ClassVar[dict[str, list[str]]] = {
+        "risk_attitude": RISK_ATTITUDES,
+        "confidence_calibration": CONFIDENCE_CALIBRATIONS,
+        "weighting_strategy": WEIGHTING_STRATEGIES,
+        "context_window_strategy": CONTEXT_STRATEGIES,
+        "output_schema": SCHEMAS,
+        "model_profile": MODEL_PROFILES,
+    }
+
+    def __init__(self, attr: str = "risk_attitude") -> None:
+        self.attr = attr
+
     def mutate(self, parent: AgentGenome, description: str = "") -> AgentGenome:
         child = copy.deepcopy(parent)
-        attr = random.choice(
-            ["risk_attitude", "confidence_calibration", "weighting_strategy",
-             "context_window_strategy", "output_schema", "model_profile"]
-        )
-        value_map = {
-            "risk_attitude": RISK_ATTITUDES,
-            "confidence_calibration": CONFIDENCE_CALIBRATIONS,
-            "weighting_strategies": WEIGHTING_STRATEGIES,
-            "context_window_strategy": CONTEXT_STRATEGIES,
-            "output_schema": SCHEMAS,
-            "model_profile": MODEL_PROFILES,
-        }
-        values = value_map.get(attr, [getattr(parent, attr, "default")])
-        current = getattr(child, attr, "default")
-        new_val = random.choice([v for v in values if v != current]) if len(values) > 1 else current
-        if new_val != current:
-            setattr(child, attr, new_val)
-            child.prompt_version = str(int(parent.prompt_version) + 1)
-            child.generation = parent.generation + 1
+        values = self.PARAM_MAP.get(self.attr, [getattr(parent, self.attr, "default")])
+        current = getattr(child, self.attr, "default")
+        if len(values) > 1:
+            candidates = [v for v in values if v != current]
+            if candidates:
+                new_val = random.choice(candidates)
+                setattr(child, self.attr, new_val)
+        child.prompt_version = str(int(parent.prompt_version) + 1)
+        child.generation = parent.generation + 1
         return child
 
 
@@ -366,22 +369,31 @@ class AgentFactory:
     def _apply_mutation(
         self, parent: AgentGenome, mutation_type: MutationType
     ) -> AgentGenome:
+        attr_for_type: dict[MutationType, str] = {
+            MutationType.RISK_ATTITUDE: "risk_attitude",
+            MutationType.WEIGHTING_STRATEGY: "weighting_strategy",
+            MutationType.CONFIDENCE_CALIBRATION: "confidence_calibration",
+            MutationType.CONTEXT_WINDOW: "context_window_strategy",
+            MutationType.OUTPUT_SCHEMA: "output_schema",
+            MutationType.MODEL_PROFILE: "model_profile",
+        }
         strategies: dict[MutationType, MutationStrategy] = {
             MutationType.INDICATOR_ADD: IndicatorMutation(add=True),
             MutationType.INDICATOR_REMOVE: IndicatorMutation(add=False),
             MutationType.TIMEFRAME_MODIFY: TimeframeMutation(),
-            MutationType.FEATURE_PREFERENCE_MODIFY: ParameterMutation(),
-            MutationType.STATISTICAL_METHOD_MODIFY: ParameterMutation(),
-            MutationType.WEIGHTING_STRATEGY: ParameterMutation(),
-            MutationType.CONFIDENCE_CALIBRATION: ParameterMutation(),
-            MutationType.RISK_ATTITUDE: ParameterMutation(),
-            MutationType.CONTEXT_WINDOW: ParameterMutation(),
-            MutationType.OUTPUT_SCHEMA: ParameterMutation(),
-            MutationType.MODEL_PROFILE: ParameterMutation(),
+            MutationType.WEIGHTING_STRATEGY: ParameterMutation(attr="weighting_strategy"),
+            MutationType.CONFIDENCE_CALIBRATION: ParameterMutation(attr="confidence_calibration"),
+            MutationType.RISK_ATTITUDE: ParameterMutation(attr="risk_attitude"),
+            MutationType.CONTEXT_WINDOW: ParameterMutation(attr="context_window_strategy"),
+            MutationType.OUTPUT_SCHEMA: ParameterMutation(attr="output_schema"),
+            MutationType.MODEL_PROFILE: ParameterMutation(attr="model_profile"),
             MutationType.TEMPERATURE_MODIFY: TemperatureMutation(),
             MutationType.RECOMBINATION: RecombinationStrategy(),
         }
-        strategy = strategies.get(mutation_type, IndicatorMutation(add=True))
+        strategy = strategies.get(mutation_type)
+        if strategy is None:
+            attr = attr_for_type.get(mutation_type, "risk_attitude")
+            strategy = ParameterMutation(attr=attr)
         return strategy.mutate(parent)
 
     def generate_random(
