@@ -125,6 +125,68 @@ CREATE TABLE IF NOT EXISTS performance_records (
     mae REAL NOT NULL DEFAULT 0,
     timestamp TIMESTAMPTZ NOT NULL
 );
+
+-- Phase 4: Paper Trading tables
+CREATE TABLE IF NOT EXISTS paper_trades (
+    id TEXT PRIMARY KEY,
+    trade_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    equity REAL NOT NULL,
+    entry_price REAL NOT NULL,
+    requested_leverage REAL NOT NULL DEFAULT 1.0,
+    requested_quantity REAL NOT NULL DEFAULT 1.0,
+    actual_quantity REAL NOT NULL DEFAULT 0,
+    actual_price REAL NOT NULL DEFAULT 0,
+    stop_price REAL NOT NULL,
+    target_price REAL NOT NULL DEFAULT 0,
+    fill_rate REAL NOT NULL DEFAULT 0.8,
+    slippage_bps REAL NOT NULL DEFAULT 0,
+    fees REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    partial_fills JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ NOT NULL,
+    filled_at TIMESTAMPTZ,
+    closed_at TIMESTAMPTZ,
+    reject_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS paper_positions (
+    id TEXT PRIMARY KEY,
+    trade_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    quantity REAL NOT NULL,
+    fees REAL NOT NULL DEFAULT 0,
+    current_price REAL NOT NULL DEFAULT 0,
+    unrealized_pnl REAL NOT NULL DEFAULT 0,
+    realized_pnl REAL NOT NULL DEFAULT 0,
+    stop_price REAL NOT NULL DEFAULT 0,
+    target_price REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'OPEN',
+    open_timestamp TIMESTAMPTZ NOT NULL,
+    close_timestamp TIMESTAMPTZ,
+    close_price REAL,
+    close_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS portfolio_states (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    start_equity REAL NOT NULL DEFAULT 100000,
+    current_equity REAL NOT NULL DEFAULT 100000,
+    total_realized_pnl REAL NOT NULL DEFAULT 0,
+    total_unrealized_pnl REAL NOT NULL DEFAULT 0,
+    max_drawdown REAL NOT NULL DEFAULT 0,
+    current_drawdown REAL NOT NULL DEFAULT 0,
+    peak_equity REAL NOT NULL DEFAULT 100000,
+    positions JSONB NOT NULL DEFAULT '{}',
+    symbols TEXT[] NOT NULL DEFAULT '{}',
+    timestamp TIMESTAMPTZ NOT NULL
+);
 """
 
 

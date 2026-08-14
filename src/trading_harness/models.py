@@ -104,6 +104,7 @@ class TradeProposal(BaseModel):
     current_daily_loss_fraction: float = Field(default=0.0, ge=0)
     current_portfolio_risk_fraction: float = Field(default=0.0, ge=0)
     expected_slippage_bps: float = Field(default=0.0, ge=0)
+    requested_quantity: float = Field(default=1.0, gt=0)
 
 
 class RiskDecision(BaseModel):
@@ -339,4 +340,106 @@ class RollbackEntry(BaseModel):
     previous_status: AgentStatus
     new_status: AgentStatus
     reason: str
+    timestamp: datetime = Field(default_factory=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Paper Trading
+# ---------------------------------------------------------------------------
+
+
+class PaperTradeStatus(StrEnum):
+    PENDING = "PENDING"
+    FILLED = "FILLED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+
+
+class PaperPositionStatus(StrEnum):
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"
+    STOPPED_OUT = "STOPPED_OUT"
+    TARGET_HIT = "TARGET_HIT"
+
+
+class PaperTrade(BaseModel):
+    """Represents a simulated order in the paper trading system."""
+
+    id: str = Field(default_factory=lambda: f"paper-trade-{uuid4()}")
+    trade_id: str  # Original decision_id from TradingRun
+    run_id: str
+    symbol: str
+    side: str  # LONG / SHORT
+    equity: float = Field(gt=0)
+    entry_price: float = Field(gt=0)
+    requested_leverage: float = Field(default=1.0, gt=0)
+    requested_quantity: float = Field(default=1.0, gt=0)
+    actual_quantity: float = 0.0
+    actual_price: float = 0.0
+    stop_price: float = Field(gt=0)
+    target_price: float = 0.0
+    fill_rate: float = Field(default=0.8, ge=0.0, le=1.0)
+    slippage_bps: float = Field(default=0.0, ge=0.0)
+    fees: float = 0.0
+    status: PaperTradeStatus = PaperTradeStatus.PENDING
+    partial_fills: list[dict[str, float]] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utcnow)
+    filled_at: datetime | None = None
+    closed_at: datetime | None = None
+    reject_reason: str | None = None
+
+
+class PaperPosition(BaseModel):
+    """Represents an open or closed paper trading position."""
+
+    id: str = Field(default_factory=lambda: f"paper-pos-{uuid4()}")
+    trade_id: str
+    run_id: str
+    symbol: str
+    side: str  # LONG / SHORT
+    entry_price: float = Field(gt=0)
+    quantity: float = Field(gt=0)
+    fees: float = 0.0
+    current_price: float = 0.0
+    unrealized_pnl: float = 0.0
+    realized_pnl: float = 0.0
+    stop_price: float = 0.0
+    target_price: float = 0.0
+    status: PaperPositionStatus = PaperPositionStatus.OPEN
+    open_timestamp: datetime = Field(default_factory=utcnow)
+    close_timestamp: datetime | None = None
+    close_price: float | None = None
+    close_reason: str | None = None  # MANUAL, STOP_LOSS, TARGET_HIT
+
+
+class PortfolioState(BaseModel):
+    """Aggregated portfolio state for a paper trading run."""
+
+    id: str = Field(default_factory=lambda: f"portfolio-{uuid4()}")
+    run_id: str
+    start_equity: float = 100000.0
+    current_equity: float = 100000.0
+    total_realized_pnl: float = 0.0
+    total_unrealized_pnl: float = 0.0
+    max_drawdown: float = 0.0
+    current_drawdown: float = 0.0
+    peak_equity: float = 100000.0
+    positions: dict[str, float] = Field(default_factory=dict)
+    symbols: list[str] = Field(default_factory=list)
+    timestamp: datetime = Field(default_factory=utcnow)
+
+
+class AgentPerformanceSummary(BaseModel):
+    """Per-agent performance summary for paper trading."""
+
+    agent_id: str
+    total_trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    win_rate: float = 0.0
+    avg_pnl: float = 0.0
+    total_realized_pnl: float = 0.0
+    sharpe_ratio: float = 0.0
+    max_drawdown: float = 0.0
     timestamp: datetime = Field(default_factory=utcnow)
