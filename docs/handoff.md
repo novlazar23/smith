@@ -133,8 +133,27 @@ BLE001 Lint fixes (pre-existing):
 
 ## Next priority
 
-Phase 5 — Live Execution: Core Services + Paper Adapter + Read/Trade API Auth abgeschlossen.
-Nächste Schritte: echte Exchange-Adapter (Binance/Coinbase via Adapter-Pattern), Shadow-Mode Logging, Network Isolation (R5.15–R5.17), Credential Management (R5.18–R5.20).
+Phase 5 — Live Execution: ✅ KOMPLETT. Alle Core Services, Read/Trade API Auth, Crypto Adapters,
+Shadow Mode, Network Isolation (R5.15–R5.17), Credential Management (R5.18–R5.20) abgeschlossen.
+
+Nächste Schritte (in Reihenfolge):
+
+1. **Exchange-Adapter Integration** — echte API-Integration für Bybit/Bitget (R5.7–R5.14)
+   - Order-Filling-Logik statt Simulation
+   - Response-Validierung gegen Exchange-Schemas
+   - Rate-Limit-Error-Handling (429, timeout retries)
+   - Connection-Error-Handling (5xx, DNS, SSL)
+   - Live-Execution-Flag muss `true` sein (aktuell `default: false`)
+
+2. **Additional Exchange Adapters** — Binance und Coinbase via Adapter-Pattern
+
+3. **Risk Engine Hardening** — R5.2–R5.4: Position Sizing, Daily Loss Limit, Leverage Limit
+   - Integration in LiveExecutionService vor Submit
+
+4. **Live Execution Safety Gate** — explizite Freigabe erforderlich
+   - Audit-Log aller Live-Transaktionen
+   - Kill Switch Monitoring (wirkliche Exchange-Verbindung)
+   - Maximaler Kapitaleinsatz auf MinCapital beschränkt (ExecutionConfig.min_capital)
 
 See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
