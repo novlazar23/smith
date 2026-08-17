@@ -39,7 +39,8 @@ class OrderDeduplicator:
             self._seen.add(key)
             self._recent.append(key)
             # Periodische Bereinigung bei Überschreitung
-            if len(self._recent) >= self._recent.maxlen:
+            maxlen = self._recent.maxlen
+            if maxlen is not None and len(self._recent) >= maxlen:
                 self._trim()
             return False
 

@@ -89,7 +89,7 @@ class TestKillSwitchThreadSafety:
                         ks.activate()
                     else:
                         ks.deactivate()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — concurrent stress test: catch any thread error
                 errors.append(e)
 
         threads = [threading.Thread(target=toggle, args=(i,)) for i in range(10)]

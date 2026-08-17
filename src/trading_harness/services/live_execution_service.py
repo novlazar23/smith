@@ -161,7 +161,7 @@ class LiveExecutionService:
                 order_id=order_id,
                 error=error,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — execution pipeline: any unexpected adapter/IO error
             return self._log_and_return(
                 decision_id,
                 run_id,

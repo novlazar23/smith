@@ -581,6 +581,10 @@ def list_all_population_stats() -> list[dict]:
 # Phase 5 — Live Execution endpoints
 # ---------------------------------------------------------------------------
 
+from trading_harness.services.crypto_exchange_adapter import (
+    BitgetExchangeAdapter,
+    BybitExchangeAdapter,
+)
 from trading_harness.services.execution_store import ExecutionLogStore
 from trading_harness.services.kill_switch import KillSwitch
 from trading_harness.services.live_execution_service import (
@@ -589,6 +593,10 @@ from trading_harness.services.live_execution_service import (
 )
 from trading_harness.services.paper_exchange import PaperExchange
 from trading_harness.services.paper_exchange_adapter import PaperExchangeAdapter
+from trading_harness.services.shadow_mode_logger import (
+    ShadowModeAdapter,
+    ShadowModeLogger,
+)
 
 execution_log_store = ExecutionLogStore()
 execution_kill_switch = KillSwitch()
@@ -600,6 +608,14 @@ execution_config = ExecutionConfig(
 # Live Execution bleibt standardmäßig deaktiviert — muss explizit aktiviert werden.
 _paper_exchange = PaperExchange()
 _paper_adapter = PaperExchangeAdapter(paper_exchange=_paper_exchange)
+
+# Crypto-Exchange-Adapter (Bybit & Bitget) — standardmäßig simuliert.
+_bybit_adapter = BybitExchangeAdapter(simulated=True)
+_bitget_adapter = BitgetExchangeAdapter(simulated=True)
+
+# Shadow-Mode-Logger für Backtesting ohne echte Order-Ausführung.
+_shadow_logger = ShadowModeLogger()
+_shadow_adapter = ShadowModeAdapter(delegate=_paper_adapter, shadow=_shadow_logger)
 
 live_execution_service = LiveExecutionService(
     kill_switch=execution_kill_switch,
@@ -651,3 +667,115 @@ def get_execution_status() -> dict:
 def get_execution_logs(decision_id: str | None = None) -> list[dict]:
     """Execution logs (read API key required)."""
     return live_execution_service.get_logs(decision_id=decision_id)
+
+
+# ---------------------------------------------------------------------------
+# Shadow Mode endpoints — Backtesting ohne echte Order-Ausführung
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/execution/shadow/submit",
+    dependencies=[Depends(require_trade_key)],
+)
+def shadow_submit_order(payload: dict) -> dict:
+    """Shadow-Mode order submit — loggt Order mit simulierte Fill, keine Ausführung."""
+    try:
+        result = _shadow_logger.submit_order(
+            symbol=payload["symbol"],
+            side=payload["side"],
+            quantity=float(payload["quantity"]),
+            price=float(payload["price"]),
+            order_type=payload.get("order_type", "MARKET"),
+        )
+        return {
+            "shadow_order_id": result["order_id"],
+            "status": result["status"],
+            "filled_price": result["filled_price"],
+            "slippage": result["slippage"],
+            "commission": result["commission"],
+        }
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
+
+
+@router.get(
+    "/execution/shadow/summary",
+    dependencies=[Depends(require_read_key)],
+)
+def shadow_summary() -> dict:
+    """Shadow-Mode Zusammenfassung aller geloggten Shadow-Orders."""
+    return _shadow_logger.summary()
+
+
+@router.get(
+    "/execution/shadow/records",
+    dependencies=[Depends(require_read_key)],
+)
+def shadow_records(
+    decision_id: str | None = None,
+    symbol: str | None = None,
+    run_id: str | None = None,
+) -> list[dict]:
+    """Shadow-Mode Records abrufen (optional gefiltert)."""
+    records = _shadow_logger.get_records(
+        decision_id=decision_id,
+        symbol=symbol,
+        run_id=run_id,
+    )
+    return [r.model_dump() for r in records]
+
+
+@router.post(
+    "/execution/crypto/bybit",
+    dependencies=[Depends(require_trade_key)],
+)
+def crypto_submit_bybit(payload: dict) -> dict:
+    """Order via Bybit Adapter (simuliert wenn keine Credentials konfiguriert)."""
+    try:
+        result = _bybit_adapter.submit_order(
+            symbol=payload["symbol"],
+            side=payload["side"],
+            quantity=float(payload["quantity"]),
+            price=float(payload["price"]),
+            order_type=payload.get("order_type", "MARKET"),
+        )
+        return result
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Bybit adapter error: {exc}") from exc
+
+
+@router.post(
+    "/execution/crypto/bitget",
+    dependencies=[Depends(require_trade_key)],
+)
+def crypto_submit_bitget(payload: dict) -> dict:
+    """Order via Bitget Adapter (simuliert wenn keine Credentials konfiguriert)."""
+    try:
+        result = _bitget_adapter.submit_order(
+            symbol=payload["symbol"],
+            side=payload["side"],
+            quantity=float(payload["quantity"]),
+            price=float(payload["price"]),
+            order_type=payload.get("order_type", "MARKET"),
+        )
+        return result
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Bitget adapter error: {exc}") from exc
+
+
+@router.get(
+    "/execution/crypto/status",
+    dependencies=[Depends(require_read_key)],
+)
+def crypto_status() -> dict:
+    """Crypto-Adapter Status — zeigt welche Adapter konfiguriert vs simuliert."""
+    return {
+        "bybit_simulated": _bybit_adapter._simulated,
+        "bitget_simulated": _bitget_adapter._simulated,
+        "shadow_mode_active": True,
+    }

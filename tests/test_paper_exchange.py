@@ -459,7 +459,7 @@ def test_concurrent_execution():
                 requested_quantity=100.0,
             )
             exchange.execute_order(proposal, current_price=100.0)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — concurrent stress test: catch any thread error
             errors.append(exc)
 
     threads = [threading.Thread(target=execute, args=(i,)) for i in range(20)]
@@ -488,7 +488,7 @@ def test_concurrent_read_write():
                 requested_quantity=100.0,
             )
             exchange.execute_order(proposal, current_price=100.0)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — concurrent stress test: catch any thread error
             errors.append(exc)
 
     def reader():
@@ -496,7 +496,7 @@ def test_concurrent_read_write():
             for _ in range(50):
                 exchange.stores.all()
                 time.sleep(0.001)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — concurrent stress test: catch any thread error
             errors.append(exc)
 
     writers = [threading.Thread(target=writer, args=(i,)) for i in range(5)]

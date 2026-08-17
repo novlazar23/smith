@@ -57,8 +57,8 @@ Phase 1 Persistence (PostgreSQL-backed stores) additions committed:
 
 Phase 4 — Paper Trading: ✅ COMPLETE. 12 Dateien, 2840 Zeilen, 323 Tests grün.
 
-Phase 5 — Live Execution: ✅ CORE SERVICES + Read/Trade API Auth COMPLETE.
-9 Services, 9 Testdateien, 448 Tests grün.
+Phase 5 — Live Execution: ✅ CORE SERVICES + Read/Trade API Auth + Crypto Adapters + Shadow Mode COMPLETE.
+9 Services, 13 Testdateien, 475 Tests grün.
 
 Services implementiert:
 - `KillSwitch` — thread-safe, SQLite-persistiert, 11 Tests
@@ -85,6 +85,51 @@ Sicherheitsgrenzen:
 - Kill Switch: standardmäßig `default: true` (aktiviert)
 - Keine echte Exchange-Integration im MVP
 - Paper-Adapter ersetzt nur `StubExchangeAdapter` — alle Sicherheitsgrenzen unverändert
+
+Phase 5 — Crypto Exchange Adapters + Shadow Mode: ✅ COMPLETE.
+4 neue Dateien, 2 Testdateien, 28 neue Tests (475 gesamt grün).
+
+Crypto Exchange Adapters:
+- `BaseCryptoExchangeAdapter` — abstrakte Basisklasse mit shared Signatur-Generierung,
+  HMAC-SHA256, httpx Client, `simulated=True` sicherer Standard
+- `BybitExchangeAdapter` — Bybit v5 API: `/private/usdt/general/order/place`,
+  Signatur via `HTTP-X-SIGN` Header, timestamp_ms, recv_window
+- `BitgetExchangeAdapter` — Bitget v2 API: `/api/v5/order/place`,
+  HMAC-SHA256 via `ACCESS-SIGN` Header, ISO-8601 timestamp, `productType=usdt-usd`
+- Alle Adapter: `submit_order()` → returns `order_id, status, filled_price, slippage, commission`
+- Alle Adapter: simulieren Fills wenn keine Credentials konfiguriert (`simulated=True`)
+- Keine echten Orders ohne explizite API-Schlüssel in `.env`
+
+Shadow Mode Logging:
+- `ShadowModeLogger` — speichert alle Shadow-Orders als `ShadowModeRecord` Pydantic Models
+  in einer in-Memory `deque` mit optionalem `maxlen`
+- `ShadowModeAdapter` — `ExchangeAdapter`-Konform, ruft intern `submit_order()` auf Logger
+  statt echter Exchange-API, loggt Fill-Preis mit konfigurierbarer Slippage
+- API Endpunkte:
+  - `POST /execution/shadow/submit` — Order in Shadow-Mode loggen (erfordert Trade-Key)
+  - `GET /execution/shadow/summary` — Zusammenfassung aller Shadow-Orders (erfordert Read-Key)
+  - `GET /execution/shadow/records` — Records abrufbar, optional gefiltert nach
+    `decision_id`, `symbol`, `run_id` (erfordert Read-Key)
+- Crypto Status Endpoint: `GET /execution/crypto/status` — zeigt welche Adapter
+  simuliert vs. live konfiguriert sind
+
+Neue API Endpunkte in `routes.py`:
+- `POST /execution/crypto/bybit` — Order via Bybit Adapter
+- `POST /execution/crypto/bitget` — Order via Bitget Adapter
+- `GET /execution/crypto/status` — Crypto-Adapter Konfigurationsstatus
+
+Mypy fixes (pre-existing):
+- `order_deduplicator.py:42` — `maxlen` kann `None` sein (deque ohne maxlen)
+- `portfolio_tracker.py:13,17,19` — Protocol-Methoden mit `...` als Body
+- `portfolio_tracker.py:89` — `Database` undefined → `Any` Type
+- `portfolio_tracker.py:199,200` — type annotation auf `p` in generator expression
+- `paper_exchange.py:59` — `stores` kann `None` sein → Runtime-Check hinzugefügt
+
+BLE001 Lint fixes (pre-existing):
+- `live_execution_service.py:164` — `except Exception` mit `# noqa: BLE001`
+- `test_kill_switch.py:92` — concurrent stress test
+- `test_order_deduplicator.py:79` — concurrent stress test
+- `test_paper_exchange.py:462,491,499` — concurrent stress tests
 
 ## Next priority
 

@@ -76,7 +76,7 @@ class TestOrderDeduplicatorConcurrency:
                 result = dd.is_duplicate(decision_id, "BTCUSDT", "LONG")
                 if result:
                     errors.append(f"False positive for {decision_id}")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — concurrent stress test: catch any thread error
                 errors.append(str(e))
 
         threads = [

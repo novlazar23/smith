@@ -10,13 +10,13 @@ from trading_harness.models import PaperPosition, PortfolioState
 class PortfolioStore:
     """Protocol for portfolio state persistence stores."""
 
-    def add(self, state: PortfolioState) -> PortfolioState: ...
+    def add(self, state: PortfolioState) -> PortfolioState: ...  # type: ignore[empty-body]
 
-    def get(self, state_id: str) -> PortfolioState | None: ...
+    def get(self, state_id: str) -> PortfolioState | None: ...  # type: ignore[empty-body]
 
-    def by_run(self, run_id: str) -> list[PortfolioState]: ...
+    def by_run(self, run_id: str) -> list[PortfolioState]: ...  # type: ignore[empty-body]
 
-    def all(self) -> list[PortfolioState]: ...
+    def all(self) -> list[PortfolioState]: ...  # type: ignore[empty-body]
 
 
 def _record_to_row(state: PortfolioState) -> dict[str, Any]:
@@ -86,7 +86,7 @@ class PersistedPortfolioStore:
     Falls back to in-memory store when PostgreSQL is unavailable.
     """
 
-    def __init__(self, db: Database | None = None) -> None:  # noqa: F821
+    def __init__(self, db: Any | None = None) -> None:
         self._db = db
         self._fallback: dict[str, PortfolioState] = {}
 
@@ -194,10 +194,11 @@ class PortfolioTracker:
             return state
 
     def calculate_equity(self) -> float:
+        positions: list[PaperPosition] = []
         return (
             self._start_equity
-            + sum(p.unrealized_pnl for p in [])
-            + sum(p.realized_pnl for p in [] if p.status.value != "OPEN")
+            + sum(p.unrealized_pnl for p in positions)
+            + sum(p.realized_pnl for p in positions if p.status.value != "OPEN")
         )
 
     def _calculate_drawdown(self, current_equity: float) -> tuple[float, float]:

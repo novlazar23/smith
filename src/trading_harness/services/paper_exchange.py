@@ -55,6 +55,8 @@ class PaperExchange:
             A PaperTrade with execution details or rejection status.
         """
         trade = self._build_trade(proposal, current_price, fill_rate_override)
+        if self.stores is None:
+            raise RuntimeError("PaperExchange stores not configured")
         with self._lock:
             self.stores.add(trade)
         return trade
