@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from trading_harness.services.execution_store import ExecutionLogStore
 
 

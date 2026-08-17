@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import threading
 
-import pytest
-
 from trading_harness.services.rate_limiter import RateLimiter
 
 

@@ -6,9 +6,7 @@ import threading
 import time
 from pathlib import Path
 
-import pytest
-
-from trading_harness.services.kill_switch import KillSwitch, KillSwitchConfig
+from trading_harness.services.kill_switch import KillSwitch
 
 
 class TestKillSwitchBasic:

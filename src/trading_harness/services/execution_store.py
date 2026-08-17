@@ -6,7 +6,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +38,7 @@ class ExecutionLogEntry(BaseModel):
             "status": self.status,
             "order_id": self.order_id,
             "error": self.error,
-            "timestamp": datetime.fromtimestamp(self.timestamp, tz=timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(self.timestamp, tz=UTC).isoformat(),
         }
 
 
@@ -67,15 +67,14 @@ class ExecutionLogStore:
                         # ISO-String nach Timestamp konvertieren
                         ts = entry.get("timestamp")
                         if isinstance(ts, str):
-                            import re
 
-                            from datetime import datetime, timezone
+                            from datetime import datetime
 
                             dt = datetime.fromisoformat(ts)
                             ts = dt.timestamp()
                         entry["timestamp"] = ts
                         self._logs.append(ExecutionLogEntry(**entry))
-        except (json.JSONDecodeError, IOError, KeyError) as e:
+        except (OSError, json.JSONDecodeError, KeyError) as e:
             logger.warning("Failed to load execution logs: %s", e)
 
     def _save_state(self) -> None:
@@ -92,7 +91,7 @@ class ExecutionLogStore:
                     for log in self._logs
                 ]
                 json.dump({"logs": clean_logs}, f)
-        except IOError as e:
+        except OSError as e:
             logger.warning("Failed to save execution logs: %s", e)
 
     def add(

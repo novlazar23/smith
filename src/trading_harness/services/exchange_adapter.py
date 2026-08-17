@@ -13,7 +13,6 @@ from typing import Any
 class ExchangeAdapterError(Exception):
     """Fehler beim Austausch mit der Exchange."""
 
-    pass
 
 
 class ExchangeAdapter(ABC):

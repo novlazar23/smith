@@ -44,7 +44,7 @@ class KillSwitch:
                     data = json.load(f)
                     self._enabled = data.get("enabled", False)
                     self._persisted_config.enabled = self._enabled
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             # Fallback: Startzustand verwenden
             pass
 
@@ -66,7 +66,7 @@ class KillSwitch:
                     },
                     f,
                 )
-        except IOError:
+        except OSError:
             # Persistenzfehler nicht kritisch — Zustand ist im Speicher
             pass
 
