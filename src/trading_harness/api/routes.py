@@ -726,12 +726,16 @@ def shadow_records(
     return [r.model_dump() for r in records]
 
 
+# ---------------------------------------------------------------------------
+# Crypto Submit — Bybit & Bitget (simuliert wenn keine Credentials)
+# ---------------------------------------------------------------------------
+
+
 @router.post(
     "/execution/crypto/bybit",
     dependencies=[Depends(require_trade_key)],
 )
 def crypto_submit_bybit(payload: dict) -> dict:
-    """Order via Bybit Adapter (simuliert wenn keine Credentials konfiguriert)."""
     try:
         result = _bybit_adapter.submit_order(
             symbol=payload["symbol"],
@@ -743,8 +747,6 @@ def crypto_submit_bybit(payload: dict) -> dict:
         return result
     except (KeyError, ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Bybit adapter error: {exc}") from exc
 
 
 @router.post(
@@ -752,7 +754,6 @@ def crypto_submit_bybit(payload: dict) -> dict:
     dependencies=[Depends(require_trade_key)],
 )
 def crypto_submit_bitget(payload: dict) -> dict:
-    """Order via Bitget Adapter (simuliert wenn keine Credentials konfiguriert)."""
     try:
         result = _bitget_adapter.submit_order(
             symbol=payload["symbol"],
@@ -764,8 +765,11 @@ def crypto_submit_bitget(payload: dict) -> dict:
         return result
     except (KeyError, ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Bitget adapter error: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Crypto Status — zeigt welche Adapter simuliert
+# ---------------------------------------------------------------------------
 
 
 @router.get(
