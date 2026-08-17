@@ -2,6 +2,7 @@
 
 Real HTTP integration (httpx) with HMAC-SHA256 signing.
 Simulation mode enabled when credentials are not configured.
+Network policy enforced; credentials sourced via CredentialManager.
 """
 
 from __future__ import annotations
@@ -14,21 +15,40 @@ from typing import Any
 
 import httpx
 
+from trading_harness.services.credential_manager import CredentialManager
 from trading_harness.services.exchange_adapter import (
     ExchangeAdapter,
     ExchangeAdapterError,
 )
+from trading_harness.services.network_policy import NetworkPolicy
 
 
 class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
-    """Basisklasse für Crypto-Exchange-Adapter mit HTTP- und Signatur-Logik."""
+    """Basisklasse für Crypto-Exchange-Adapter mit HTTP- und Signatur-Logik.
+
+    NetworkPolicy wird vor jeder HTTP-Anfrage geprüft (R5.15–R5.16).
+    Credentials werden optional über CredentialManager gelesen (R5.18–R5.19).
+    """
 
     def __init__(
         self,
         api_key: str = "",
         api_secret: str = "",
         simulated: bool = True,
+        network_policy: NetworkPolicy | None = None,
+        credential_manager: CredentialManager | None = None,
+        credential_key_prefix: str = "",
     ) -> None:
+        self._network_policy = network_policy
+        self._credential_manager = credential_manager
+        self._credential_key_prefix = credential_key_prefix
+
+        # Credentials: explizit übergeben ODER über CredentialManager
+        if not api_key and credential_manager and credential_key_prefix:
+            api_key = credential_manager.get(f"{credential_key_prefix}_API_KEY") or ""
+        if not api_secret and credential_manager and credential_key_prefix:
+            api_secret = credential_manager.get(f"{credential_key_prefix}_API_SECRET") or ""
+
         self._api_key = api_key
         self._api_secret = api_secret
         self._simulated = simulated or not (api_key and api_secret)
@@ -76,9 +96,16 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Führt eine signierte API-Anfrage aus."""
+        """Führt eine signierte API-Anfrage aus.
+
+        NetworkPolicy wird vor jeder nicht-simulierten Anfrage geprüft (R5.15–R5.16).
+        """
         if self._simulated:
             return self._simulate(method, url, params, data)
+
+        # R5.15–R5.16: Network Policy Check
+        if self._network_policy and not self._network_policy.is_allowed(method, url):
+            raise ExchangeAdapterError(f"NETWORK_POLICY_BLOCKED: {method} {url}")
 
         if not params:
             params = {}

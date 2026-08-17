@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     read_api_key: str = ""
     trade_api_key: str = ""
 
+    # Phase 5 — Network Isolation (R5.15–R5.17)
+    network_allowed_patterns: list[str] = []
+
+    # Phase 5 — Credential Management (R5.18–R5.20)
+    credential_source: str = "env"  # env | vault | aws_secrets_manager
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

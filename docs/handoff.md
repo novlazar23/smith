@@ -57,8 +57,8 @@ Phase 1 Persistence (PostgreSQL-backed stores) additions committed:
 
 Phase 4 — Paper Trading: ✅ COMPLETE. 12 Dateien, 2840 Zeilen, 323 Tests grün.
 
-Phase 5 — Live Execution: ✅ CORE SERVICES + Read/Trade API Auth + Crypto Adapters + Shadow Mode COMPLETE.
-9 Services, 13 Testdateien, 475 Tests grün.
+Phase 5 — Live Execution: ✅ CORE SERVICES + Read/Trade API Auth + Crypto Adapters + Shadow Mode + Network Isolation + Credential Management + Minimal Capital COMPLETE.
+11 Services, 15 Testdateien, 534 Tests grün.
 
 Services implementiert:
 - `KillSwitch` — thread-safe, SQLite-persistiert, 11 Tests
