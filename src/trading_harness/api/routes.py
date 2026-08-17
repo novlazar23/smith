@@ -586,14 +586,23 @@ from trading_harness.services.live_execution_service import (
     ExecutionConfig,
     LiveExecutionService,
 )
+from trading_harness.services.paper_exchange import PaperExchange
+from trading_harness.services.paper_exchange_adapter import PaperExchangeAdapter
 
 execution_log_store = ExecutionLogStore()
 execution_kill_switch = KillSwitch()
 execution_config = ExecutionConfig(
     live_execution_enabled=settings.live_execution_enabled,
 )
+
+# PaperExchange-Adapter als erste echte Exchange-Integration.
+# Live Execution bleibt standardmäßig deaktiviert — muss explizit aktiviert werden.
+_paper_exchange = PaperExchange()
+_paper_adapter = PaperExchangeAdapter(paper_exchange=_paper_exchange)
+
 live_execution_service = LiveExecutionService(
     kill_switch=execution_kill_switch,
+    exchange_adapter=_paper_adapter,
     config=execution_config,
 )
 

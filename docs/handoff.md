@@ -57,27 +57,37 @@ Phase 1 Persistence (PostgreSQL-backed stores) additions committed:
 
 Phase 4 — Paper Trading: ✅ COMPLETE. 12 Dateien, 2840 Zeilen, 323 Tests grün.
 
-Phase 5 — Live Execution: ✅ CORE SERVICES COMPLETE. 7 Services, 6 Testdateien, 78 Tests grün.
+Phase 5 — Live Execution: ✅ CORE SERVICES COMPLETE + Paper Adapter Integration.
+8 Services, 8 Testdateien, 432 Tests grün.
 
 Services implementiert:
 - `KillSwitch` — thread-safe, SQLite-persistiert, 11 Tests
 - `RateLimiter` — Token Bucket, global + pro Symbol, RLock, 8 Tests
 - `OrderDeduplicator` — memory-bounded deque, periodischer Trim, 11 Tests
 - `ExchangeAdapter` — abstrakte Schnittstelle + StubExchangeAdapter, 8 Tests
-- `LiveExecutionService` — orchestrates KillSwitch→RateLimiter→Deduplicator→Exchange, 13 Tests
+- `PaperExchangeAdapter` — bridge PaperExchange→ExchangeAdapter (submit_order, cancel/
+  get_status/balance/ticker stubs), 27 Tests
+- `LiveExecutionService` — orchestrates KillSwitch→RateLimiter→Deduplicator→Exchange, 22 Tests
 - `ExecutionLogStore` — JSON-Persistenz, in-memory Fallback, 7 Tests
 - API Routes: `POST /execution/orders`, `POST /execution/kill-switch/{enabled}`, `GET /execution/status`, `GET /execution/logs` — 15 Tests
+
+Paper Exchange Adapter Integration:
+- `PaperExchangeAdapter` mappt `submit_order()` → `PaperExchange.execute_order()` via `TradeProposal`
+- Pipeline-Integration: KillSwitch→RateLimiter→Deduplicator→PaperAdapter→Exchange (22 Tests)
+- Side-Normalisierung: BUY→LONG, SELL→SHORT, case-insensitive
+- Stubs: `cancel_order`, `get_order_status`, `get_balance` (100k default), `get_ticker` (0/0/0)
+- `routes.py` injiziert `PaperExchangeAdapter` in die Execution-Section von `LiveExecutionService`
 
 Sicherheitsgrenzen:
 - Live Execution: standardmäßig `default: false`
 - Kill Switch: standardmäßig `default: true` (aktiviert)
-- Exchange Adapter: absichtlich `StubExchangeAdapter` (NOT_IMPLEMENTED)
 - Keine echte Exchange-Integration im MVP
+- Paper-Adapter ersetzt nur `StubExchangeAdapter` — alle Sicherheitsgrenzen unverändert
 
 ## Next priority
 
-Phase 5 — Live Execution: 🔨 IN PROGRESS. Core Services abgeschlossen, API Routes implementiert.
-Nächste Schritte: Exchange-Adapter Integration (Paper Trading), Read/Trade API Trennung.
+Phase 5 — Live Execution: Core Services + Paper Adapter abgeschlossen.
+Nächste Schritte: Read/Trade API Trennung, echte Exchange-Adapter (Binance/Coinbase via Adapter-Pattern), Shadow-Mode Logging.
 
 See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
