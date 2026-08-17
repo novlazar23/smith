@@ -57,8 +57,8 @@ Phase 1 Persistence (PostgreSQL-backed stores) additions committed:
 
 Phase 4 — Paper Trading: ✅ COMPLETE. 12 Dateien, 2840 Zeilen, 323 Tests grün.
 
-Phase 5 — Live Execution: ✅ CORE SERVICES COMPLETE + Paper Adapter Integration.
-8 Services, 8 Testdateien, 432 Tests grün.
+Phase 5 — Live Execution: ✅ CORE SERVICES + Read/Trade API Auth COMPLETE.
+9 Services, 9 Testdateien, 448 Tests grün.
 
 Services implementiert:
 - `KillSwitch` — thread-safe, SQLite-persistiert, 11 Tests
@@ -70,13 +70,15 @@ Services implementiert:
 - `LiveExecutionService` — orchestrates KillSwitch→RateLimiter→Deduplicator→Exchange, 22 Tests
 - `ExecutionLogStore` — JSON-Persistenz, in-memory Fallback, 7 Tests
 - API Routes: `POST /execution/orders`, `POST /execution/kill-switch/{enabled}`, `GET /execution/status`, `GET /execution/logs` — 15 Tests
+- `API security` — `require_trade_key` / `require_read_key` Dependencies, Header+Query-Parsing, 16 Tests
 
-Paper Exchange Adapter Integration:
-- `PaperExchangeAdapter` mappt `submit_order()` → `PaperExchange.execute_order()` via `TradeProposal`
-- Pipeline-Integration: KillSwitch→RateLimiter→Deduplicator→PaperAdapter→Exchange (22 Tests)
-- Side-Normalisierung: BUY→LONG, SELL→SHORT, case-insensitive
-- Stubs: `cancel_order`, `get_order_status`, `get_balance` (100k default), `get_ticker` (0/0/0)
-- `routes.py` injiziert `PaperExchangeAdapter` in die Execution-Section von `LiveExecutionService`
+Read/Trade API Separation (R5.21–R5.22):
+- `POST /execution/orders` — erfordert `X-Trade-API-Key` (config: `trade_api_key`)
+- `POST /execution/kill-switch/{enabled}` — erfordert `X-Trade-API-Key`
+- `GET /execution/status` — erfordert `X-Read-API-Key` (config: `read_api_key`)
+- `GET /execution/logs` — erfordert `X-Read-API-Key`
+- Key-Parsing: Header (`X-Trade-API-Key`/`X-Read-API-Key`) oder Query-Param (`trade_api_key`/`read_api_key`)
+- Backward-compatible: Wenn Key nicht konfiguriert, werden Endpoints durchgelassen
 
 Sicherheitsgrenzen:
 - Live Execution: standardmäßig `default: false`
@@ -86,8 +88,8 @@ Sicherheitsgrenzen:
 
 ## Next priority
 
-Phase 5 — Live Execution: Core Services + Paper Adapter abgeschlossen.
-Nächste Schritte: Read/Trade API Trennung, echte Exchange-Adapter (Binance/Coinbase via Adapter-Pattern), Shadow-Mode Logging.
+Phase 5 — Live Execution: Core Services + Paper Adapter + Read/Trade API Auth abgeschlossen.
+Nächste Schritte: echte Exchange-Adapter (Binance/Coinbase via Adapter-Pattern), Shadow-Mode Logging, Network Isolation (R5.15–R5.17), Credential Management (R5.18–R5.20).
 
 See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 

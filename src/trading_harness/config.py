@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     risk_policy_path: str = "config/risk-policy.yaml"
     population_policy_path: str = "config/population-policy.yaml"
 
+    # Phase 5 — Read/Trade API Separation (R5.21–R5.22)
+    read_api_key: str = ""
+    trade_api_key: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

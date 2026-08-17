@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from trading_harness.api.security import require_read_key, require_trade_key
 from trading_harness.config import get_settings
 from trading_harness.models import (
     AgentAnalysisResult,
@@ -607,9 +608,9 @@ live_execution_service = LiveExecutionService(
 )
 
 
-@router.post("/execution/orders")
+@router.post("/execution/orders", dependencies=[Depends(require_trade_key)])
 def submit_execution_order(payload: dict) -> dict:
-    """Submit execution order."""
+    """Submit execution order (trade API key required)."""
     try:
         return live_execution_service.submit_order(
             decision_id=payload["decision_id"],
@@ -623,9 +624,12 @@ def submit_execution_order(payload: dict) -> dict:
         raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
 
 
-@router.post("/execution/kill-switch/{enabled}")
+@router.post(
+    "/execution/kill-switch/{enabled}",
+    dependencies=[Depends(require_trade_key)],
+)
 def toggle_execution_kill_switch(enabled: bool) -> dict:
-    """Toggle kill switch."""
+    """Toggle kill switch (trade API key required)."""
     if enabled:
         execution_kill_switch.activate()
     else:
@@ -633,9 +637,9 @@ def toggle_execution_kill_switch(enabled: bool) -> dict:
     return {"kill_switch": execution_kill_switch.is_active()}
 
 
-@router.get("/execution/status")
+@router.get("/execution/status", dependencies=[Depends(require_read_key)])
 def get_execution_status() -> dict:
-    """Execution status."""
+    """Execution status (read API key required)."""
     return {
         "live_execution_enabled": live_execution_service.is_live_enabled,
         "kill_switch": execution_kill_switch.is_active(),
@@ -643,7 +647,7 @@ def get_execution_status() -> dict:
     }
 
 
-@router.get("/execution/logs")
+@router.get("/execution/logs", dependencies=[Depends(require_read_key)])
 def get_execution_logs(decision_id: str | None = None) -> list[dict]:
-    """Execution logs."""
+    """Execution logs (read API key required)."""
     return live_execution_service.get_logs(decision_id=decision_id)
