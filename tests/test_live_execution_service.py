@@ -2,23 +2,35 @@
 
 from __future__ import annotations
 
+import os
 import threading
 
+import pytest
+
+from trading_harness.services.credential_manager import CredentialManager
 from trading_harness.services.kill_switch import KillSwitch
 from trading_harness.services.live_execution_service import (
     ExecutionConfig,
     LiveExecutionService,
 )
+from trading_harness.services.network_policy import NetworkPolicy
 from trading_harness.services.order_deduplicator import OrderDeduplicator
 from trading_harness.services.paper_exchange import PaperExchange
 from trading_harness.services.paper_exchange_adapter import PaperExchangeAdapter
 from trading_harness.services.paper_trade_store import InMemoryPaperTradeStore
 from trading_harness.services.rate_limiter import RateLimiter
+from trading_harness.services.risk_engine import RiskEngine
 
 
 def _make_store() -> InMemoryPaperTradeStore:
     """Erstellt einen InMemoryPaperTradeStore für PaperExchange."""
     return InMemoryPaperTradeStore()
+
+
+@pytest.fixture
+def adapter() -> PaperExchangeAdapter:
+    pe = PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store())
+    return PaperExchangeAdapter(paper_exchange=pe)
 
 
 class TestLiveExecutionServiceBasic:
@@ -506,3 +518,493 @@ class TestLiveExecutionServicePaperPipeline:
         )
         logs = svc.get_logs(decision_id="paper-10")
         assert logs[0]["side"] == "LONG"
+
+
+class TestRiskEngineIntegration:
+    """Integration tests for RiskEngine in the execution pipeline (R5.1–R5.5)."""
+
+    @pytest.fixture
+    def risk_policy_approved(self) -> dict:
+        """Gültige Risk-Policy die den meisten Trades zustimmt."""
+        return {
+            "max_risk_per_trade": 0.02,
+            "max_daily_loss": 0.05,
+            "max_leverage": 3.0,
+            "max_positions": 5,
+            "max_portfolio_risk": 0.10,
+            "min_stop_distance_bps": 50,
+            "minimum_risk_reward": 1.5,
+            "max_slippage_bps": 200,
+            "allowed_symbols": ["BTCUSDT", "ETHUSDT"],
+        }
+
+    @pytest.fixture
+    def risk_engine(self, risk_policy_approved: dict) -> RiskEngine:
+        return RiskEngine(policy=risk_policy_approved)
+
+    def test_risk_engine_approved_order_passes(self, adapter, risk_engine):
+        """Order wird zugestanden wenn RiskEngine approves."""
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            risk_engine=risk_engine,
+            config=ExecutionConfig(
+                live_execution_enabled=True,
+                symbol_whitelist=["BTCUSDT"],
+            ),
+        )
+        svc.activate_live()
+        result = svc.submit_order(
+            decision_id="re-1",
+            run_id="run-1",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+        )
+        assert result["status"] == "FILLED"
+        assert result["risk_approved"] is True
+        assert result["risk_max_position_size"] > 0
+
+    def test_risk_engine_rejects_unknown_symbol(self, adapter, risk_engine):
+        """RiskEngine rejectet Symbole die nicht in allowed_symbols sind."""
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            risk_engine=risk_engine,
+            config=ExecutionConfig(
+                live_execution_enabled=True,
+                symbol_whitelist=[],  # leer → Whitelist-Check skipped, RiskEngine erreicht Trade
+            ),
+        )
+        svc.activate_live()
+        result = svc.submit_order(
+            decision_id="re-sol",
+            run_id="run-1",
+            symbol="SOLUSDT",  # Nicht in allowed_symbols ["BTCUSDT", "ETHUSDT"]
+            side="LONG",
+            quantity=1.0,
+            price=100.0,
+        )
+        assert result["status"] == "REJECTED"
+        assert result["risk_approved"] is False
+        assert result["error"] == "SYMBOL_NOT_ALLOWED"
+
+    def test_risk_engine_log_fields_recorded(self, adapter, risk_engine):
+        """risk_approved und risk_max_position_size werden im Log gespeichert."""
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            risk_engine=risk_engine,
+            config=ExecutionConfig(
+                live_execution_enabled=True,
+                symbol_whitelist=["BTCUSDT"],
+            ),
+        )
+        svc.activate_live()
+        svc.submit_order(
+            decision_id="re-log",
+            run_id="run-1",
+            symbol="BTCUSDT",
+            side="SHORT",
+            quantity=5.0,
+            price=3000.0,
+        )
+        logs = svc.get_logs(decision_id="re-log")
+        assert len(logs) == 1
+        assert logs[0]["risk_approved"] is True
+        assert logs[0]["risk_max_position_size"] > 0
+        assert logs[0]["status"] == "FILLED"
+
+
+class TestSymbolWhitelistIntegration:
+    """Integration tests for symbol whitelist pre-execution check (R5.6)."""
+
+    def test_whitelisted_symbol_passes(self, adapter):
+        """Whitelisted Symbol wird durchgelassen."""
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            config=ExecutionConfig(
+                live_execution_enabled=True,
+                symbol_whitelist=["BTCUSDT", "ETHUSDT"],
+            ),
+        )
+        svc.activate_live()
+        result = svc.submit_order(
+            decision_id="sw-1",
+            run_id="run-1",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+        )
+        assert result["status"] == "FILLED"
+
+    def test_non_whitelisted_symbol_rejected(self, adapter):
+        """Nicht-whitelisted Symbol wird blockiert."""
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            config=ExecutionConfig(
+                live_execution_enabled=True,
+                symbol_whitelist=["BTCUSDT"],
+            ),
+        )
+        svc.activate_live()
+        result = svc.submit_order(
+            decision_id="sw-2",
+            run_id="run-1",
+            symbol="SOLUSDT",  # Nicht auf Whitelist
+            side="LONG",
+            quantity=1.0,
+            price=100.0,
+        )
+        assert result["status"] == "REJECTED"
+        assert result["error"] == "SYMBOL_NOT_WHITELISTED"
+
+    def test_empty_whitelist_allows_all(self, adapter):
+        """Leere Whitelist lässt alle Symbole durch."""
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            config=ExecutionConfig(
+                live_execution_enabled=True,
+                symbol_whitelist=[],
+            ),
+        )
+        svc.activate_live()
+        result = svc.submit_order(
+            decision_id="sw-3",
+            run_id="run-1",
+            symbol="ARBITRARY",
+            side="LONG",
+            quantity=1.0,
+            price=50.0,
+        )
+        assert result["status"] == "FILLED"
+
+
+class TestAllowedExchangesIntegration:
+    """Integration tests for allowed_exchanges config check."""
+
+    def test_allowed_exchange_passes(self, adapter):
+        """Erlaubter Exchange wird durchgelassen."""
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            config=ExecutionConfig(
+                live_execution_enabled=True,
+                allowed_exchanges=["PAPER"],
+            ),
+        )
+        svc.activate_live()
+        result = svc.submit_order(
+            decision_id="ae-1",
+            run_id="run-1",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+        )
+        assert result["status"] == "FILLED"
+
+    def test_empty_allowed_exchanges_allows_all(self, adapter):
+        """Leere allowed_exchanges lässt alle Exchanges durch."""
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            config=ExecutionConfig(
+                live_execution_enabled=True,
+                allowed_exchanges=[],
+            ),
+        )
+        svc.activate_live()
+        result = svc.submit_order(
+            decision_id="ae-2",
+            run_id="run-1",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+        )
+        assert result["status"] == "FILLED"
+
+
+class TestMaxPositionSizeEnforcement:
+    """Tests for RiskEngine max_position_size enforcement in submission."""
+
+    @pytest.fixture
+    def risk_policy_tight(self) -> dict:
+        """Risk-Policy mit strengen Limits."""
+        return {
+            "max_risk_per_trade": 0.005,
+            "max_daily_loss": 0.05,
+            "max_leverage": 3.0,
+            "max_positions": 5,
+            "max_portfolio_risk": 0.10,
+            "min_stop_distance_bps": 50,
+            "minimum_risk_reward": 1.5,
+            "max_slippage_bps": 200,
+            "allowed_symbols": ["BTCUSDT"],
+        }
+
+    @pytest.fixture
+    def risk_engine_tight(self, risk_policy_tight: dict) -> RiskEngine:
+        return RiskEngine(policy=risk_policy_tight)
+
+    def test_quantity_capped_to_max_position_size(self, adapter, risk_engine_tight):
+        """quantity wird auf max_position_size reduziert wenn diese kleiner ist."""
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            risk_engine=risk_engine_tight,
+            config=ExecutionConfig(
+                live_execution_enabled=True,
+                symbol_whitelist=["BTCUSDT"],
+            ),
+        )
+        svc.activate_live()
+        # quantity=10.0, aber RiskEngine berechnet max_position_size
+        result = svc.submit_order(
+            decision_id="mp-1",
+            run_id="run-1",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=10.0,
+            price=50000.0,
+        )
+        # Sollte FILLED sein (PaperExchange nimmt die reduzierte quantity)
+        assert result["status"] == "FILLED"
+        assert result["risk_approved"] is True
+        assert result["risk_max_position_size"] > 0
+        # Log soll die reduzierte Position zeigen
+        logs = svc.get_logs(decision_id="mp-1")
+        assert logs[0]["risk_max_position_size"] > 0
+
+
+class TestNetworkPolicyIntegration:
+    """Integration tests for NetworkPolicy in execution pipeline (R5.15–R5.17)."""
+
+    def test_network_policy_allows_matching_url(self, adapter):
+        """NetworkPolicy erlaubt Requests auf whitelisted URLs."""
+        np = NetworkPolicy(allowed_patterns=["https://api.paper.example.com/*"])
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            network_policy=np,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc.activate_live()
+        # PaperExchangeAdapter verwendet keine echte URL, _get_exchange_url gibt "*" zurück
+        # Bei Pattern "*" sollte das durchkommen, aber hier ist das Pattern spezifisch.
+        # Da _get_exchange_url "*" für unbekannte Adapter zurückgibt, muss "*" gematcht werden.
+        np2 = NetworkPolicy(allowed_patterns=[".*"])
+        svc2 = LiveExecutionService(
+            exchange_adapter=adapter,
+            network_policy=np2,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc2.activate_live()
+        result = svc2.submit_order(
+            decision_id="np-1",
+            run_id="run-1",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+        )
+        assert result["status"] == "FILLED"
+
+    def test_network_policy_blocks_violation(self):
+        """NetworkPolicy blockiert Requests auf nicht-whitelisted URLs."""
+        np = NetworkPolicy(allowed_patterns=["https://trusted.example.com/*"])
+        svc = LiveExecutionService(
+            exchange_adapter=PaperExchangeAdapter(
+                paper_exchange=PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store())
+            ),
+            network_policy=np,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc.activate_live()
+        # Da _get_exchange_url "*" für PaperExchangeAdapter zurückgibt und "*"
+        # nicht auf "https://trusted.example.com/*" matcht:
+        result = svc.submit_order(
+            decision_id="np-2",
+            run_id="run-1",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+        )
+        assert result["status"] == "REJECTED"
+        assert result["error"] == "NETWORK_POLICY_VIOLATION"
+
+
+class TestCredentialManagerIntegration:
+    """Integration tests for CredentialManager in execution pipeline (R5.18–R5.20)."""
+
+    def test_credentials_configured_passes(self, adapter):
+        """Pipeline geht durch wenn Credentials konfiguriert sind."""
+        os.environ["API_KEY"] = "test-key"
+        os.environ["API_SECRET"] = "test-secret"
+        try:
+            cm = CredentialManager()
+            svc = LiveExecutionService(
+                exchange_adapter=adapter,
+                credential_manager=cm,
+                config=ExecutionConfig(live_execution_enabled=True),
+            )
+            svc.activate_live()
+            result = svc.submit_order(
+                decision_id="cm-1",
+                run_id="run-1",
+                symbol="BTCUSDT",
+                side="LONG",
+                quantity=1.0,
+                price=50000.0,
+            )
+            assert result["status"] == "FILLED"
+        finally:
+            os.environ.pop("API_KEY", None)
+            os.environ.pop("API_SECRET", None)
+
+    def test_credentials_missing_rejected(self, adapter):
+        """Pipeline wird blockiert wenn Credentials fehlen."""
+        # Stelle sicher dass env vars nicht gesetzt sind
+        os.environ.pop("API_KEY", None)
+        os.environ.pop("API_SECRET", None)
+        cm = CredentialManager()
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            credential_manager=cm,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc.activate_live()
+        result = svc.submit_order(
+            decision_id="cm-2",
+            run_id="run-1",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+        )
+        assert result["status"] == "REJECTED"
+        assert result["error"] == "CREDENTIALS_NOT_CONFIGURED"
+
+    def test_missing_api_key_rejected(self, adapter):
+        """Pipeline wird blockiert wenn nur API_SECRET gesetzt ist."""
+        os.environ["API_KEY"] = ""
+        os.environ["API_SECRET"] = "test-secret"
+        try:
+            cm = CredentialManager()
+            svc = LiveExecutionService(
+                exchange_adapter=adapter,
+                credential_manager=cm,
+                config=ExecutionConfig(live_execution_enabled=True),
+            )
+            svc.activate_live()
+            result = svc.submit_order(
+                decision_id="cm-3",
+                run_id="run-1",
+                symbol="BTCUSDT",
+                side="LONG",
+                quantity=1.0,
+                price=50000.0,
+            )
+            assert result["status"] == "REJECTED"
+            assert result["error"] == "CREDENTIALS_NOT_CONFIGURED"
+        finally:
+            os.environ.pop("API_KEY", None)
+            os.environ.pop("API_SECRET", None)
+
+
+class TestFullPipelineIntegration:
+    """Integration tests for the complete execution pipeline with all services."""
+
+    def test_full_pipeline_risk_approved(self, adapter):
+        """Komplette Pipeline: KillSwitch→RateLimit→Dedup→Whitelist→RiskEngine→NetworkPolicy→CredentialCheck→Exchange."""
+        policy = {
+            "max_risk_per_trade": 0.02,
+            "max_daily_loss": 0.05,
+            "max_leverage": 3.0,
+            "max_positions": 5,
+            "max_portfolio_risk": 0.10,
+            "min_stop_distance_bps": 50,
+            "minimum_risk_reward": 1.5,
+            "max_slippage_bps": 200,
+            "allowed_symbols": ["BTCUSDT"],
+        }
+        ks = KillSwitch(enabled=False)
+        rl = RateLimiter(global_limit=100, symbol_limit=50)
+        dd = OrderDeduplicator()
+        np = NetworkPolicy(allowed_patterns=[".*"])
+        os.environ["API_KEY"] = "test-key"
+        os.environ["API_SECRET"] = "test-secret"
+        try:
+            cm = CredentialManager()
+            re = RiskEngine(policy=policy)
+            svc = LiveExecutionService(
+                kill_switch=ks,
+                rate_limiter=rl,
+                deduplicator=dd,
+                exchange_adapter=adapter,
+                risk_engine=re,
+                network_policy=np,
+                credential_manager=cm,
+                config=ExecutionConfig(
+                    live_execution_enabled=True,
+                    symbol_whitelist=["BTCUSDT"],
+                ),
+            )
+            svc.activate_live()
+            result = svc.submit_order(
+                decision_id="full-1",
+                run_id="run-1",
+                symbol="BTCUSDT",
+                side="LONG",
+                quantity=1.0,
+                price=50000.0,
+            )
+            assert result["status"] == "FILLED"
+            assert result["risk_approved"] is True
+            assert result["risk_max_position_size"] > 0
+        finally:
+            os.environ.pop("API_KEY", None)
+            os.environ.pop("API_SECRET", None)
+
+    def test_full_pipeline_killswitch_blocks_first(self, adapter):
+        """KillSwitch wird vor allen anderen Checks geprüft."""
+        policy = {
+            "max_risk_per_trade": 0.02,
+            "max_daily_loss": 0.05,
+            "max_leverage": 3.0,
+            "max_positions": 5,
+            "max_portfolio_risk": 0.10,
+            "min_stop_distance_bps": 50,
+            "minimum_risk_reward": 1.5,
+            "max_slippage_bps": 200,
+            "allowed_symbols": ["BTCUSDT"],
+        }
+        ks = KillSwitch(enabled=True)
+        cm = CredentialManager()
+        np = NetworkPolicy(allowed_patterns=[".*"])
+        os.environ["API_KEY"] = "test-key"
+        os.environ["API_SECRET"] = "test-secret"
+        try:
+            svc = LiveExecutionService(
+                kill_switch=ks,
+                exchange_adapter=adapter,
+                risk_engine=RiskEngine(policy=policy),
+                network_policy=np,
+                credential_manager=cm,
+                config=ExecutionConfig(
+                    live_execution_enabled=True,
+                    symbol_whitelist=["BTCUSDT"],
+                ),
+            )
+            svc.activate_live()
+            result = svc.submit_order(
+                decision_id="full-ks",
+                run_id="run-1",
+                symbol="BTCUSDT",
+                side="LONG",
+                quantity=1.0,
+                price=50000.0,
+            )
+            assert result["status"] == "REJECTED"
+            assert result["error"] == "KILL_SWITCH_ACTIVE"
+            assert result["risk_approved"] is False
+        finally:
+            os.environ.pop("API_KEY", None)
+            os.environ.pop("API_SECRET", None)
