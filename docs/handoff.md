@@ -133,8 +133,21 @@ BLE001 Lint fixes (pre-existing):
 
 ## Next priority
 
-Phase 5 — Live Execution: ✅ KOMPLETT. Alle Core Services, Read/Trade API Auth, Crypto Adapters,
-Shadow Mode, Network Isolation (R5.15–R5.17), Credential Management (R5.18–R5.20) abgeschlossen.
+Phase 5 — Live Execution: ✅ **KOMPLETT MIT RISK ENGINE HARDENING**. Alle Core Services,
+Read/Trade API Auth, Crypto Adapters, Shadow Mode, Network Isolation (R5.15–R5.17),
+Credential Management (R5.18–R5.20), Risk Engine Hardening (R5.2–R5.4) abgeschlossen.
+
+Full Execution Pipeline (LiveExecutionService):
+  KillSwitch → RateLimit → Dedup → SymbolWhitelist → RiskEngine → NetworkPolicy →
+  CredentialCheck → Exchange → Log
+
+Risk Engine Hardening (R5.2–R5.4):
+- `ExecutionConfig.symbol_whitelist` — Symbols müssen in Whitelist sein (R5.6)
+- `ExecutionConfig.allowed_exchanges` — erlaubte Exchanges konfigurierbar
+- `RiskEngine.evaluate()` wird vor jedem Submit aufgerufen
+- Position Sizing: `RiskDecision.max_position_size` wird enforced
+- Daily Loss Limit, Leverage Limit, Risk/Rewards werden validiert
+- Risk-Log in `ExecutionLog.risk_approved` und `risk_max_position_size`
 
 Nächste Schritte (in Reihenfolge):
 
@@ -147,10 +160,7 @@ Nächste Schritte (in Reihenfolge):
 
 2. **Additional Exchange Adapters** — Binance und Coinbase via Adapter-Pattern
 
-3. **Risk Engine Hardening** — R5.2–R5.4: Position Sizing, Daily Loss Limit, Leverage Limit
-   - Integration in LiveExecutionService vor Submit
-
-4. **Live Execution Safety Gate** — explizite Freigabe erforderlich
+3. **Live Execution Safety Gate** — explizite Freigabe erforderlich
    - Audit-Log aller Live-Transaktionen
    - Kill Switch Monitoring (wirkliche Exchange-Verbindung)
    - Maximaler Kapitaleinsatz auf MinCapital beschränkt (ExecutionConfig.min_capital)

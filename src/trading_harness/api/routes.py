@@ -581,6 +581,7 @@ def list_all_population_stats() -> list[dict]:
 # Phase 5 — Live Execution endpoints
 # ---------------------------------------------------------------------------
 
+from trading_harness.services.credential_manager import CredentialManager
 from trading_harness.services.crypto_exchange_adapter import (
     BitgetExchangeAdapter,
     BybitExchangeAdapter,
@@ -591,8 +592,11 @@ from trading_harness.services.live_execution_service import (
     ExecutionConfig,
     LiveExecutionService,
 )
+from trading_harness.services.network_policy import NetworkPolicy
 from trading_harness.services.paper_exchange import PaperExchange
 from trading_harness.services.paper_exchange_adapter import PaperExchangeAdapter
+from trading_harness.services.policy_loader import load_yaml
+from trading_harness.services.risk_engine import RiskEngine
 from trading_harness.services.shadow_mode_logger import (
     ShadowModeAdapter,
     ShadowModeLogger,
@@ -602,7 +606,15 @@ execution_log_store = ExecutionLogStore()
 execution_kill_switch = KillSwitch()
 execution_config = ExecutionConfig(
     live_execution_enabled=settings.live_execution_enabled,
+    allowed_endpoints=settings.network_allowed_patterns,
 )
+risk_engine = RiskEngine(load_yaml(settings.risk_policy_path))
+
+# Network-Policy für Endpoint-Whitelist
+network_policy = NetworkPolicy(allowed_patterns=settings.network_allowed_patterns)
+
+# Credential-Manager für API-Schlüssel
+credential_manager = CredentialManager()
 
 # PaperExchange-Adapter als erste echte Exchange-Integration.
 # Live Execution bleibt standardmäßig deaktiviert — muss explizit aktiviert werden.
@@ -619,7 +631,12 @@ _shadow_adapter = ShadowModeAdapter(delegate=_paper_adapter, shadow=_shadow_logg
 
 live_execution_service = LiveExecutionService(
     kill_switch=execution_kill_switch,
+    rate_limiter=None,  # verwendet Default (global=10, symbol=2)
+    deduplicator=None,
     exchange_adapter=_paper_adapter,
+    risk_engine=risk_engine,
+    network_policy=network_policy,
+    credential_manager=credential_manager,
     config=execution_config,
 )
 
