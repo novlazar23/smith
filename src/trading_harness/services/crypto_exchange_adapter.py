@@ -14,13 +14,18 @@ import json
 import time
 from abc import ABC, abstractmethod
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
 from trading_harness.services.credential_manager import CredentialManager
 from trading_harness.services.exchange_adapter import (
+    AuthenticationError,
+    ConnectionError,
     ExchangeAdapter,
     ExchangeAdapterError,
+    RateLimitError,
+    ResponseValidationError,
 )
 from trading_harness.services.network_policy import NetworkPolicy
 
@@ -67,9 +72,20 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
 
     @abstractmethod
     def _sign_request(
-        self, params: dict[str, Any], timestamp: str, data: dict[str, Any] | None = None
+        self,
+        params: dict[str, Any],
+        timestamp: str,
+        data: dict[str, Any] | None,
+        path: str,
     ) -> dict[str, str]:
-        """Signiert eine Anfrage mit HMAC-SHA256."""
+        """Signiert eine Anfrage mit HMAC-SHA256.
+
+        Args:
+            params: Query parameters (for GET requests).
+            timestamp: ISO timestamp string in milliseconds.
+            data: Request body data (for POST requests).
+            path: The URL path segment used for signing (e.g. /api/v3/trade/place-order).
+        """
         ...
 
     @abstractmethod
@@ -97,6 +113,20 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
     def _ticker_url(self, symbol: str) -> str:
         ...
 
+    def _validate_response(self, response: dict[str, Any]) -> None:
+        """Validiert Exchange-Response auf Fehlercodes.
+
+        Bybit: retCode == "0" bedeutet Erfolg.
+        Bitget: code == "0" bedeutet Erfolg.
+        """
+        ret_code = response.get("retCode", response.get("code"))
+        if ret_code is not None and str(ret_code) != "0":
+            ret_msg = response.get("retMsg", response.get("msg", "Unknown error"))
+            raise ResponseValidationError(
+                code=str(ret_code),
+                message=str(ret_msg),
+            )
+
     def _make_signed_request(
         self,
         method: str,
@@ -104,9 +134,11 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         params: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Führt eine signierte API-Anfrage aus.
+        """Führt eine signierte API-Anfrage aus mit Retry-Logik.
 
         NetworkPolicy wird vor jeder nicht-simulierten Anfrage geprüft (R5.15–R5.16).
+        Transiente Fehler (5xx, Timeout) werden mit exponentiellem Backoff wiederholt.
+        HTTP 429 wird mit Backoff wiederholt. Auth-Fehler (401/403) nicht.
         """
         if self._simulated:
             return self._simulate(method, url, params, data)
@@ -115,23 +147,101 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         if self._network_policy and not self._network_policy.is_allowed(method, url):
             raise ExchangeAdapterError(f"NETWORK_POLICY_BLOCKED: {method} {url}")
 
+        # Extract the path from the URL for signing
+        url_path = urlparse(url).path
+
         timestamp = str(int(time.time() * 1000))
-        signed = self._sign_request(params or {}, timestamp, data)
+        signed = self._sign_request(params or {}, timestamp, data, url_path)
 
         headers = self._build_headers()
         # Merge signature fields into headers
         for k, v in signed.items():
             headers[k] = v
 
-        try:
-            if method == "GET":
-                resp = self._client.get(url, params=params, headers=headers)
-            else:
-                resp = self._client.post(url, params=params, json=data or {}, headers=headers)
-            resp.raise_for_status()
-            return resp.json()
-        except httpx.HTTPError as e:
-            raise ExchangeAdapterError(f"API request failed: {e}") from e
+        # Retry loop for transient errors
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if method == "GET":
+                    resp = self._client.get(url, params=params, headers=headers)
+                else:
+                    resp = self._client.post(url, params=params, json=data or {}, headers=headers)
+
+                # Check for exchange-specific error codes first (before HTTP status)
+                if resp.status_code == 200:
+                    try:
+                        body = resp.json()
+                    except ValueError:
+                        body = {}
+                    self._validate_response(body)
+                    return body
+
+                # HTTP error status — classify and decide whether to retry
+                if resp.status_code == 429:
+                    # Rate limit — check Retry-After header or use exponential backoff
+                    retry_after = float(
+                        resp.headers.get("retry-after", 1.0)
+                    )
+                    raise RateLimitError(
+                        f"Rate limit exceeded (attempt {attempt + 1}/{max_retries})"
+                    ) from None
+
+                if resp.status_code >= 500:
+                    # Server error — retry with exponential backoff
+                    backoff = 0.5 * (2 ** attempt)
+                    if attempt < max_retries - 1:
+                        time.sleep(backoff)
+                        continue
+                    raise ConnectionError(
+                        f"Server error {resp.status_code} after {max_retries} retries: "
+                        f"{resp.text}"
+                    ) from None
+
+                if resp.status_code in (401, 403):
+                    # Auth error — don't retry
+                    raise AuthenticationError(
+                        f"Authentication failed: {resp.text}"
+                    ) from None
+
+                if resp.status_code == 400:
+                    # Bad request — try to extract exchange error code
+                    try:
+                        body = resp.json()
+                        self._validate_response(body)
+                    except ResponseValidationError:
+                        raise
+                    raise ExchangeAdapterError(
+                        f"Bad request ({resp.status_code}): {resp.text}"
+                    ) from None
+
+                # For all other HTTP errors, raise ExchangeAdapterError
+                raise ExchangeAdapterError(
+                    f"HTTP {resp.status_code}: {resp.text}"
+                ) from None
+
+            except RateLimitError:
+                # Rate limit — retry with backoff from Retry-After header
+                if attempt < max_retries - 1:
+                    try:
+                        # We don't have the response here, so use exponential backoff
+                        time.sleep(1.0 * (2 ** attempt))
+                    except (TypeError, ValueError):
+                        time.sleep(1.0)
+                    continue
+                raise
+
+            except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.TimeoutException) as e:
+                # Transient network error — retry with exponential backoff
+                backoff = 0.5 * (2 ** attempt)
+                if attempt < max_retries - 1:
+                    time.sleep(backoff)
+                    continue
+                raise ConnectionError(
+                    f"Connection failed after {max_retries} retries: {e}"
+                ) from e
+
+        # Should not reach here, but safety fallback
+        raise ConnectionError("Request failed after retries")
 
     def _simulate(
         self,
@@ -146,19 +256,42 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         if "order/create" in url or "createOrder" in url or "/trade/place-order" in url:
             return {
                 "success": True,
-                "order_id": f"sim-{int(time.time() * 1000)}",
-                "status": "FILLED",
-                "filled_quantity": params.get("qty", 1.0) or data.get("qty", 1.0),
+                "orderId": f"sim-{int(time.time() * 1000)}",
+                "retCode": "0",
+                "retMsg": "success",
             }
         if "order/realtime" in url or "order/detail" in url:
-            return {"orderId": params.get("orderId", data.get("orderId", "")), "status": "FILLED"}
+            return {
+                "orderId": params.get("orderId", data.get("orderId", "")),
+                "retCode": "0",
+                "retMsg": "success",
+                "data": {"status": "FILLED"},
+            }
         if "cancel" in url:
-            return {"success": True, "order_id": params.get("orderId", data.get("orderId", ""))}
+            return {
+                "success": True,
+                "orderId": params.get("orderId", data.get("orderId", "")),
+                "retCode": "0",
+                "retMsg": "success",
+            }
         if "balance" in url:
-            return {"USDT": 100000.0, "BTC": 1.0}
+            return {
+                "retCode": "0",
+                "retMsg": "success",
+                "result": {"walletBalance": [{"coin": "USDT", "totalBalance": "100000"}]},
+            }
         if "ticker" in url or "tickers" in url:
-            return {"bid": 50000.0, "ask": 50001.0, "last": 50000.5}
-        return {"success": True}
+            return {
+                "retCode": "0",
+                "retMsg": "success",
+                "result": {
+                    "list": [
+                        {"symbol": params.get("symbol", "BTCUSDT") if params else "BTCUSDT",
+                         "bidPx": "50000.0", "askPx": "50001.0", "lastPx": "50000.5"}
+                    ]
+                },
+            }
+        return {"retCode": "0", "retMsg": "success"}
 
     def submit_order(
         self,
@@ -178,38 +311,57 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         resp = self._make_signed_request(
             "POST", self._submit_order_url(), data=params
         )
+        # Parse exchange-specific response format
+        result = resp.get("result", resp)
         return {
-            "order_id": resp.get("order_id", resp.get("result", {}).get("orderId")),
-            "status": resp.get("status", "FILLED"),
+            "order_id": result.get("orderId", result.get("order_id")),
+            "status": "FILLED",
+            "raw": resp,
         }
 
     def get_order_status(self, order_id: str) -> dict[str, Any]:
         resp = self._make_signed_request(
             "GET", self._get_order_url(order_id), params={"orderId": order_id}
         )
+        result = resp.get("result", resp)
+        # Bitget uses "data" wrapper
+        data = result.get("data", result)
         return {
-            "status": resp.get("status", "UNKNOWN"),
-            "filled_quantity": resp.get("filledQty", 0.0),
+            "status": data.get("state", data.get("status", "UNKNOWN")),
+            "filled_quantity": data.get("dealVolume", data.get("filledQty", 0.0)),
+            "raw": resp,
         }
 
     def cancel_order(self, order_id: str) -> dict[str, Any]:
         resp = self._make_signed_request(
             "POST", self._cancel_order_url(), data={"orderId": order_id}
         )
-        return {"success": resp.get("success", True)}
+        result = resp.get("result", resp)
+        return {
+            "success": result.get("retCode") == "0",
+            "raw": resp,
+        }
 
     def get_balance(self, symbol: str) -> float:
         resp = self._make_signed_request("GET", self._balance_url())
-        for asset in ("USDT", symbol.split("USDT")[0] if "USDT" in symbol else symbol):
-            if asset in resp:
-                return float(resp[asset])
+        result = resp.get("result", resp)
+        # Bybit V5: result.walletBalance[0].totalBalance
+        # Bitget: result.list or single coin
+        coins = result.get("walletBalance", result.get("list", []))
+        if isinstance(coins, list) and coins:
+            # Bybit format
+            for coin_data in coins:
+                coin = coin_data.get("coin", "")
+                if coin == "USDT" or (symbol.endswith("USDT") and "USDT" in coin):
+                    return float(coin_data.get("totalBalance", "0"))
         return 100000.0
 
     def get_ticker(self, symbol: str) -> dict[str, float]:
         resp = self._make_signed_request(
             "GET", self._ticker_url(symbol), params={"symbol": symbol}
         )
-        tickers = resp.get("result", {}).get("list", [resp])
+        result = resp.get("result", resp)
+        tickers = result.get("list", [result])
         if tickers:
             tick = tickers[0]
             return {
@@ -239,7 +391,11 @@ class BybitExchangeAdapter(BaseCryptoExchangeAdapter):
         return "BYBIT"
 
     def _sign_request(
-        self, params: dict[str, Any], timestamp: str, data: dict[str, Any] | None = None
+        self,
+        params: dict[str, Any],
+        timestamp: str,
+        data: dict[str, Any] | None,
+        path: str = "",
     ) -> dict[str, str]:
         # POST requests: sign timestamp + apiKey + recvWindow + jsonBody
         body_str = json.dumps(data, separators=(",", ":")) if data else ""
@@ -291,10 +447,13 @@ class BitgetExchangeAdapter(BaseCryptoExchangeAdapter):
         return "BITGET"
 
     def _sign_request(
-        self, params: dict[str, Any], timestamp: str, data: dict[str, Any] | None = None
+        self,
+        params: dict[str, Any],
+        timestamp: str,
+        data: dict[str, Any] | None,
+        path: str,
     ) -> dict[str, str]:
-        # Use the actual request path; params are for GET query strings only
-        path = "/api/v3/trade/place-order"
+        # Use the ACTUAL request path for signing (FIXED — was hardcoded)
         body_str = json.dumps(data, separators=(",", ":")) if data else ""
         prehash = f"{timestamp}POST{path}{body_str}"
         digest = hmac.new(

@@ -14,6 +14,26 @@ class ExchangeAdapterError(Exception):
     """Fehler beim Austausch mit der Exchange."""
 
 
+class RateLimitError(ExchangeAdapterError):
+    """Request rate-limited by the exchange (HTTP 429)."""
+
+    retry_after: float = 1.0
+
+
+class ConnectionError(ExchangeAdapterError):
+    """Network/connection error (5xx, timeout, DNS, SSL)."""
+
+
+class AuthenticationError(ExchangeAdapterError):
+    """Authentication failed (HTTP 401/403)."""
+
+
+class ResponseValidationError(ExchangeAdapterError):
+    """Exchange returned error code in response body."""
+
+    code: str = ""
+    message: str = ""
+
 
 class ExchangeAdapter(ABC):
     """Abstrakte Basisklasse für Exchange-Adapter.
