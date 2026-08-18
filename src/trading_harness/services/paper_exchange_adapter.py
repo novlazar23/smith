@@ -3,25 +3,34 @@
 Mappt die ExchangeAdapter-Schnittstelle (submit_order mit Preis) auf die
 PaperExchange.execute_order-Signatur (TradeProposal + current_price).
 
+Order Lifecycle:
+- submit_order → PaperExchange.execute_order → FILLED/REJECTED
+- get_order_status → PaperExchange.get_trade → status query
+- cancel_order → PaperExchange.cancel_trade → CANCELLED
+
 Dient als erste echte Exchange-Integration in die LiveExecutionService-Pipeline.
 """
 
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from trading_harness.models import TradeProposal
 from trading_harness.services.exchange_adapter import ExchangeAdapter
 from trading_harness.services.paper_exchange import PaperExchange
 
+if TYPE_CHECKING:
+    from trading_harness.models import PaperTrade
+
 
 class PaperExchangeAdapter(ExchangeAdapter):
     """Adapter, der PaperExchange als ExchangeAdapter darstellt.
 
-    Jede submit_order() erstellt ein TradeProposal und delegiert an
-    PaperExchange.execute_order(). cancel_order/get_order_status/get_balance/get_ticker
-    sind Stubs — PaperExchange kennt diese Konzepte im MVP noch nicht.
+    submit_order() erstellt ein TradeProposal und delegiert an
+    PaperExchange.execute_order(). get_order_status und cancel_order sind
+    über PaperExchange.get_trade() bzw. PaperExchange.cancel_trade()
+    implementiert.
     """
 
     def __init__(
@@ -105,16 +114,59 @@ class PaperExchangeAdapter(ExchangeAdapter):
         }
 
     def get_order_status(self, order_id: str) -> dict[str, Any]:
-        """Stub — PaperExchange speichert Trades im Store, keine direkte
-        Order-Status-Abfrage implementiert."""
+        """Holt Order-Status via PaperExchange.get_trade().
+
+        Returns dict with order_id, status, and trade details.
+        """
+        trade: PaperTrade | None = self._paper_exchange.get_trade(order_id)
+
+        if trade is None:
+            return {
+                "order_id": order_id,
+                "status": "NOT_FOUND",
+                "error": "ORDER_NOT_FOUND",
+            }
+
         return {
-            "status": "NOT_IMPLEMENTED",
-            "error": "PAPER_TRADE_STORE_ACCESS_NOT_EXPOSED",
+            "order_id": trade.id,
+            "status": trade.status.value,
+            "trade_id": trade.trade_id,
+            "symbol": trade.symbol,
+            "side": trade.side,
+            "actual_quantity": trade.actual_quantity,
+            "actual_price": trade.actual_price,
+            "fees": trade.fees,
+            "rejected_reason": trade.reject_reason,
         }
 
     def cancel_order(self, order_id: str) -> dict[str, Any]:
-        """Stub — PaperExchange hat keine Order-Stornierung im MVP."""
-        return {"success": False, "error": "CANCEL_NOT_SUPPORTED"}
+        """Storniert Order via PaperExchange.cancel_trade().
+
+        Nur Trades im CREATED/PENDING Status können storniert werden.
+        """
+        result = self._paper_exchange.cancel_trade(order_id)
+
+        if not result.get("success"):
+            return {
+                "success": False,
+                "order_id": order_id,
+                "error": result.get("error", "UNKNOWN_ERROR"),
+            }
+
+        trade: PaperTrade = result["trade"]
+        return {
+            "success": True,
+            "order_id": trade.id,
+            "status": trade.status.value,
+            "trade": {
+                "trade_id": trade.trade_id,
+                "symbol": trade.symbol,
+                "side": trade.side,
+                "actual_quantity": trade.actual_quantity,
+                "actual_price": trade.actual_price,
+                "fees": trade.fees,
+            },
+        }
 
     def get_balance(self, symbol: str) -> float:
         """Stub — kein echtes Guthaben im Paper-MVP."""

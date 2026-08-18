@@ -1,6 +1,20 @@
+"""PaperExchange — simulierte Order-Ausführung mit Order-Lifecycle.
+
+Order-Lifecycle:
+  PENDING → FILLED / REJECTED / CANCELLED
+
+Unterstützt:
+- Deterministische Slippage-Simulation
+- Fee-Berechnung (prozentual)
+- Order-Cancellation (nur vor FILL)
+- Order-Query (get_trade, by_status, by_symbol)
+- Configurable fill rate
+"""
+
 from __future__ import annotations
 
 import threading
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from trading_harness.models import PaperTrade, PaperTradeStatus, TradeProposal
@@ -16,6 +30,7 @@ class PaperExchange:
     """Simulates order execution with configurable fill rate and fee rate.
 
     Deterministic only - no random without seed. Thread-safe via RLock.
+    Order lifecycle: PENDING → FILLED / REJECTED / CANCELLED
     """
 
     def __init__(
@@ -60,6 +75,50 @@ class PaperExchange:
         with self._lock:
             self.stores.add(trade)
         return trade
+
+    def cancel_trade(self, trade_id: str) -> dict:
+        """Cancel a trade by its ID.
+
+        Only trades in PENDING or PARTIALLY_FILLED status can be cancelled.
+        Returns dict with success boolean and trade details.
+        Returns error dict when stores are not configured.
+        """
+        if self.stores is None:
+            return {"success": False, "error": "STORES_NOT_CONFIGURED"}
+
+        with self._lock:
+            trade = self.stores.get(trade_id)
+            if trade is None:
+                return {"success": False, "error": "TRADE_NOT_FOUND"}
+
+            if trade.status not in (
+                PaperTradeStatus.PENDING,
+                PaperTradeStatus.PARTIALLY_FILLED,
+            ):
+                return {
+                    "success": False,
+                    "error": "TRADE_CANNOT_BE_CANCELLED",
+                    "reason": f"Cannot cancel trade in {trade.status.value} state",
+                }
+
+            trade.status = PaperTradeStatus.CANCELLED
+            trade.closed_at = datetime.now(UTC)
+            self.stores.add(trade)
+            return {"success": True, "trade": trade}
+
+    def get_trade(self, trade_id: str) -> PaperTrade | None:
+        """Retrieve a trade by ID."""
+        if self.stores is None:
+            return None
+        return self.stores.get(trade_id)
+
+    def by_status(
+        self, status: PaperTradeStatus
+    ) -> list[PaperTrade]:
+        """Retrieve all trades with a given status."""
+        if self.stores is None:
+            return []
+        return [t for t in self.stores.all() if t.status == status]
 
     def _build_trade(
         self,

@@ -3,6 +3,8 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from trading_harness.models import (
     PaperTrade,
     PaperTradeStatus,
@@ -509,3 +511,403 @@ def test_concurrent_read_write():
         t.join(timeout=10)
 
     assert errors == [], f"Concurrent read/write errors: {errors}"
+
+# ============================================================
+# Order Lifecycle Tests
+# ============================================================
+
+
+def test_order_lifecycle_pending_to_filled():
+    """Order wird vom Standard als FILLED gespeichert."""
+    exchange = _make_exchange()
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    assert trade.status == PaperTradeStatus.FILLED
+
+
+def test_order_lifecycle_rejected():
+    """Order wird bei ungültigem Symbol als REJECTED gespeichert."""
+    exchange = _make_exchange()
+    proposal = _make_proposal(
+        symbol="UNKNOWN",
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    assert trade.status == PaperTradeStatus.REJECTED
+    assert trade.reject_reason == "SYMBOL_NOT_ALLOWED"
+
+
+def test_cancel_trade_not_found():
+    """Stornierung einer nicht gefundenen Order schlägt fehl."""
+    exchange = _make_exchange()
+    result = exchange.cancel_trade("nonexistent-id")
+    assert result["success"] is False
+    assert result["error"] == "TRADE_NOT_FOUND"
+
+
+def test_cancel_trade_stores_not_configured():
+    """Stornierung ohne Store schlägt mit error dict zurück."""
+    exchange = PaperExchange(fill_rate=0.8, fee_rate=0.001, stores=None)
+    result = exchange.cancel_trade("any-id")
+    assert result["success"] is False
+    assert result["error"] == "STORES_NOT_CONFIGURED"
+
+
+def test_cancel_filled_trade_fails():
+    """Eine FILLED Order kann nicht storniert werden."""
+    exchange = _make_exchange()
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    assert trade.status == PaperTradeStatus.FILLED
+    result = exchange.cancel_trade(trade.id)
+    assert result["success"] is False
+    assert result["error"] == "TRADE_CANNOT_BE_CANCELLED"
+
+
+def test_cancel_rejected_trade_fails():
+    """Eine REJECTED Order kann nicht storniert werden."""
+    exchange = _make_exchange()
+    proposal = _make_proposal(
+        symbol="UNKNOWN",
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    assert trade.status == PaperTradeStatus.REJECTED
+    result = exchange.cancel_trade(trade.id)
+    assert result["success"] is False
+    assert result["error"] == "TRADE_CANNOT_BE_CANCELLED"
+
+
+def test_get_trade_returns_stored_trade():
+    """get_trade gibt den gespeicherten Trade zurück."""
+    exchange = _make_exchange()
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    retrieved = exchange.get_trade(trade.id)
+    assert retrieved is not None
+    assert retrieved.id == trade.id
+    assert retrieved.status == PaperTradeStatus.FILLED
+    assert retrieved.symbol == "BTCUSDT"
+
+
+def test_get_trade_nonexistent_returns_none():
+    """get_trade für nicht existierende ID gibt None zurück."""
+    exchange = _make_exchange()
+    assert exchange.get_trade("nonexistent") is None
+
+
+def test_by_status_returns_filtered_trades():
+    """by_status gibt nur Trades mit dem angegebenen Status zurück."""
+    exchange = _make_exchange()
+    proposal1 = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+    )
+    proposal2 = _make_proposal(
+        symbol="UNKNOWN",
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+    )
+    exchange.execute_order(proposal1, current_price=100.0)
+    exchange.execute_order(proposal2, current_price=100.0)
+    filled = exchange.by_status(PaperTradeStatus.FILLED)
+    rejected = exchange.by_status(PaperTradeStatus.REJECTED)
+    assert len(filled) == 1
+    assert len(rejected) == 1
+
+
+def test_by_status_empty_for_uncommon_status():
+    """by_status für seltenen Status gibt leere Liste zurück."""
+    exchange = _make_exchange()
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+    )
+    exchange.execute_order(proposal, current_price=100.0)
+    none_trades = exchange.by_status(PaperTradeStatus.PARTIALLY_FILLED)
+    assert len(none_trades) == 0
+
+
+def test_multiple_orders_have_unique_ids():
+    """Jede Order erhält eine eindeutige ID."""
+    exchange = _make_exchange()
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+    )
+    trade1 = exchange.execute_order(proposal, current_price=100.0)
+    trade2 = exchange.execute_order(proposal, current_price=100.0)
+    assert trade1.id != trade2.id
+    assert trade1.id.startswith("paper-trade-")
+    assert trade2.id.startswith("paper-trade-")
+
+
+# ============================================================
+# Fee Calculation Tests
+# ============================================================
+
+
+def test_fee_calculation_zero_fee_rate():
+    """Bei fee_rate=0.0 sollten keine Gebühren anfallen."""
+    store = InMemoryPaperTradeStore()
+    exchange = PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=store)
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+        expected_slippage_bps=0.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    assert trade.fees == 0.0
+
+
+def test_fee_calculation_default_exchange():
+    """Gebühren auf dem Default-Exchange (fill_rate=0.8, fee_rate=0.001)."""
+    exchange = _make_exchange()
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    # slippage = 100 * 5 / 10000 = 0.05 -> actual_price = 100.05
+    # actual_quantity = 100 * 0.8 = 80.0
+    # fees = 80 * 100.05 * 0.001 = 8.004
+    assert trade.actual_price == pytest.approx(100.05)
+    assert trade.actual_quantity == pytest.approx(80.0)
+    assert trade.fees == pytest.approx(8.004)
+
+
+def test_fee_calculation_high_fee_rate():
+    """Hoher fee_rate führt zu proportionalem Gebührenbetrag."""
+    store = InMemoryPaperTradeStore()
+    exchange = PaperExchange(fill_rate=1.0, fee_rate=0.005, stores=store)
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+        expected_slippage_bps=0.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    # fees = 100 * 100 * 0.005 = 50.0
+    assert trade.fees == pytest.approx(50.0)
+
+
+def test_fee_calculation_short_order():
+    """Gebühren für Short-Orders basieren auf Absolutbetrag."""
+    store = InMemoryPaperTradeStore()
+    exchange = PaperExchange(fill_rate=1.0, fee_rate=0.001, stores=store)
+    proposal = _make_proposal(
+        side="SELL",
+        entry_price=100.0,
+        stop_price=102.0,
+        target_price=96.0,
+        requested_quantity=50.0,
+        expected_slippage_bps=0.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    # actual_price = 100.0 (slippage=0), qty=50
+    # fees = 50 * 100 * 0.001 = 5.0
+    assert trade.fees == pytest.approx(5.0)
+
+
+def test_fee_calculation_varying_quantity():
+    """Gebühren skalieren linear mit der ausgeführten Menge."""
+    store1 = InMemoryPaperTradeStore()
+    exchange1 = PaperExchange(fill_rate=1.0, fee_rate=0.001, stores=store1)
+    store2 = InMemoryPaperTradeStore()
+    exchange2 = PaperExchange(fill_rate=1.0, fee_rate=0.001, stores=store2)
+    proposal_small = _make_proposal(requested_quantity=10.0, expected_slippage_bps=0.0)
+    trade_small = exchange1.execute_order(proposal_small, current_price=100.0)
+    proposal_large = _make_proposal(requested_quantity=100.0, expected_slippage_bps=0.0)
+    trade_large = exchange2.execute_order(proposal_large, current_price=100.0)
+    # fees skalieren linear: 10x Menge -> 10x fees
+    assert trade_large.fees == pytest.approx(trade_small.fees * 10)
+
+
+# ============================================================
+# Slippage Tests
+# ============================================================
+
+
+def test_slippage_long_order_adds_to_price():
+    """Bei LONG-Orders wird Slippage zum aktuellen Preis addiert."""
+    store = InMemoryPaperTradeStore()
+    exchange = PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=store)
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        expected_slippage_bps=10.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    # slippage = 100 * 10 / 10000 = 0.10
+    # actual_price = 100 + 0.10 = 100.10
+    assert trade.actual_price == pytest.approx(100.10)
+    assert trade.actual_price > 100.0
+
+
+def test_slippage_short_order_subtracts_from_price():
+    """Bei SHORT-Orders wird Slippage vom aktuellen Preis abgezogen."""
+    store = InMemoryPaperTradeStore()
+    exchange = PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=store)
+    proposal = _make_proposal(
+        side="SELL",
+        entry_price=100.0,
+        stop_price=102.0,
+        target_price=96.0,
+        expected_slippage_bps=10.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    # slippage = 100 * 10 / 10000 = 0.10
+    # actual_price = 100 - 0.10 = 99.90
+    assert trade.actual_price == pytest.approx(99.90)
+    assert trade.actual_price < 100.0
+
+
+def test_slippage_zero_bps_no_adjustment():
+    """Bei 0 bps Slippage sollte der Preis unverändert bleiben."""
+    store = InMemoryPaperTradeStore()
+    exchange = PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=store)
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        expected_slippage_bps=0.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    assert trade.actual_price == pytest.approx(100.0)
+
+
+def test_slippage_high_bps_large_adjustment():
+    """Hohe Slippage in bps führt zu großer Preisanpassung."""
+    store = InMemoryPaperTradeStore()
+    exchange = PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=store)
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        expected_slippage_bps=100.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    # slippage = 100 * 100 / 10000 = 1.0
+    # actual_price = 100 + 1.0 = 101.0
+    assert trade.actual_price == pytest.approx(101.0)
+
+
+def test_slippage_deterministic_across_calls():
+    """Slippage-Berechnung ist deterministisch."""
+    store = InMemoryPaperTradeStore()
+    exchange = PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=store)
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        expected_slippage_bps=15.0,
+    )
+    prices = []
+    for _ in range(10):
+        trade = exchange.execute_order(proposal, current_price=100.0)
+        prices.append(trade.actual_price)
+    assert all(p == prices[0] for p in prices)
+
+
+def test_slippage_large_price():
+    """Slippage bei hohem Preis (z.B. BTC) berechnet korrekt."""
+    store = InMemoryPaperTradeStore()
+    exchange = PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=store)
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=50000.0,
+        stop_price=48000.0,
+        target_price=52000.0,
+        expected_slippage_bps=5.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=50000.0)
+    # slippage = 50000 * 5 / 10000 = 25.0
+    # actual_price = 50000 + 25 = 50025.0
+    assert trade.actual_price == pytest.approx(50025.0)
+
+
+def test_slippage_and_fill_rate_combined():
+    """Slippage und Fill Rate wirken unabhängig."""
+    store = InMemoryPaperTradeStore()
+    exchange = PaperExchange(fill_rate=0.5, fee_rate=0.0, stores=store)
+    proposal = _make_proposal(
+        side="BUY",
+        entry_price=100.0,
+        stop_price=98.0,
+        target_price=104.0,
+        requested_quantity=100.0,
+        expected_slippage_bps=10.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=100.0)
+    # slippage = 0.10 -> actual_price = 100.10
+    # fill_rate = 0.5 -> actual_quantity = 100 * 0.5 = 50.0
+    assert trade.actual_price == pytest.approx(100.10)
+    assert trade.actual_quantity == pytest.approx(50.0)
+
+
+def test_slippage_short_large_price():
+    """Short-Slippage bei hohem Preis (z.B. ETH)."""
+    store = InMemoryPaperTradeStore()
+    exchange = PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=store)
+    proposal = _make_proposal(
+        side="SELL",
+        entry_price=3000.0,
+        stop_price=3100.0,
+        target_price=2900.0,
+        expected_slippage_bps=8.0,
+    )
+    trade = exchange.execute_order(proposal, current_price=3000.0)
+    # slippage = 3000 * 8 / 10000 = 2.4
+    # actual_price = 3000 - 2.4 = 2997.6
+    assert trade.actual_price == pytest.approx(2997.6)
