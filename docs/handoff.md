@@ -91,14 +91,23 @@ Phase 5 — Crypto Exchange Adapters + Shadow Mode: ✅ COMPLETE.
 
 Crypto Exchange Adapters:
 - `BaseCryptoExchangeAdapter` — abstrakte Basisklasse mit shared Signatur-Generierung,
-  HMAC-SHA256, httpx Client, `simulated=True` sicherer Standard
-- `BybitExchangeAdapter` — Bybit v5 API: `/private/usdt/general/order/place`,
-  Signatur via `HTTP-X-SIGN` Header, timestamp_ms, recv_window
-- `BitgetExchangeAdapter` — Bitget v2 API: `/api/v5/order/place`,
-  HMAC-SHA256 via `ACCESS-SIGN` Header, ISO-8601 timestamp, `productType=usdt-usd`
+  HMAC-SHA256, httpx Client, `simulated=True` sicherer Standard, optionaler `passphrase`-Parameter
+  für Bitget ACCESS-PASSPHRASE
+- `BybitExchangeAdapter` — Bybit V5 API: `/v5/order/create`,
+  Signatur via `X-BAPI-SIGN` Header (HMAC-SHA256 hex), `X-BAPI-TIMESTAMP`, `X-BAPI-API-KEY`,
+  `X-BAPI-RECV-WINDOW`. Signing: `timestamp + apiKey + recvWindow + jsonBody` (POST)
+- `BitgetExchangeAdapter` — Bitget V3 (UTA) API: `/api/v3/trade/place-order`,
+  HMAC-SHA256 via `ACCESS-SIGN` Header (base64-encoded), `ACCESS-TIMESTAMP`, `ACCESS-KEY`,
+  `ACCESS-PASSPHRASE` (identity-only, not used for HMAC). Signing: `timestamp + POST + path + body`
 - Alle Adapter: `submit_order()` → returns `order_id, status, filled_price, slippage, commission`
 - Alle Adapter: simulieren Fills wenn keine Credentials konfiguriert (`simulated=True`)
 - Keine echten Orders ohne explizite API-Schlüssel in `.env`
+
+Signatur-Fix (853387b): Korrigierte HMAC-SHA256-Signierung für beide Exchanges:
+- Bybit: war query string → jetzt `timestamp + apiKey + recvWindow + jsonBody`
+- Bitget: war hardcoded `GET /api/v3/spot/trade/order` mit hex-output → jetzt
+  `timestamp + POST + /api/v3/trade/place-order + body` mit base64-output
+- `_simulate`: fragile URL-Matching bereinigt (removierte `/spot/trade/order` die Cancel-URL trafen)
 
 Shadow Mode Logging:
 - `ShadowModeLogger` — speichert alle Shadow-Orders als `ShadowModeRecord` Pydantic Models
