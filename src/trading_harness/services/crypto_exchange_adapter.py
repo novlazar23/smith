@@ -349,6 +349,7 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         quantity: float,
         price: float,
         order_type: str = "MARKET",
+        exchange_name: str | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "symbol": symbol,
@@ -368,7 +369,7 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
             "raw": resp,
         }
 
-    def get_order_status(self, order_id: str) -> dict[str, Any]:
+    def get_order_status(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         resp = self._make_signed_request(
             "GET", self._get_order_url(order_id), params={"orderId": order_id}
         )
@@ -381,7 +382,7 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
             "raw": resp,
         }
 
-    def cancel_order(self, order_id: str) -> dict[str, Any]:
+    def cancel_order(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         resp = self._make_signed_request(
             "POST", self._cancel_order_url(), data={"orderId": order_id}
         )
@@ -681,6 +682,7 @@ class BinanceExchangeAdapter(BaseCryptoExchangeAdapter):
         quantity: float,
         price: float,
         order_type: str = "MARKET",
+        exchange_name: str | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "symbol": symbol,
@@ -700,7 +702,7 @@ class BinanceExchangeAdapter(BaseCryptoExchangeAdapter):
             "raw": resp,
         }
 
-    def get_order_status(self, order_id: str) -> dict[str, Any]:
+    def get_order_status(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         resp = self._make_signed_request(
             "GET", self._get_order_url(order_id), params={"orderId": order_id}
         )
@@ -711,7 +713,7 @@ class BinanceExchangeAdapter(BaseCryptoExchangeAdapter):
             "raw": resp,
         }
 
-    def cancel_order(self, order_id: str) -> dict[str, Any]:
+    def cancel_order(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         resp = self._make_signed_request(
             "DELETE", self._cancel_order_url(), params={"orderId": order_id}
         )
@@ -811,6 +813,7 @@ class CoinbaseExchangeAdapter(BaseCryptoExchangeAdapter):
         quantity: float,
         price: float,
         order_type: str = "MARKET",
+        exchange_name: str | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "product_id": symbol,
@@ -839,7 +842,7 @@ class CoinbaseExchangeAdapter(BaseCryptoExchangeAdapter):
             "raw": resp,
         }
 
-    def get_order_status(self, order_id: str) -> dict[str, Any]:
+    def get_order_status(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         resp = self._make_signed_request(
             "GET", self._get_order_url(order_id)
         )
@@ -850,7 +853,7 @@ class CoinbaseExchangeAdapter(BaseCryptoExchangeAdapter):
             "raw": resp,
         }
 
-    def cancel_order(self, order_id: str) -> dict[str, Any]:
+    def cancel_order(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         resp = self._make_signed_request(
             "DELETE", self._cancel_order_url(), params={"order_ids": [order_id]}
         )
@@ -866,7 +869,7 @@ class CoinbaseExchangeAdapter(BaseCryptoExchangeAdapter):
         resp = self._make_signed_request("GET", self._balance_url())
         self._validate_response(resp)
         accounts = resp.get("accounts", [])
-        base_currency = symbol.replace("USDT", "").replace("USD", "").replace("EUR", "") or "BTC"
+        base_currency = symbol.replace("USDT", "").replace("USD", "").replace("EUR", "") or symbol
         for account in accounts:
             if account.get("currency") == base_currency or account.get("currency") == symbol:
                 return float(account.get("balance", "0"))
@@ -994,18 +997,33 @@ class CryptoExecutionRouter(ExchangeAdapter):
             order_type=order_type,
         )
 
-    def get_order_status(self, order_id: str) -> dict[str, Any]:
-        # Status-Abfragen ohne Exchange-Name nicht möglich — geben stub zurück
-        return {"status": "UNKNOWN", "order_id": order_id}
+    def get_order_status(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
+        exchange = exchange_name or self._default
+        simulated, kwargs = self._resolve_adapter_state(exchange)
+        if simulated:
+            return {"status": "FILLED", "order_id": order_id}
+        adapter = _get_or_create(exchange, **kwargs)
+        return adapter.get_order_status(order_id)
 
-    def cancel_order(self, order_id: str) -> dict[str, Any]:
-        return {"success": False, "order_id": order_id}
+    def cancel_order(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
+        exchange = exchange_name or self._default
+        simulated, kwargs = self._resolve_adapter_state(exchange)
+        if simulated:
+            return {"success": True, "order_id": order_id}
+        adapter = _get_or_create(exchange, **kwargs)
+        return adapter.cancel_order(order_id)
+
+    def get_ticker(self, symbol: str) -> dict[str, float]:
+        """Holt Live-Preis über die Standard-Exchange."""
+        exchange = self._default
+        simulated, kwargs = self._resolve_adapter_state(exchange)
+        if simulated:
+            return {"bid": 50000.0, "ask": 50001.0, "last": 50000.5}
+        adapter = _get_or_create(exchange, **kwargs)
+        return adapter.get_ticker(symbol)
 
     def get_balance(self, symbol: str) -> float:
         return 100000.0
-
-    def get_ticker(self, symbol: str) -> dict[str, float]:
-        return {"bid": 50000.0, "ask": 50001.0, "last": 50000.5}
 
     def close(self) -> None:
         for adapter in _REGISTRY.values():

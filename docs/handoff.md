@@ -164,6 +164,49 @@ Dynamic Credential Loading (Phase 7): CryptoExecutionRouter prüft Credentials p
 - `crypto_status()` zeigt `credential_states` dict: `{exchange: "LIVE" | "SIMULATED"}`
 - `router.close()` cleared `_REGISTRY` und `_adapter_state`
 
+Phase 8 — Order Status/Cancel Delegation via Exchange Name: ✅ COMPLETE.
+- `LiveExecutionService.submit_order()` akzeptiert jetzt `exchange_name: str | None` Parameter,
+  leitet an Router/Adapter weiter
+- `LiveExecutionService.get_order_status()` — Pipeline-geschützt (KillSwitch, NetworkPolicy),
+  delegiert an `ExchangeAdapter.get_order_status(order_id, exchange_name)`
+- `LiveExecutionService.cancel_order()` — Pipeline-geschützt, delegiert an
+  `ExchangeAdapter.cancel_order(order_id, exchange_name)`
+- Neue API Endpunkte:
+  - `GET /execution/crypto/status/{order_id}` — Order-Status via Pipeline (Read-Key)
+  - `DELETE /execution/crypto/cancel/{order_id}` — Order-Cancel via Pipeline (Trade-Key)
+  - `POST /execution/crypto/submit` Payload: optionaler `exchange_name` Feld
+- Alle Adapter-Signaturen erweitert: `submit_order`, `get_order_status`, `cancel_order`
+  akzeptieren jetzt `exchange_name: str | None = None`
+- `ExchangeAdapterError` als spezifischer Exception-Handler in `LiveExecutionService`
+- `LiveExecutionService._get_exchange_url()` — erweitert für `CryptoExecutionRouter`
+  (`https://api.*/*` Pattern für Network Policy)
+- 8 neue Tests: router status/cancel/ticker simulation, API crypto submit/status/cancel routes
+- 592 Tests grün, ruff + mypy clean
+
+Phase 9 — HTTP-Level Adapter Validation Tests: ✅ COMPLETE.
+39 neue Tests (433 Zeilen), 628 Tests gesamt grün, ruff + mypy clean.
+
+HTTP-Level Request Construction:
+- Bybit: 7 Tests — submit_order/get_order/cancel/balance/ticker URLs, Signature String Format, Headers
+- Bitget: 7 Tests — submit_order/get_order/cancel/balance/ticker URLs, HMAC base64-Signierung, Headers
+- Binance: 5 Tests — submit_order/ticker/balance URLs, query-param signature, X-MBX-APIKEY header
+- Coinbase: 4 Tests — submit_order/ticker/balance URLs, CB-ACCESS-KEY headers
+- Gesamte URL-Korrektheit aller Adapter-Methoden verifiziert ohne echte Credentials
+
+Retry Behavior:
+- RateLimitError (HTTP 429): retry 3x dann Raise, call_count verifiziert
+- ConnectionError (HTTP 5xx): retry 3x dann Raise, backoff verifiziert
+- Retry-then-Success: 429 → 200 funktioniert korrekt, call_count == 2
+- Auth-Failure (HTTP 401): sofortiger Fehler, kein Retry, call_count == 1
+
+Response Parsing — Exchange-spezifisch:
+- Bybit: order_id aus response, walletBalance[0].totalBalance parsing, ticker bidPx/askPx/lastPx
+- Bitget: data-wrapper parsing, balance response format
+- Binance: flat response `{code, msg, orderId}`, invalid code → ResponseValidationError
+- Coinbase: order_id aus response, accounts array parsing, USDT symbol handling fixed (fallback war "BTC" → jetzt symbol)
+
+Bugfix: Coinbase `get_balance` base_currency fallback — vorher `or "BTC"` (fand BTC-Balance 1.5 für USDT-Request), jetzt `or symbol` (korrekte USDT-Balance 100000).
+
 Mypy fixes (pre-existing):
 - `order_deduplicator.py:42` — `maxlen` kann `None` sein (deque ohne maxlen)
 - `portfolio_tracker.py:13,17,19` — Protocol-Methoden mit `...` als Body
@@ -197,14 +240,11 @@ Risk Engine Hardening (R5.2–R5.4):
 
 Nächste Schritte (in Reihenfolge):
 
-1. **Exchange-Adapter Integration** — echte API-Integration für Bybit/Bitget (R5.7–R5.14)
-   - Order-Filling-Logik statt Simulation
+1. **Exchange-Adapter Live-Integration** — echte API-Orders für Bybit/Bitget/Binance/Coinbase
    - Response-Validierung gegen Exchange-Schemas
    - Rate-Limit-Error-Handling (429, timeout retries)
    - Connection-Error-Handling (5xx, DNS, SSL)
-   - Live-Execution-Flag muss `true` sein (aktuell `default: false`)
-
-2. **Additional Exchange Adapters** — Binance und Coinbase via Adapter-Pattern
+   - `simulated=False` Tests mit mocked httpx responses
 
 3. **Live Execution Safety Gate** — explizite Freigabe erforderlich
    - Audit-Log aller Live-Transaktionen

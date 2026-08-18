@@ -302,3 +302,101 @@ class TestExecutionServiceLifecycle:
         # Alle decision_ids vorhanden
         decision_ids = {log["decision_id"] for log in logs}
         assert decision_ids == {f"dec-{i}" for i in range(5)}
+
+
+class TestCryptoExecutionEndpoints:
+    """Tests für Crypto Execution API Routes."""
+
+    def test_crypto_status_shows_credentials(self):
+        """Crypto-Router Status zeigt Credential-Zustände."""
+        resp = client.get("/execution/crypto/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["router_active"] is True
+        assert "credential_states" in data
+        for exchange in ["bybit", "bitget", "binance", "coinbase"]:
+            assert exchange in data["credential_states"]
+
+    def test_crypto_price(self):
+        """Crypto-Preis-Endpunkt gibt Ticker zurück."""
+        resp = client.get("/execution/crypto/price/BTCUSDT")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["symbol"] == "BTCUSDT"
+        assert "bid" in data
+        assert "ask" in data
+        assert "last" in data
+
+    def test_crypto_submit_min_capital_rejected(self):
+        """Crypto-Order mit zu wenig Kapital wird abgelehnt (nach Live-Disabled-Check)."""
+        resp = client.post(
+            "/execution/crypto/submit",
+            json={
+                "decision_id": f"dec-{uuid.uuid4().hex[:8]}",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 0.001,
+                "price": 50000.0,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "REJECTED"
+        # Pipeline prüft live_execution_enabled zuerst
+        assert "LIVE_EXECUTION_DISABLED" in data.get("error", "")
+
+    def test_crypto_submit_live_disabled(self):
+        """Crypto-Order wird abgelehnt wenn Live Execution deaktiviert."""
+        resp = client.post(
+            "/execution/crypto/submit",
+            json={
+                "decision_id": f"dec-{uuid.uuid4().hex[:8]}",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 1.0,
+                "price": 50000.0,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "REJECTED"
+        assert "LIVE_EXECUTION_DISABLED" in data.get("error", "")
+
+    def test_crypto_status_order(self):
+        """Crypto Order-Status Endpunkt gibt Status zurück."""
+        resp = client.get(f"/execution/crypto/status/{uuid.uuid4().hex[:8]}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "status" in data
+        assert "order_id" in data
+        # Da Live Execution deaktiviert, sollte REJECTED kommen
+        assert data["status"] == "REJECTED"
+        assert "LIVE_EXECUTION_DISABLED" in data.get("error", "")
+
+    def test_crypto_cancel_order(self):
+        """Crypto Cancel Order Endpunkt gibt Ergebnis zurück."""
+        resp = client.delete(f"/execution/crypto/cancel/{uuid.uuid4().hex[:8]}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "success" in data
+        assert "order_id" in data
+        # Da Live Execution deaktiviert, sollte REJECTED kommen
+        assert data.get("error") == "LIVE_EXECUTION_DISABLED"
+
+    def test_crypto_submit_with_exchange_name(self):
+        """Crypto-Submit akzeptiert exchange_name im Payload."""
+        resp = client.post(
+            "/execution/crypto/submit",
+            json={
+                "decision_id": f"dec-{uuid.uuid4().hex[:8]}",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 1.0,
+                "price": 50000.0,
+                "exchange_name": "binance",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "REJECTED"
+        assert "LIVE_EXECUTION_DISABLED" in data.get("error", "")

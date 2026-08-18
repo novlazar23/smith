@@ -771,9 +771,44 @@ def crypto_submit(payload: dict) -> dict:
             side=payload["side"],
             quantity=float(payload["quantity"]),
             price=float(payload["price"]),
+            exchange_name=payload.get("exchange_name"),
         )
     except (KeyError, ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
+
+
+@router.get(
+    "/execution/crypto/price/{symbol}",
+    dependencies=[Depends(require_read_key)],
+)
+def crypto_get_price(symbol: str) -> dict:
+    """Live-Preis vom Crypto-Router abrufen."""
+    result = _crypto_router.get_ticker(symbol)
+    return {"symbol": symbol, **result}
+
+
+@router.get(
+    "/execution/crypto/status/{order_id}",
+    dependencies=[Depends(require_read_key)],
+)
+def crypto_get_order_status(order_id: str, exchange_name: str | None = None) -> dict:
+    """Order-Status über die Pipeline abrufen."""
+    return crypto_execution_service.get_order_status(
+        order_id=order_id,
+        exchange_name=exchange_name,
+    )
+
+
+@router.delete(
+    "/execution/crypto/cancel/{order_id}",
+    dependencies=[Depends(require_trade_key)],
+)
+def crypto_cancel_order(order_id: str, exchange_name: str | None = None) -> dict:
+    """Order stornieren über die Pipeline."""
+    return crypto_execution_service.cancel_order(
+        order_id=order_id,
+        exchange_name=exchange_name,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -52,6 +52,7 @@ class PaperExchangeAdapter(ExchangeAdapter):
         quantity: float,
         price: float,
         order_type: str = "MARKET",
+        exchange_name: str | None = None,
     ) -> dict[str, Any]:
         """Erstellt ein TradeProposal aus den Adapter-Parametern und führt es
         via PaperExchange.execute_order() aus.
@@ -113,7 +114,7 @@ class PaperExchangeAdapter(ExchangeAdapter):
             "error": paper_trade.reject_reason,
         }
 
-    def get_order_status(self, order_id: str) -> dict[str, Any]:
+    def get_order_status(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         """Holt Order-Status via PaperExchange.get_trade().
 
         Returns dict with order_id, status, and trade details.
@@ -139,7 +140,7 @@ class PaperExchangeAdapter(ExchangeAdapter):
             "rejected_reason": trade.reject_reason,
         }
 
-    def cancel_order(self, order_id: str) -> dict[str, Any]:
+    def cancel_order(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         """Storniert Order via PaperExchange.cancel_trade().
 
         Nur Trades im CREATED/PENDING Status können storniert werden.

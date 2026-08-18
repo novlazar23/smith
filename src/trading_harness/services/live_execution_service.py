@@ -18,7 +18,11 @@ from pydantic import BaseModel, Field
 
 from trading_harness.models import TradeProposal
 from trading_harness.services.credential_manager import CredentialManager
-from trading_harness.services.exchange_adapter import ExchangeAdapter, StubExchangeAdapter
+from trading_harness.services.exchange_adapter import (
+    ExchangeAdapter,
+    ExchangeAdapterError,
+    StubExchangeAdapter,
+)
 from trading_harness.services.kill_switch import KillSwitch
 from trading_harness.services.network_policy import NetworkPolicy
 from trading_harness.services.order_deduplicator import OrderDeduplicator
@@ -93,6 +97,7 @@ class LiveExecutionService:
         side: str,
         quantity: float,
         price: float,
+        exchange_name: str | None = None,
     ) -> dict[str, Any]:
         """Order durch den Execution Pipeline schicken.
 
@@ -238,6 +243,7 @@ class LiveExecutionService:
                 quantity=quantity,
                 price=price,
                 order_type="MARKET",
+                exchange_name=exchange_name,
             )
             order_id = result.get("order_id")
             status = result.get("status", "ERROR")
@@ -280,7 +286,8 @@ class LiveExecutionService:
         elif "coinbase" in adapter_type:
             return "https://api.coinbase.com/*"
         elif "crypto" in adapter_type:
-            return "https://*"
+            # CryptoExecutionRouter: allow all 4 exchange domains
+            return "https://api.*/*"
         return "*"
 
     def activate_live(self) -> None:
@@ -350,3 +357,41 @@ class LiveExecutionService:
             "risk_max_position_size": risk_max_position_size,
             "timestamp": log.timestamp.isoformat(),
         }
+
+    def get_order_status(
+        self,
+        order_id: str,
+        exchange_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Order-Status durch die Pipeline (KillSwitch, NetworkPolicy)."""
+        if not self._enabled:
+            return {"status": "REJECTED", "order_id": order_id, "error": "LIVE_EXECUTION_DISABLED"}
+        if self._kill_switch.is_active():
+            return {"status": "REJECTED", "order_id": order_id, "error": "KILL_SWITCH_ACTIVE"}
+        if self._network_policy:
+            exchange_url = self._get_exchange_url()
+            if not self._network_policy.is_allowed("GET", exchange_url):
+                return {"status": "REJECTED", "order_id": order_id, "error": "NETWORK_POLICY_VIOLATION"}
+        try:
+            return self._exchange_adapter.get_order_status(order_id, exchange_name=exchange_name)
+        except ExchangeAdapterError as exc:
+            return {"status": "ERROR", "order_id": order_id, "error": str(exc)}
+
+    def cancel_order(
+        self,
+        order_id: str,
+        exchange_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Order stornieren durch die Pipeline (KillSwitch, NetworkPolicy)."""
+        if not self._enabled:
+            return {"success": False, "order_id": order_id, "error": "LIVE_EXECUTION_DISABLED"}
+        if self._kill_switch.is_active():
+            return {"success": False, "order_id": order_id, "error": "KILL_SWITCH_ACTIVE"}
+        if self._network_policy:
+            exchange_url = self._get_exchange_url()
+            if not self._network_policy.is_allowed("DELETE", exchange_url):
+                return {"success": False, "order_id": order_id, "error": "NETWORK_POLICY_VIOLATION"}
+        try:
+            return self._exchange_adapter.cancel_order(order_id, exchange_name=exchange_name)
+        except ExchangeAdapterError as exc:
+            return {"success": False, "order_id": order_id, "error": str(exc)}

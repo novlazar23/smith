@@ -72,6 +72,7 @@ class ShadowModeLogger:
         quantity: float,
         price: float,
         order_type: str = "MARKET",
+        exchange_name: str | None = None,
     ) -> dict[str, Any]:
         """Shadow-Mode submit_order — loggt Order, gibt simulierte Antwort."""
         record = self.log_order(
@@ -213,11 +214,12 @@ class ShadowModeAdapter(ExchangeAdapter):
         quantity: float,
         price: float,
         order_type: str = "MARKET",
+        exchange_name: str | None = None,
     ) -> dict[str, Any]:
         if self._delegate:
             try:
                 return self._delegate.submit_order(
-                    symbol, side, quantity, price, order_type
+                    symbol, side, quantity, price, order_type, exchange_name=exchange_name
                 )
             except ExchangeAdapterError as exc:
                 logger.warning("Delegate failed, falling back to shadow: %s", exc)
@@ -225,14 +227,14 @@ class ShadowModeAdapter(ExchangeAdapter):
             symbol, side, quantity, price, order_type
         )
 
-    def get_order_status(self, order_id: str) -> dict[str, Any]:
+    def get_order_status(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         if self._delegate:
-            return self._delegate.get_order_status(order_id)
+            return self._delegate.get_order_status(order_id, exchange_name=exchange_name)
         return {"status": "UNKNOWN", "error": "NO_DELEGATE"}
 
-    def cancel_order(self, order_id: str) -> dict[str, Any]:
+    def cancel_order(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         if self._delegate:
-            return self._delegate.cancel_order(order_id)
+            return self._delegate.cancel_order(order_id, exchange_name=exchange_name)
         return {"success": False, "error": "NO_DELEGATE"}
 
     def get_balance(self, symbol: str) -> float:

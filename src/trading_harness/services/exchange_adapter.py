@@ -62,6 +62,7 @@ class ExchangeAdapter(ABC):
         quantity: float,
         price: float,
         order_type: str = "MARKET",
+        exchange_name: str | None = None,
     ) -> dict[str, Any]:
         """Order an die Exchange senden.
 
@@ -71,6 +72,7 @@ class ExchangeAdapter(ABC):
             quantity: Order quantity
             price: Order price (0 for market orders)
             order_type: "MARKET", "LIMIT", etc.
+            exchange_name: Optional exchange name for routing
 
         Returns:
             Dict mit order_id, status, und optional error details
@@ -81,11 +83,12 @@ class ExchangeAdapter(ABC):
         ...
 
     @abstractmethod
-    def get_order_status(self, order_id: str) -> dict[str, Any]:
+    def get_order_status(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         """Status einer Order abfragen.
 
         Args:
             order_id: ID der Order von der Exchange
+            exchange_name: Optional exchange name for routing
 
         Returns:
             Dict mit filled_quantity, remaining_quantity, status
@@ -93,11 +96,12 @@ class ExchangeAdapter(ABC):
         ...
 
     @abstractmethod
-    def cancel_order(self, order_id: str) -> dict[str, Any]:
+    def cancel_order(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         """Order stornieren.
 
         Args:
             order_id: ID der Order von der Exchange
+            exchange_name: Optional exchange name for routing
 
         Returns:
             Dict mit success boolean und error details
@@ -146,6 +150,7 @@ class StubExchangeAdapter(ExchangeAdapter):
         quantity: float,
         price: float,
         order_type: str = "MARKET",
+        exchange_name: str | None = None,
     ) -> dict[str, Any]:
         return {
             "order_id": None,
@@ -153,10 +158,10 @@ class StubExchangeAdapter(ExchangeAdapter):
             "error": "NO_EXCHANGE_ADAPTER_IMPLEMENTED",
         }
 
-    def get_order_status(self, order_id: str) -> dict[str, Any]:
+    def get_order_status(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         return {"status": "NOT_IMPLEMENTED", "error": "NO_EXCHANGE_ADAPTER_IMPLEMENTED"}
 
-    def cancel_order(self, order_id: str) -> dict[str, Any]:
+    def cancel_order(self, order_id: str, exchange_name: str | None = None) -> dict[str, Any]:
         return {"success": False, "error": "NO_EXCHANGE_ADAPTER_IMPLEMENTED"}
 
     def get_balance(self, symbol: str) -> float:

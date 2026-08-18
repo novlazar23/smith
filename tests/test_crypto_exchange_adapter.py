@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from trading_harness.services.crypto_exchange_adapter import (
@@ -466,3 +471,430 @@ class TestCryptoExecutionRouter:
         router.close()
         # Nach close() sollte State leer sein
         assert "binance" not in router._adapter_state
+
+    def test_router_get_order_status_simulated(self):
+        """Router get_order_status simuliert ohne Adapter."""
+        from trading_harness.services.crypto_exchange_adapter import CryptoExecutionRouter
+
+        router = CryptoExecutionRouter(default_exchange="bybit", credential_manager=None)
+        result = router.get_order_status("order-456")
+        assert result["status"] == "FILLED"
+        assert result["order_id"] == "order-456"
+        router.close()
+
+    def test_router_cancel_order_simulated(self):
+        """Router cancel_order simuliert ohne Adapter."""
+        from trading_harness.services.crypto_exchange_adapter import CryptoExecutionRouter
+
+        router = CryptoExecutionRouter(default_exchange="bybit", credential_manager=None)
+        result = router.cancel_order("order-789")
+        assert result["success"] is True
+        assert result["order_id"] == "order-789"
+        router.close()
+
+    def test_router_get_ticker_simulated(self):
+        """Router get_ticker simuliert ohne Adapter."""
+        from trading_harness.services.crypto_exchange_adapter import CryptoExecutionRouter
+
+        router = CryptoExecutionRouter(default_exchange="bybit", credential_manager=None)
+        result = router.get_ticker("BTCUSDT")
+        assert result["bid"] == 50000.0
+        assert result["ask"] == 50001.0
+        assert result["last"] == 50000.5
+        router.close()
+
+
+# ===========================================================================
+# HTTP-Level Adapter Tests — Request Construction
+# ===========================================================================
+
+
+class TestBybitRequestConstruction:
+    """Bybit adapter request structure verification."""
+
+    def test_submit_order_url(self):
+        """Bybit submit_order verwendet korrekte URL."""
+        adapter = BybitExchangeAdapter(simulated=True)
+        url = adapter._submit_order_url()
+        assert url == "https://api.bybit.com/v5/order/create"
+        adapter.close()
+
+    def test_get_order_url(self):
+        """Bybit get_order_status verwendet korrekte URL."""
+        adapter = BybitExchangeAdapter(simulated=True)
+        url = adapter._get_order_url("order-123")
+        assert url == "https://api.bybit.com/v5/order/realtime"
+        adapter.close()
+
+    def test_cancel_order_url(self):
+        """Bybit cancel_order verwendet korrekte URL."""
+        adapter = BybitExchangeAdapter(simulated=True)
+        url = adapter._cancel_order_url()
+        assert url == "https://api.bybit.com/v5/order/cancel"
+        adapter.close()
+
+    def test_balance_url(self):
+        """Bybit get_balance verwendet korrekte URL."""
+        adapter = BybitExchangeAdapter(simulated=True)
+        url = adapter._balance_url()
+        assert url == "https://api.bybit.com/v5/account/wallet"
+        adapter.close()
+
+    def test_ticker_url(self):
+        """Bybit get_ticker verwendet korrekte URL."""
+        adapter = BybitExchangeAdapter(simulated=True)
+        url = adapter._ticker_url("BTCUSDT")
+        assert url == "https://api.bybit.com/v5/market/tickers"
+        adapter.close()
+
+    def test_signature_string_format(self):
+        """Bybit signiert timestamp + apiKey + recvWindow + jsonBody."""
+        adapter = BybitExchangeAdapter(
+            api_key="test-key", api_secret="test-secret", simulated=False
+        )
+        timestamp = "1700000000000"
+        data = {"symbol": "BTCUSDT", "side": "BUY", "qty": "1.0"}
+        sig = adapter._sign_request({}, timestamp, data, "/v5/order/create")
+        # Signiert: timestamp + apiKey + recvWindow + jsonBody
+        body_str = json.dumps(data, separators=(",", ":"))
+        expected_string = f"{timestamp}test-key5000{body_str}"
+        expected = hmac.new(
+            b"test-secret", expected_string.encode(), hashlib.sha256
+        ).hexdigest()
+        assert sig["X-BAPI-SIGN"] == expected
+        assert sig["X-BAPI-TIMESTAMP"] == timestamp
+        adapter.close()
+
+    def test_headers_include_bapiKey(self):
+        """Bybit Headers enthalten X-BAPI-API-KEY."""
+        adapter = BybitExchangeAdapter(
+            api_key="my-key", api_secret="secret", simulated=False
+        )
+        headers = adapter._build_headers()
+        assert headers["X-BAPI-API-KEY"] == "my-key"
+        assert "X-BAPI-RECV-WINDOW" in headers
+        assert headers["Content-Type"] == "application/json"
+        adapter.close()
+
+
+class TestBitgetRequestConstruction:
+    """Bitget adapter request structure verification."""
+
+    def test_submit_order_url(self):
+        """Bitget submit_order verwendet korrekte URL."""
+        adapter = BitgetExchangeAdapter(simulated=True)
+        url = adapter._submit_order_url()
+        assert url == "https://api.bitget.com/api/v3/trade/place-order"
+        adapter.close()
+
+    def test_get_order_url(self):
+        """Bitget get_order_status verwendet korrekte URL."""
+        adapter = BitgetExchangeAdapter(simulated=True)
+        url = adapter._get_order_url("order-123")
+        assert url == "https://api.bitget.com/api/v2/spot/order/detail"
+        adapter.close()
+
+    def test_cancel_order_url(self):
+        """Bitget cancel_order verwendet korrekte URL."""
+        adapter = BitgetExchangeAdapter(simulated=True)
+        url = adapter._cancel_order_url()
+        assert url == "https://api.bitget.com/api/v3/spot/order/cancel"
+        adapter.close()
+
+    def test_balance_url(self):
+        """Bitget get_balance verwendet korrekte URL."""
+        adapter = BitgetExchangeAdapter(simulated=True)
+        url = adapter._balance_url()
+        assert url == "https://api.bitget.com/api/v2/spot/account/balance"
+        adapter.close()
+
+    def test_ticker_url(self):
+        """Bitget get_ticker verwendet korrekte URL."""
+        adapter = BitgetExchangeAdapter(simulated=True)
+        url = adapter._ticker_url("BTCUSDT")
+        assert url == "https://api.bitget.com/api/v2/spot/market/ticker"
+        adapter.close()
+
+    def test_signature_uses_path(self):
+        """Bitget signiert timestamp + POST + requestPath + body."""
+        adapter = BitgetExchangeAdapter(
+            api_key="test-key", api_secret="test-secret", simulated=False
+        )
+        timestamp = "1700000000000"
+        data = {"symbol": "BTCUSDT", "side": "BUY", "qty": "1.0"}
+        path = "/api/v3/trade/place-order"
+        sig = adapter._sign_request({}, timestamp, data, path)
+        body_str = json.dumps(data, separators=(",", ":"))
+        prehash = f"{timestamp}POST{path}{body_str}"
+        digest = hmac.new(
+            b"test-secret", prehash.encode(), hashlib.sha256
+        ).digest()
+        expected = base64.b64encode(digest).decode("utf-8")
+        assert sig["ACCESS-SIGN"] == expected
+        assert sig["ACCESS-TIMESTAMP"] == timestamp
+        adapter.close()
+
+    def test_headers_include_access_keys(self):
+        """Bitget Headers enthalten ACCESS-KEY."""
+        adapter = BitgetExchangeAdapter(
+            api_key="my-key", api_secret="secret", simulated=False
+        )
+        headers = adapter._build_headers()
+        assert headers["ACCESS-KEY"] == "my-key"
+        assert headers["ACCESS-PASSPHRASE"] == "secret"
+        assert headers["Content-Type"] == "application/json"
+        adapter.close()
+
+
+class TestBinanceRequestConstruction:
+    """Binance adapter request structure verification."""
+
+    def test_submit_order_url(self):
+        """Binance submit_order verwendet korrekte URL."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        url = adapter._submit_order_url()
+        assert url == "https://api.binance.com/api/v4/trade/order"
+        adapter.close()
+
+    def test_ticker_url(self):
+        """Binance get_ticker verwendet korrekte URL."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        url = adapter._ticker_url("BTCUSDT")
+        assert url == "https://api.binance.com/api/v4/ticker/price"
+        adapter.close()
+
+    def test_balance_url(self):
+        """Binance get_balance verwendet korrekte URL."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        url = adapter._balance_url()
+        assert url == "https://api.binance.com/api/v4/account"
+        adapter.close()
+
+    def test_signature_appended_as_query_param(self):
+        """Binance signiert timestamp + body als query-param."""
+        adapter = BinanceExchangeAdapter(
+            api_key="test-key", api_secret="test-secret", simulated=False
+        )
+        timestamp = "1700000000000"
+        data = {"symbol": "BTCUSDT", "side": "BUY", "qty": "1.0"}
+        sig = adapter._sign_request({}, timestamp, data, "/api/v4/trade/order")
+        # Signiert: timestamp=...&symbol=...&side=...&qty=...
+        body_str = json.dumps(data, separators=(",", ":"))
+        signature_string = f"timestamp={timestamp}&{body_str}"
+        expected = hmac.new(
+            b"test-secret", signature_string.encode(), hashlib.sha256
+        ).hexdigest()
+        assert sig == expected
+        adapter.close()
+
+    def test_headers_include_api_key(self):
+        """Binance Headers enthalten X-MBX-APIKEY."""
+        adapter = BinanceExchangeAdapter(
+            api_key="my-key", api_secret="secret", simulated=False
+        )
+        headers = adapter._build_headers()
+        assert headers["X-MBX-APIKEY"] == "my-key"
+        assert headers["Content-Type"] == "application/x-www-form-urlencoded"
+        adapter.close()
+
+
+class TestCoinbaseRequestConstruction:
+    """Coinbase adapter request structure verification."""
+
+    def test_submit_order_url(self):
+        """Coinbase submit_order verwendet korrekte URL."""
+        adapter = CoinbaseExchangeAdapter(simulated=True)
+        url = adapter._submit_order_url()
+        assert url == "https://api.coinbase.com/api/v3/brokerage/orders"
+        adapter.close()
+
+    def test_ticker_url(self):
+        """Coinbase get_ticker verwendet korrekte URL."""
+        adapter = CoinbaseExchangeAdapter(simulated=True)
+        url = adapter._ticker_url("BTC-USDT")
+        assert url == "https://api.coinbase.com/api/v3/brokerage/products/BTC-USDT/ticker"
+        adapter.close()
+
+    def test_balance_url(self):
+        """Coinbase get_balance verwendet korrekte URL."""
+        adapter = CoinbaseExchangeAdapter(simulated=True)
+        url = adapter._balance_url()
+        assert url == "https://api.coinbase.com/api/v3/brokerage/accounts"
+        adapter.close()
+
+    def test_headers_include_cb_keys(self):
+        """Coinbase Headers enthalten CB-ACCESS-SIGN etc."""
+        adapter = CoinbaseExchangeAdapter(
+            api_key="my-key", api_secret="secret", simulated=False
+        )
+        headers = adapter._build_headers()
+        assert headers["CB-ACCESS-KEY"] == "my-key"
+        assert headers["Content-Type"] == "application/json"
+        adapter.close()
+
+
+# ===========================================================================
+# Retry Behavior — Rate Limits & Transient Errors
+# ===========================================================================
+
+
+class TestRetryBehavior:
+    """Tests für Retry-Logik bei transienten Fehlern."""
+
+    def _make_client(self, responses: list[tuple[int, dict]]) -> MagicMock:
+        """Erstellt einen gemockten httpx Client mit sequenziellen Responses."""
+        mock_responses = []
+        for status, body in responses:
+            mock_resp = MagicMock(spec=httpx.Response)
+            mock_resp.status_code = status
+            mock_resp.json.return_value = body
+            mock_resp.text = json.dumps(body)
+            mock_responses.append(mock_resp)
+
+        mock_client = MagicMock()
+        mock_client.post.side_effect = mock_responses
+        mock_client.get.side_effect = mock_responses
+        return mock_client
+
+    def test_rate_limit_retries_3_times(self):
+        """HTTP 429 retry 3x dann Raise."""
+        from trading_harness.services.exchange_adapter import RateLimitError
+
+        bybit = BybitExchangeAdapter(
+            api_key="key", api_secret="secret", simulated=False
+        )
+        mock_client = self._make_client([(429, {}), (429, {}), (429, {})])
+        bybit._client = mock_client
+        with pytest.raises(RateLimitError, match="attempt 3/3"):
+            bybit._make_signed_request("POST", "https://api.bybit.com/v5/order/create", data={})
+        assert bybit._client.post.call_count == 3
+        bybit.close()
+
+    def test_500_retries_3_times(self):
+        """HTTP 500 retry 3x dann Raise."""
+        bybit = BybitExchangeAdapter(
+            api_key="key", api_secret="secret", simulated=False
+        )
+        mock_client = self._make_client([(502, {}), (503, {}), (500, {})])
+        bybit._client = mock_client
+        with pytest.raises(Exception, match="Server error .* after 3 retries"):
+            bybit._make_signed_request("GET", "https://api.bybit.com/v5/market/tickers")
+        assert bybit._client.get.call_count == 3
+        bybit.close()
+
+    def test_rate_limit_then_success(self):
+        """Retry bei 429, dann 200 Erfolg."""
+        bybit = BybitExchangeAdapter(
+            api_key="key", api_secret="secret", simulated=False
+        )
+        mock_client = self._make_client([
+            (429, {}),
+            (200, {"retCode": "0", "retMsg": "success", "result": {}}),
+        ])
+        bybit._client = mock_client
+        result = bybit._make_signed_request("POST", "https://api.bybit.com/v5/order/create", data={})
+        assert result["retCode"] == "0"
+        assert bybit._client.post.call_count == 2
+        bybit.close()
+
+    def test_auth_failure_no_retry(self):
+        """401/403 wirft sofort, kein Retry."""
+        from trading_harness.services.exchange_adapter import AuthenticationError
+
+        bybit = BybitExchangeAdapter(
+            api_key="key", api_secret="secret", simulated=False
+        )
+        mock_client = self._make_client([(401, {"error": "invalid key"})])
+        bybit._client = mock_client
+        with pytest.raises(AuthenticationError, match="Authentication failed"):
+            bybit._make_signed_request("GET", "https://api.bybit.com/v5/order/realtime")
+        assert bybit._client.get.call_count == 1
+        bybit.close()
+
+
+# ===========================================================================
+# Response Parsing — Exchange-Specific Formats
+# ===========================================================================
+
+
+class TestBybitResponseParsing:
+    """Bybit response parsing tests."""
+
+    def test_submit_order_response_parsing(self):
+        """Bybit parse order_id aus response."""
+        adapter = BybitExchangeAdapter(simulated=True)
+        result = adapter.submit_order("BTCUSDT", "BUY", 1.0, 50000.0)
+        assert result["status"] == "FILLED"
+        assert "order_id" in result
+        adapter.close()
+
+    def test_balance_parsing_bybit_format(self):
+        """Bybit walletBalance[0].totalBalance parsing."""
+        adapter = BybitExchangeAdapter(simulated=True)
+        balance = adapter.get_balance("USDT")
+        assert balance == 100000.0
+        adapter.close()
+
+    def test_ticker_parsing_bybit_format(self):
+        """Bybit ticker parsing mit bidPx/askPx/lastPx."""
+        adapter = BybitExchangeAdapter(simulated=True)
+        ticker = adapter.get_ticker("BTCUSDT")
+        assert ticker["bid"] == 50000.0
+        assert ticker["ask"] == 50001.0
+        adapter.close()
+
+
+class TestBitgetResponseParsing:
+    """Bitget response parsing tests."""
+
+    def test_order_status_data_wrapper(self):
+        """Bitget Order-Status: data-wrapper wird korrekt geparst."""
+        adapter = BitgetExchangeAdapter(simulated=True)
+        result = adapter.get_order_status("order-123")
+        assert result["status"] == "FILLED"
+        adapter.close()
+
+    def test_balance_parsing_bitget_format(self):
+        """Bitget Balance Parsing."""
+        adapter = BitgetExchangeAdapter(simulated=True)
+        balance = adapter.get_balance("USDT")
+        assert balance == 100000.0
+        adapter.close()
+
+
+class TestBinanceResponseParsing:
+    """Binance response parsing tests."""
+
+    def test_submit_order_flat_response(self):
+        """Binance flat response: {code, msg, orderId}."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        result = adapter.submit_order("BTCUSDT", "BUY", 1.0, 50000.0)
+        assert result["status"] == "FILLED"
+        adapter.close()
+
+    def test_invalid_code_raises(self):
+        """Binance code != 0 wirft ResponseValidationError."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        with pytest.raises(ResponseValidationError) as exc_info:
+            adapter._validate_response({"code": -1002, "msg": "Unknown service"})
+        assert exc_info.value.code == "-1002"
+        adapter.close()
+
+
+class TestCoinbaseResponseParsing:
+    """Coinbase response parsing tests."""
+
+    def test_order_response_parsing(self):
+        """Coinbase order_id aus response."""
+        adapter = CoinbaseExchangeAdapter(simulated=True)
+        result = adapter.submit_order("BTC-USDT", "BUY", 1.0, 50000.0)
+        assert result["status"] == "FILLED"
+        assert "order_id" in result
+        adapter.close()
+
+    def test_balance_accounts_format(self):
+        """Coinbase accounts array parsing."""
+        adapter = CoinbaseExchangeAdapter(simulated=True)
+        balance = adapter.get_balance("USDT")
+        assert balance == 100000.0
+        adapter.close()
