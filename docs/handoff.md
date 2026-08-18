@@ -268,11 +268,11 @@ Risk Engine Hardening (R5.2–R5.4):
 Nächste Schritte (in Reihenfolge):
 
 1. **Exchange-Adapter Live-Integration** — echte API-Orders für Bybit/Bitget/Binance/Coinbase
-   - Response-Validierung gegen Exchange-Schemas
-   - Rate-Limit-Error-Handling (429, timeout retries)
-   - Connection-Error-Handling (5xx, DNS, SSL)
-   - `simulated=False` Tests mit mocked httpx responses
-   - ✅ PARTIALLY DONE: Retry Behavior und HTTP-Error Handling getestet (Phase 9/10)
+   - Response-Validierung gegen Exchange-Schemas ✅ DONE: Pydantic Models für alle 4 Adapter (Bybit V5, Bitget V3, Binance V4, Coinbase Pro); `_validate_response` mit ExchangeResponseError + 3-Fallback-Fallback (msg→retMsg→message); 35 Tests (132 adapter tests total, 680 project total)
+   - Rate-Limit-Error-Handling (429, timeout retries) ✅ DONE: Phase 10 — HTTP 429 retry mit exponentiellem Backoff, ConnectionError mit Nachricht, Timeout-Handling
+   - Connection-Error-Handling (5xx, DNS, SSL) ✅ DONE: ExchangeAdapterError subclasses (ConnectionError, TimeoutError, RateLimitError, ResponseValidationError), BaseCryptoExchangeAdapter shared retry logic
+   - `simulated=False` Tests mit mocked httpx responses 🚧 TODO: No real API calls (simulated=True only for safety)
+   - ✅ PHASE 9/10/11 COMPLETE: Retry Behavior, HTTP-Error Handling, Schema Validation, Error Class Hierarchy, Dynamic Credential Loading
 
 3. **Live Execution Safety Gate** — explizite Freigabe erforderlich
    - Audit-Log aller Live-Transaktionen
