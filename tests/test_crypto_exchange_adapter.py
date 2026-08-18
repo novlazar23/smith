@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 from trading_harness.services.crypto_exchange_adapter import (
     BitgetExchangeAdapter,
     BybitExchangeAdapter,
 )
+from trading_harness.services.exchange_adapter import ExchangeAdapterError, ResponseValidationError
 
 
 class TestBybitExchangeAdapter:
@@ -129,3 +134,103 @@ class TestBaseCryptoExchangeAdapter:
 
         bybit.close()
         bitget.close()
+
+
+# ===========================================================================
+# Response Validation
+# ===========================================================================
+
+
+class TestResponseValidation:
+    """Tests für _validate_response (Bybit retCode / Bitget code)."""
+
+    def test_bybit_valid_response(self):
+        """Bybit retCode == '0' wirft keinen Fehler."""
+        bybit = BybitExchangeAdapter(simulated=True)
+        bybit._validate_response({"retCode": "0", "retMsg": "success"})
+        bybit.close()
+
+    def test_bybit_invalid_response_raises(self):
+        """Bybit retCode != '0' wirft ResponseValidationError."""
+        bybit = BybitExchangeAdapter(simulated=True)
+        with pytest.raises(ResponseValidationError) as exc_info:
+            bybit._validate_response({"retCode": "-1001", "retMsg": "System error"})
+        assert exc_info.value.code == "-1001"
+        assert "System error" in exc_info.value.message
+        bybit.close()
+
+    def test_bitget_valid_response(self):
+        """Bitget code == '0' wirft keinen Fehler."""
+        bitget = BitgetExchangeAdapter(simulated=True)
+        bitget._validate_response({"code": "0", "msg": "success"})
+        bitget.close()
+
+    def test_bitget_invalid_response_raises(self):
+        """Bitget code != '0' wirft ResponseValidationError."""
+        bitget = BitgetExchangeAdapter(simulated=True)
+        with pytest.raises(ResponseValidationError) as exc_info:
+            bitget._validate_response({"code": "60001", "msg": "Order rejected"})
+        assert exc_info.value.code == "60001"
+        assert "Order rejected" in exc_info.value.message
+        bitget.close()
+
+    def test_empty_response_is_valid(self):
+        """Leere Response wird als gültig betrachtet."""
+        bybit = BybitExchangeAdapter(simulated=True)
+        bybit._validate_response({})
+        bybit.close()
+
+
+# ===========================================================================
+# CredentialManager Integration
+# ===========================================================================
+
+
+class TestCredentialManagerIntegration:
+    """Tests für CredentialManager-Integration."""
+
+    def test_credentials_from_manager(self):
+        """Adapter liest Credentials aus CredentialManager."""
+        adapter = BybitExchangeAdapter(api_key="test-key", api_secret="test-secret", simulated=False)
+        assert adapter._api_key == "test-key"
+        assert adapter._api_secret == "test-secret"
+        adapter.close()
+
+    def test_credentials_explicit_over_manager(self):
+        """Explizite Credentials schlagen CredentialManager vor."""
+        adapter = BybitExchangeAdapter(
+            api_key="explicit-key",
+            api_secret="explicit-secret",
+            simulated=False,
+            credential_manager=MagicMock(),  # wird nicht angerufen
+        )
+        assert adapter._api_key == "explicit-key"
+        assert adapter._api_secret == "explicit-secret"
+        adapter.close()
+
+
+# ===========================================================================
+# NetworkPolicy Enforcement
+# ===========================================================================
+
+
+class TestNetworkPolicy:
+    """Tests für NetworkPolicy-Enforcement in _make_signed_request."""
+
+    def test_blocked_url_raises(self):
+        """Blockierte URL wirft ExchangeAdapterError."""
+        from trading_harness.services.network_policy import NetworkPolicy
+        # Fake credentials so _simulated becomes False (line 65: simulated or not (key and secret))
+        bybit = BybitExchangeAdapter(
+            api_key="fake-key",
+            api_secret="fake-secret",
+            simulated=False,
+            network_policy=NetworkPolicy(),
+        )
+        # Patch is_allowed to simulate a blocked URL
+        with (
+            patch.object(bybit._network_policy, "is_allowed", return_value=False),
+            pytest.raises(ExchangeAdapterError, match="NETWORK_POLICY_BLOCKED"),
+        ):
+            bybit._make_signed_request("GET", "https://any-url.example.com/bad")
+        bybit.close()

@@ -178,10 +178,6 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
 
                 # HTTP error status — classify and decide whether to retry
                 if resp.status_code == 429:
-                    # Rate limit — check Retry-After header or use exponential backoff
-                    retry_after = float(
-                        resp.headers.get("retry-after", 1.0)
-                    )
                     raise RateLimitError(
                         f"Rate limit exceeded (attempt {attempt + 1}/{max_retries})"
                     ) from None
@@ -205,11 +201,8 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
 
                 if resp.status_code == 400:
                     # Bad request — try to extract exchange error code
-                    try:
-                        body = resp.json()
-                        self._validate_response(body)
-                    except ResponseValidationError:
-                        raise
+                    body = resp.json()
+                    self._validate_response(body)
                     raise ExchangeAdapterError(
                         f"Bad request ({resp.status_code}): {resp.text}"
                     ) from None
