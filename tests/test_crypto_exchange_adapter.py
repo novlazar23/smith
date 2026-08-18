@@ -1182,3 +1182,424 @@ class TestCryptoExecutionRouterLiveMode:
         assert kwargs["api_key"] == "test-key"
         assert kwargs["api_secret"] == "test-secret"
         router.close()
+
+
+# ===========================================================================
+# Response Schema Model Tests (Phase 11.5)
+# ===========================================================================
+
+
+class TestBybitOrderResponseModel:
+    """Bybit V5 order response schema validation."""
+
+    def test_valid_success_response(self):
+        """Valid Bybit order response with retCode=0."""
+        from trading_harness.services.crypto_exchange_adapter import BybitOrderResponse
+
+        data = {"retCode": "0", "retMsg": "success", "result": {"orderId": "12345"}}
+        resp = BybitOrderResponse.model_validate(data)
+        assert resp.success is True
+        assert resp.retCode == "0"
+        assert resp.result["orderId"] == "12345"
+
+    def test_valid_error_response(self):
+        """Valid Bybit error response with retCode!=0."""
+        from trading_harness.services.crypto_exchange_adapter import BybitOrderResponse
+
+        data = {"retCode": "10009", "retMsg": "Invalid parameter", "result": {}}
+        resp = BybitOrderResponse.model_validate(data)
+        assert resp.success is False
+        assert resp.retCode == "10009"
+
+    def test_missing_fields_use_defaults(self):
+        """Missing fields default to empty string/dict; default retCode is not success."""
+        from trading_harness.services.crypto_exchange_adapter import BybitOrderResponse
+
+        resp = BybitOrderResponse()
+        assert resp.retCode == ""
+        assert resp.retMsg == ""
+        assert resp.result == {}
+        assert resp.success is False  # retCode "" != "0"
+
+    def test_non_dict_input_raises(self):
+        """Non-dict input raises ValidationError."""
+        from pydantic import ValidationError
+
+        from trading_harness.services.crypto_exchange_adapter import BybitOrderResponse
+
+        with pytest.raises(ValidationError):
+            BybitOrderResponse.model_validate("not a dict")
+
+
+class TestBybitTickerResponseModel:
+    """Bybit V5 ticker response schema validation."""
+
+    def test_valid_ticker_response(self):
+        """Valid Bybit ticker response with price data."""
+        from trading_harness.services.crypto_exchange_adapter import BybitTickerResponse
+
+        data = {
+            "retCode": "0",
+            "retMsg": "OK",
+            "result": {
+                "list": [
+                    {"symbol": "BTCUSDT", "bid1Price": "50000.5", "ask1Price": "50001.5", "lastPrice": "50001.0"}
+                ]
+            },
+        }
+        resp = BybitTickerResponse.model_validate(data)
+        assert resp.success is True
+        prices = resp.get_price("BTCUSDT")
+        assert prices["bid"] == 50000.5
+        assert prices["ask"] == 50001.5
+        assert prices["last"] == 50001.0
+
+    def test_missing_symbol_returns_zero(self):
+        """get_price for non-existent symbol returns zeros."""
+        from trading_harness.services.crypto_exchange_adapter import BybitTickerResponse
+
+        data = {"retCode": "0", "retMsg": "OK", "result": {"list": []}}
+        resp = BybitTickerResponse.model_validate(data)
+        prices = resp.get_price("ETHUSDT")
+        assert prices == {"bid": 0.0, "ask": 0.0, "last": 0.0}
+
+
+class TestBybitBalanceResponseModel:
+    """Bybit V5 wallet balance response schema validation."""
+
+    def test_valid_balance_response(self):
+        """Valid Bybit balance response with coin data."""
+        from trading_harness.services.crypto_exchange_adapter import BybitBalanceResponse
+
+        data = {
+            "retCode": "0",
+            "retMsg": "OK",
+            "result": {
+                "wallet": [
+                    {
+                        "coin": [
+                            {"coin": "USDT", "free": "5000.0", "locked": "100.0"}
+                        ]
+                    }
+                ]
+            },
+        }
+        resp = BybitBalanceResponse.model_validate(data)
+        assert resp.success is True
+        assert resp.get_balance("USDT") == 5100.0
+        assert resp.get_balance("BTC") == 0.0
+
+    def test_empty_wallet_returns_zero(self):
+        """Empty wallet returns zero for any coin."""
+        from trading_harness.services.crypto_exchange_adapter import BybitBalanceResponse
+
+        data = {"retCode": "0", "retMsg": "OK", "result": {"wallet": []}}
+        resp = BybitBalanceResponse.model_validate(data)
+        assert resp.get_balance("USDT") == 0.0
+
+
+class TestBitgetOrderResponseModel:
+    """Bitget V3 order response schema validation."""
+
+    def test_valid_order_response(self):
+        """Valid Bitget order response with code=0."""
+        from trading_harness.services.crypto_exchange_adapter import BitgetOrderResponse
+
+        data = {"code": "0", "msg": "", "data": [{"orderId": "ord-123"}]}
+        resp = BitgetOrderResponse.model_validate(data)
+        assert resp.success is True
+        assert resp.code == "0"
+        assert resp.data[0]["orderId"] == "ord-123"
+
+    def test_error_response(self):
+        """Bitget error response with code!=0."""
+        from trading_harness.services.crypto_exchange_adapter import BitgetOrderResponse
+
+        data = {"code": "60038", "msg": "Invalid parameter", "data": []}
+        resp = BitgetOrderResponse.model_validate(data)
+        assert resp.success is False
+        assert resp.code == "60038"
+
+
+class TestBitgetTickerResponseModel:
+    """Bitget V3 ticker response schema validation."""
+
+    def test_valid_ticker_response(self):
+        """Valid Bitget ticker response with price data."""
+        from trading_harness.services.crypto_exchange_adapter import BitgetTickerResponse
+
+        data = {
+            "code": "0",
+            "msg": "",
+            "data": [
+                {"instId": "BTC-USDT", "buyPx": "50000.5", "sellPx": "50001.5", "last": "50001.0"}
+            ],
+        }
+        resp = BitgetTickerResponse.model_validate(data)
+        assert resp.success is True
+        prices = resp.get_price("BTC-USDT")
+        assert prices["bid"] == 50000.5
+        assert prices["ask"] == 50001.5
+        assert prices["last"] == 50001.0
+
+    def test_missing_instId_returns_zero(self):
+        """get_price for non-existent instId returns zeros."""
+        from trading_harness.services.crypto_exchange_adapter import BitgetTickerResponse
+
+        data = {"code": "0", "msg": "", "data": []}
+        resp = BitgetTickerResponse.model_validate(data)
+        prices = resp.get_price("ETH-USDT")
+        assert prices == {"bid": 0.0, "ask": 0.0, "last": 0.0}
+
+
+class TestBinanceOrderResponseModel:
+    """Binance V4 Spot order response schema validation."""
+
+    def test_valid_order_response(self):
+        """Valid Binance order response with code=0."""
+        from trading_harness.services.crypto_exchange_adapter import BinanceOrderResponse
+
+        data = {
+            "code": 0,
+            "orderId": 98765,
+            "symbol": "BTCUSDT",
+            "status": "FILLED",
+            "fills": [{"price": "50000.0", "qty": "0.001"}],
+        }
+        resp = BinanceOrderResponse.model_validate(data)
+        assert resp.success is True
+        assert resp.orderId == 98765
+        assert resp.status == "FILLED"
+        assert len(resp.fills) == 1
+        assert resp.fills[0]["price"] == "50000.0"
+
+    def test_error_response(self):
+        """Binance error response with code!=0."""
+        from trading_harness.services.crypto_exchange_adapter import BinanceOrderResponse
+
+        data = {"code": -1002, "msg": "Unknown order sent"}
+        resp = BinanceOrderResponse.model_validate(data)
+        assert resp.success is False
+        assert resp.code == -1002
+        assert resp.msg == "Unknown order sent"
+
+    def test_missing_orderId_is_none(self):
+        """Missing orderId defaults to None."""
+        from trading_harness.services.crypto_exchange_adapter import BinanceOrderResponse
+
+        data = {"code": 0}
+        resp = BinanceOrderResponse.model_validate(data)
+        assert resp.orderId is None
+        assert resp.symbol == ""
+
+
+class TestBinanceBalanceResponseModel:
+    """Binance V4 Spot balance response schema validation."""
+
+    def test_valid_balance_response(self):
+        """Valid Binance balance response with coin data."""
+        from trading_harness.services.crypto_exchange_adapter import BinanceBalanceResponse
+
+        data = {
+            "code": 0,
+            "balances": [
+                {"coin": "USDT", "free": "5000.0", "locked": "100.0"},
+                {"coin": "BTC", "free": "0.5", "locked": "0.0"},
+            ],
+        }
+        resp = BinanceBalanceResponse.model_validate(data)
+        assert resp.success is True
+        assert resp.get_balance("USDT") == 5100.0
+        assert resp.get_balance("BTC") == 0.5
+        assert resp.get_balance("ETH") == 0.0
+
+    def test_empty_balances_returns_zero(self):
+        """Empty balances list returns zero."""
+        from trading_harness.services.crypto_exchange_adapter import BinanceBalanceResponse
+
+        data = {"code": 0, "balances": []}
+        resp = BinanceBalanceResponse.model_validate(data)
+        assert resp.get_balance("USDT") == 0.0
+
+
+class TestCoinbaseOrderResponseModel:
+    """Coinbase Pro order response schema validation."""
+
+    def test_filled_order_response(self):
+        """Valid Coinbase filled order response."""
+        from trading_harness.services.crypto_exchange_adapter import CoinbaseOrderResponse
+
+        data = {
+            "order_id": "cb-order-123",
+            "status": "FILLED",
+            "product_id": "BTC-USDT",
+            "price": "50000.0",
+            "size": "0.001",
+            "filled_size": "0.001",
+            "average_filled_price": "50000.5",
+            "fee": "1.50",
+        }
+        resp = CoinbaseOrderResponse.model_validate(data)
+        assert resp.success is True
+        assert resp.order_id == "cb-order-123"
+        assert resp.status == "FILLED"
+
+    def test_done_order_response(self):
+        """Coinbase DONE status is also success."""
+        from trading_harness.services.crypto_exchange_adapter import CoinbaseOrderResponse
+
+        data = {"order_id": "cb-order-456", "status": "DONE", "product_id": "ETH-USDT"}
+        resp = CoinbaseOrderResponse.model_validate(data)
+        assert resp.success is True
+
+    def test_cancelled_order_response(self):
+        """Coinbase CANCELLED status is also success."""
+        from trading_harness.services.crypto_exchange_adapter import CoinbaseOrderResponse
+
+        data = {"order_id": "cb-order-789", "status": "CANCELLED", "product_id": "BTC-USDT"}
+        resp = CoinbaseOrderResponse.model_validate(data)
+        assert resp.success is True
+
+    def test_pending_order_not_success(self):
+        """Pending/open orders are not considered success."""
+        from trading_harness.services.crypto_exchange_adapter import CoinbaseOrderResponse
+
+        data = {"order_id": "cb-order-000", "status": "OPEN", "product_id": "BTC-USDT"}
+        resp = CoinbaseOrderResponse.model_validate(data)
+        assert resp.success is False
+
+
+class TestCoinbaseBalanceResponseModel:
+    """Coinbase Pro balance response schema validation."""
+
+    def test_valid_balance_response(self):
+        """Valid Coinbase balance response with account data."""
+        from trading_harness.services.crypto_exchange_adapter import CoinbaseBalanceResponse
+
+        data = {
+            "accounts": [
+                {"currency": "BTC", "balance": "1.5"},
+                {"currency": "USDT", "balance": "10000.0"},
+            ]
+        }
+        resp = CoinbaseBalanceResponse.model_validate(data)
+        assert resp.get_balance("BTC") == 1.5
+        assert resp.get_balance("USDT") == 10000.0
+        assert resp.get_balance("ETH") == 0.0
+
+    def test_empty_accounts_returns_zero(self):
+        """Empty accounts list returns zero."""
+        from trading_harness.services.crypto_exchange_adapter import CoinbaseBalanceResponse
+
+        data = {"accounts": []}
+        resp = CoinbaseBalanceResponse.model_validate(data)
+        assert resp.get_balance("USDT") == 0.0
+
+
+class TestCoinbaseTickerResponseModel:
+    """Coinbase Pro ticker response schema validation."""
+
+    def test_valid_ticker_response(self):
+        """Valid Coinbase ticker response with price data."""
+        from trading_harness.services.crypto_exchange_adapter import CoinbaseTickerResponse
+
+        data = {"best_bid": "50000.5", "best_ask": "50001.5", "last": "50001.0"}
+        resp = CoinbaseTickerResponse.model_validate(data)
+        prices = resp.get_price()
+        assert prices["bid"] == 50000.5
+        assert prices["ask"] == 50001.5
+        assert prices["last"] == 50001.0
+
+    def test_zero_ticker_response(self):
+        """Default values are zero."""
+        from trading_harness.services.crypto_exchange_adapter import CoinbaseTickerResponse
+
+        resp = CoinbaseTickerResponse()
+        prices = resp.get_price()
+        assert prices == {"bid": 0.0, "ask": 0.0, "last": 0.0}
+
+
+class TestExchangeResponseErrorModel:
+    """Generic exchange error response schema validation."""
+
+    def test_valid_error_response(self):
+        """Valid error response with code and message."""
+        from trading_harness.services.crypto_exchange_adapter import ExchangeResponseError
+
+        data = {"code": "400", "message": "Bad Request", "raw": {"details": "invalid symbol"}}
+        err = ExchangeResponseError.model_validate(data)
+        assert err.code == "400"
+        assert err.message == "Bad Request"
+        assert err.raw["details"] == "invalid symbol"
+
+    def test_error_without_raw(self):
+        """Raw field defaults to empty dict."""
+        from trading_harness.services.crypto_exchange_adapter import ExchangeResponseError
+
+        data = {"code": 429, "message": "Rate limit exceeded"}
+        err = ExchangeResponseError.model_validate(data)
+        assert err.raw == {}
+        assert err.code == 429
+
+
+class TestCryptoExchangeAdapterValidationIntegration:
+    """Integration tests: _validate_response uses the new schema models."""
+
+    def test_bybit_order_response_validation(self):
+        """Bybit adapter validates response against BybitOrderResponse."""
+        adapter = BybitExchangeAdapter(simulated=True)
+        result = adapter.submit_order("BTCUSDT", "BUY", 0.001, 50000.0)
+        # Should succeed with simulated=True (result uses snake_case order_id)
+        assert result.get("order_id") is not None
+        adapter.close()
+
+    def test_bitget_order_response_validation(self):
+        """Bitget adapter validates response against BitgetOrderResponse."""
+        adapter = BitgetExchangeAdapter(simulated=True)
+        result = adapter.submit_order("BTC-USDT", "BUY", 0.001, 50000.0)
+        assert result.get("order_id") is not None
+        adapter.close()
+
+    def test_binance_order_response_validation(self):
+        """Binance adapter validates response against BinanceOrderResponse."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        result = adapter.submit_order("BTCUSDT", "BUY", 0.001, 50000.0)
+        assert result.get("order_id") is not None
+        adapter.close()
+
+    def test_coinbase_order_response_validation(self):
+        """Coinbase adapter validates response against CoinbaseOrderResponse."""
+        adapter = CoinbaseExchangeAdapter(simulated=True)
+        result = adapter.submit_order("BTC-USDT", "BUY", 0.001, 50000.0)
+        assert result.get("order_id") is not None
+        adapter.close()
+
+    def test_bybit_ticker_validation(self):
+        """Bybit ticker response validated and price extracted."""
+        adapter = BybitExchangeAdapter(simulated=True)
+        prices = adapter.get_ticker("BTCUSDT")
+        assert prices is not None
+        assert prices.get("bid") > 0 or prices.get("ask") > 0
+        adapter.close()
+
+    def test_bitget_ticker_validation(self):
+        """Bitget ticker response validated and price extracted."""
+        adapter = BitgetExchangeAdapter(simulated=True)
+        prices = adapter.get_ticker("BTC-USDT")
+        assert prices is not None
+        assert prices.get("bid") > 0 or prices.get("ask") > 0
+        adapter.close()
+
+    def test_binance_balance_validation(self):
+        """Binance balance response validated."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        balance = adapter.get_balance("USDT")
+        assert balance > 0  # simulated balance > 0
+        adapter.close()
+
+    def test_coinbase_balance_validation(self):
+        """Coinbase balance response validated."""
+        adapter = CoinbaseExchangeAdapter(simulated=True)
+        balance = adapter.get_balance("USDT")
+        assert balance > 0  # simulated balance > 0
+        adapter.close()

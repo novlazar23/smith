@@ -18,6 +18,7 @@ from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import BaseModel, Field
 
 from trading_harness.services.credential_manager import CredentialManager
 from trading_harness.services.exchange_adapter import (
@@ -29,6 +30,181 @@ from trading_harness.services.exchange_adapter import (
     ResponseValidationError,
 )
 from trading_harness.services.network_policy import NetworkPolicy
+
+# ===========================================================================
+# Response Schema Models — formal validation against exchange APIs
+# ===========================================================================
+
+
+class ExchangeResponseError(BaseModel):
+    """Einheitliches Modell für Exchange-Fehlerantworten."""
+    code: str | int
+    message: str
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class BybitOrderResponse(BaseModel):
+    """Bybit V5 order create response."""
+    retCode: str = ""
+    retMsg: str = ""
+    result: dict[str, Any] = Field(default_factory=dict)
+    order_id: str | None = None
+
+    @property
+    def success(self) -> bool:
+        return self.retCode == "0"
+
+
+class BybitTickerResponse(BaseModel):
+    """Bybit V5 ticker response (category='spot')."""
+    retCode: str = ""
+    retMsg: str = ""
+    result: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def success(self) -> bool:
+        return self.retCode == "0"
+
+    def get_price(self, symbol: str) -> dict[str, float]:
+        """Extrahiert bid/ask/last aus dem Bybit-Spot-Ticker."""
+        list_result = self.result.get("list", [])
+        for item in list_result:
+            if item.get("symbol") == symbol:
+                return {
+                    "bid": float(item.get("bid1Price", 0)),
+                    "ask": float(item.get("ask1Price", 0)),
+                    "last": float(item.get("lastPrice", 0)),
+                }
+        return {"bid": 0.0, "ask": 0.0, "last": 0.0}
+
+
+class BybitBalanceResponse(BaseModel):
+    """Bybit V5 wallet balance response."""
+    retCode: str = ""
+    retMsg: str = ""
+    result: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def success(self) -> bool:
+        return self.retCode == "0"
+
+    def get_balance(self, coin: str) -> float:
+        """Extrahiert freie Balance für eine Münze."""
+        for wallet in self.result.get("wallet", []):
+            for balance in wallet.get("coin", []):
+                if balance.get("coin") == coin:
+                    return float(balance.get("free", "0")) + float(balance.get("locked", "0"))
+        return 0.0
+
+
+class BitgetOrderResponse(BaseModel):
+    """Bitget V3 order response."""
+    code: str = ""
+    msg: str = ""
+    data: list[dict[str, Any]] = Field(default_factory=list)
+
+    @property
+    def success(self) -> bool:
+        return self.code == "0"
+
+
+class BitgetTickerResponse(BaseModel):
+    """Bitget V3 ticker response."""
+    code: str = ""
+    msg: str = ""
+    data: list[dict[str, Any]] = Field(default_factory=list)
+
+    @property
+    def success(self) -> bool:
+        return self.code == "0"
+
+    def get_price(self, symbol: str) -> dict[str, float]:
+        """Extrahiert bid/ask/last aus dem Bitget-Ticker."""
+        for item in self.data:
+            if item.get("instId") == symbol:
+                return {
+                    "bid": float(item.get("buyPx", 0)),
+                    "ask": float(item.get("sellPx", 0)),
+                    "last": float(item.get("last", 0)),
+                }
+        return {"bid": 0.0, "ask": 0.0, "last": 0.0}
+
+
+class BinanceOrderResponse(BaseModel):
+    """Binance V4 Spot order response."""
+    code: int = 0
+    msg: str = ""
+    orderId: int | None = None
+    orderListId: int | None = None
+    symbol: str = ""
+    status: str = ""
+    fills: list[dict[str, Any]] = Field(default_factory=list)
+
+    @property
+    def success(self) -> bool:
+        return self.code == 0
+
+
+class BinanceBalanceResponse(BaseModel):
+    """Binance V4 Spot account balance response."""
+    code: int = 0
+    msg: str = ""
+    balances: list[dict[str, Any]] = Field(default_factory=list)
+
+    @property
+    def success(self) -> bool:
+        return self.code == 0
+
+    def get_balance(self, coin: str) -> float:
+        """Extrahiert freie Balance für eine Münze."""
+        total = 0.0
+        for b in self.balances:
+            if b.get("coin") == coin:
+                total += float(b.get("free", 0))
+                total += float(b.get("locked", 0))
+        return total
+
+
+class CoinbaseOrderResponse(BaseModel):
+    """Coinbase Pro order response."""
+    order_id: str = ""
+    status: str = ""
+    product_id: str = ""
+    price: str = ""
+    size: str = ""
+    filled_size: str = ""
+    average_filled_price: str = ""
+    fee: str = ""
+
+    @property
+    def success(self) -> bool:
+        return self.status in ("FILLED", "DONE", "CANCELLED")
+
+
+class CoinbaseBalanceResponse(BaseModel):
+    """Coinbase Pro account balance response."""
+    accounts: list[dict[str, Any]] = Field(default_factory=list)
+
+    def get_balance(self, currency: str) -> float:
+        """Extrahiert Balance für eine Währung."""
+        for account in self.accounts:
+            if account.get("currency") == currency:
+                return float(account.get("balance", "0"))
+        return 0.0
+
+
+class CoinbaseTickerResponse(BaseModel):
+    """Coinbase Pro ticker response."""
+    best_bid: str = "0"
+    best_ask: str = "0"
+    last: str = "0"
+
+    def get_price(self) -> dict[str, float]:
+        return {
+            "bid": float(self.best_bid),
+            "ask": float(self.best_ask),
+            "last": float(self.last),
+        }
 
 
 class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
