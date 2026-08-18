@@ -635,7 +635,7 @@ _shadow_adapter = ShadowModeAdapter(delegate=_paper_adapter, shadow=_shadow_logg
 
 # Crypto-Execution-Router — routet an Bybit, Bitget, Binance oder Coinbase.
 # Alle Adapter durchlaufen dieselbe Pipeline (KillSwitch, RateLimiter, …).
-_crypto_router = CryptoExecutionRouter(simulated=True)
+_crypto_router = CryptoExecutionRouter(credential_manager=credential_manager)
 
 # Crypto-Execution-Service — nutzt denselben KillSwitch/Lock als Paper-Service
 crypto_execution_service = LiveExecutionService(
@@ -786,9 +786,16 @@ def crypto_submit(payload: dict) -> dict:
     dependencies=[Depends(require_read_key)],
 )
 def crypto_status() -> dict:
-    """Crypto-Router Status — zeigt ob Adapter simuliert oder live."""
+    """Crypto-Router Status — zeigt Credentials für alle Exchanges."""
+    credential_states: dict[str, str] = {}
+    for exchange in CryptoExecutionRouter.SUPPORTED:
+        prefixes = CryptoExecutionRouter.CREDENTIAL_PREFIXES.get(exchange, ("", ""))
+        has_key = bool(credential_manager.get(prefixes[0])) if credential_manager else False
+        has_secret = bool(credential_manager.get(prefixes[1])) if credential_manager else False
+        credential_states[exchange] = "LIVE" if (has_key and has_secret) else "SIMULATED"
     return {
-        "crypto_router_simulated": _crypto_router._kwargs.get("simulated", True),
+        "router_active": True,
         "supported_exchanges": list(CryptoExecutionRouter.SUPPORTED),
+        "credential_states": credential_states,
         "shadow_mode_active": True,
     }

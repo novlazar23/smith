@@ -152,6 +152,18 @@ Neue API Endpunkte in `routes.py`:
 - `POST /execution/crypto/submit` — unified Crypto-Submit durch LiveExecutionService-Pipeline
 - `GET /execution/crypto/status` — Crypto-Router Status (simulated=True/False, supported_exchanges)
 
+Dynamic Credential Loading (Phase 7): CryptoExecutionRouter prüft Credentials pro Exchange.
+- `CryptoExecutionRouter.CREDENTIAL_PREFIXES` — Mapping: exchange → (KEY_ENV, SECRET_ENV)
+  `{"bybit": ("BYBIT_API_KEY", "BYBIT_API_SECRET"), "bitget": (...), "binance": ..., "coinbase": ...}`
+- `_resolve_adapter_state(exchange)` — liest Credentials via `CredentialManager.get()`,
+  gibt `(simulated: bool, kwargs: dict)` zurück
+- Existieren BEIDE Credentials (KEY + SECRET) → `simulated=False` → echte API-Orders
+- Fehlendes Credential → `simulated=True` → simulierte Orders (sicherer Fallback)
+- State wird gecached pro Exchange (`self._adapter_state`) — keine wiederholten Lookups
+- `crypto_execution_service` übergibt `credential_manager=credential_manager` an Router
+- `crypto_status()` zeigt `credential_states` dict: `{exchange: "LIVE" | "SIMULATED"}`
+- `router.close()` cleared `_REGISTRY` und `_adapter_state`
+
 Mypy fixes (pre-existing):
 - `order_deduplicator.py:42` — `maxlen` kann `None` sein (deque ohne maxlen)
 - `portfolio_tracker.py:13,17,19` — Protocol-Methoden mit `...` als Body

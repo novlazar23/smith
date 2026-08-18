@@ -11,9 +11,10 @@ import base64
 import hashlib
 import hmac
 import json
+import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 import httpx
@@ -917,21 +918,51 @@ class CryptoExecutionRouter(ExchangeAdapter):
 
     Wählt den Adapter basierend auf `exchange_name` aus dem Payload oder der Config.
     Alle Adapter durchlaufen dieselbe Pipeline (KillSwitch, RateLimiter, …).
+    
+    Dynamisches Credential-Loading: Prüft pro Exchange auf API-Schlüssel in env/SecretStore.
+    Existieren Credentials → Adapter läuft live (simulated=False).
+    Keine Credentials → Adapter simuliert (simulated=True).
     """
 
     SUPPORTED: tuple[str, ...] = ("bybit", "bitget", "binance", "coinbase")
+    CREDENTIAL_PREFIXES: ClassVar[dict[str, tuple[str, str]]] = {
+        "bybit": ("BYBIT_API_KEY", "BYBIT_API_SECRET"),
+        "bitget": ("BITGET_API_KEY", "BITGET_API_SECRET"),
+        "binance": ("BINANCE_API_KEY", "BINANCE_API_SECRET"),
+        "coinbase": ("COINBASE_API_KEY", "COINBASE_API_SECRET"),
+    }
 
     def __init__(
         self,
         default_exchange: str = "bybit",
-        **adapter_kwargs: Any,
+        credential_manager: CredentialManager | None = None,
     ) -> None:
         self._default = default_exchange
-        self._kwargs = adapter_kwargs
+        self._credential_manager = credential_manager
+        self._adapter_state: dict[str, tuple[bool, dict[str, Any]]] = {}
+        self._state_lock = threading.Lock()
 
     @property
     def name(self) -> str:
         return "CRYPTO_ROUTER"
+
+    def _resolve_adapter_state(self, exchange: str) -> tuple[bool, dict[str, Any]]:
+        """Prüft Credentials für exchange und gibt (simulated, kwargs) zurück."""
+        if exchange not in self._adapter_state:
+            prefix_map = self.CREDENTIAL_PREFIXES.get(exchange)
+            if not prefix_map:
+                self._adapter_state[exchange] = (True, {})
+            else:
+                api_key = self._credential_manager.get(prefix_map[0]) if self._credential_manager else None
+                api_secret = self._credential_manager.get(prefix_map[1]) if self._credential_manager else None
+                simulated = not (api_key and api_secret)
+                kwargs: dict[str, Any] = {
+                    "api_key": api_key or "",
+                    "api_secret": api_secret or "",
+                    "simulated": simulated,
+                }
+                self._adapter_state[exchange] = (simulated, kwargs)
+        return self._adapter_state[exchange]
 
     def submit_order(
         self,
@@ -942,7 +973,19 @@ class CryptoExecutionRouter(ExchangeAdapter):
         order_type: str = "MARKET",
         exchange_name: str | None = None,
     ) -> dict[str, Any]:
-        adapter = _get_or_create(exchange_name or self._default, **self._kwargs)
+        exchange = exchange_name or self._default
+        simulated, kwargs = self._resolve_adapter_state(exchange)
+        if simulated:
+            return {
+                "order_id": f"sim-{exchange}-{int(time.time() * 1000)}",
+                "status": "FILLED",
+                "filled_price": price,
+                "slippage_bps": 0,
+                "commission": 0.0,
+                "raw": {},
+                "simulated": True,
+            }
+        adapter = _get_or_create(exchange, **kwargs)
         return adapter.submit_order(
             symbol=symbol,
             side=side,
@@ -968,3 +1011,4 @@ class CryptoExecutionRouter(ExchangeAdapter):
         for adapter in _REGISTRY.values():
             adapter.close()
         _REGISTRY.clear()
+        self._adapter_state.clear()

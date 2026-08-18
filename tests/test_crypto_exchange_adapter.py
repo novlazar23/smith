@@ -340,3 +340,129 @@ class TestNetworkPolicy:
         ):
             bybit._make_signed_request("GET", "https://any-url.example.com/bad")
         bybit.close()
+
+# ===========================================================================
+# CryptoExecutionRouter — Dynamic Credential Loading
+# ===========================================================================
+
+
+class TestCryptoExecutionRouter:
+    """Tests für CryptoExecutionRouter mit dynamischem Credential-Loading."""
+
+    def test_router_name(self):
+        """Router-Name ist CRYPTO_ROUTER."""
+        from trading_harness.services.crypto_exchange_adapter import CryptoExecutionRouter
+
+        router = CryptoExecutionRouter()
+        assert router.name == "CRYPTO_ROUTER"
+        router.close()
+
+    def test_router_default_exchange(self):
+        """Router verwendet bybit als Standard-Exchange."""
+        from trading_harness.services.crypto_exchange_adapter import CryptoExecutionRouter
+
+        router = CryptoExecutionRouter(default_exchange="bybit")
+        assert router._default == "bybit"
+        result = router.submit_order("BTCUSDT", "BUY", 1.0, 50000.0)
+        assert result["simulated"] is True
+        router.close()
+
+    def test_router_simulated_without_credentials(self):
+        """Router ohne Credentials → alle Exchanges simuliert."""
+        from trading_harness.services.crypto_exchange_adapter import CryptoExecutionRouter
+
+        router = CryptoExecutionRouter(
+            default_exchange="binance",
+            credential_manager=None,
+        )
+        for exchange in CryptoExecutionRouter.SUPPORTED:
+            simulated, _ = router._resolve_adapter_state(exchange)
+            assert simulated is True
+        router.close()
+
+    def test_router_live_with_credentials(self):
+        """Router mit Credentials → Exchange läuft live."""
+        from trading_harness.services.crypto_exchange_adapter import CryptoExecutionRouter
+
+        mock_manager = MagicMock()
+        mock_manager.get.side_effect = lambda key: {
+            "BINANCE_API_KEY": "test-key",
+            "BINANCE_API_SECRET": "test-secret",
+            "BYBIT_API_KEY": None,
+            "BYBIT_API_SECRET": None,
+        }.get(key)
+
+        router = CryptoExecutionRouter(
+            default_exchange="bybit",
+            credential_manager=mock_manager,
+        )
+
+        # Binance → LIVE (Credentials vorhanden)
+        binance_simulated, binance_kwargs = router._resolve_adapter_state("binance")
+        assert binance_simulated is False
+        assert binance_kwargs["api_key"] == "test-key"
+
+        # Bybit → SIMULATED (keine Credentials)
+        bybit_simulated, _ = router._resolve_adapter_state("bybit")
+        assert bybit_simulated is True
+
+        router.close()
+
+    def test_router_submit_order_simulated(self):
+        """Router mit simulated=True gibt SIMULATED-Response zurück."""
+        from trading_harness.services.crypto_exchange_adapter import CryptoExecutionRouter
+
+        router = CryptoExecutionRouter(
+            default_exchange="bybit",
+            credential_manager=None,
+        )
+        result = router.submit_order("BTCUSDT", "BUY", 1.0, 50000.0)
+        assert result["simulated"] is True
+        assert result["status"] == "FILLED"
+        assert "order_id" in result
+        router.close()
+
+    def test_router_submit_order_live(self):
+        """Router mit simulated=False delegiert an echten Adapter."""
+        from trading_harness.services.crypto_exchange_adapter import (
+            CryptoExecutionRouter,
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.get.side_effect = lambda key: {
+            "BINANCE_API_KEY": "test-key",
+            "BINANCE_API_SECRET": "test-secret",
+        }.get(key)
+
+        router = CryptoExecutionRouter(
+            default_exchange="binance",
+            credential_manager=mock_manager,
+        )
+        with patch(
+            "trading_harness.services.crypto_exchange_adapter._get_or_create",
+            return_value=MagicMock(
+                submit_order=MagicMock(return_value={
+                    "order_id": "live-order-123",
+                    "status": "FILLED",
+                    "raw": {},
+                })
+            ),
+        ):
+            result = router.submit_order("BTCUSDT", "BUY", 1.0, 50000.0)
+        assert result["status"] == "FILLED"
+        assert "order_id" in result
+        router.close()
+
+    def test_router_clear_state(self):
+        """Router clear_state löscht alle Adapter-Zustände."""
+        from trading_harness.services.crypto_exchange_adapter import CryptoExecutionRouter
+
+        router = CryptoExecutionRouter(
+            default_exchange="binance",
+            credential_manager=None,
+        )
+        router._resolve_adapter_state("binance")
+        assert "binance" in router._adapter_state
+        router.close()
+        # Nach close() sollte State leer sein
+        assert "binance" not in router._adapter_state
