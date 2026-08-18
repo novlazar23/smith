@@ -38,8 +38,8 @@ from trading_harness.services.network_policy import NetworkPolicy
 
 class ExchangeResponseError(BaseModel):
     """Einheitliches Modell für Exchange-Fehlerantworten."""
-    code: str | int
-    message: str
+    code: str | int | None = None
+    message: str | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -293,17 +293,26 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         ...
 
     def _validate_response(self, response: dict[str, Any]) -> None:
-        """Validiert Exchange-Response auf Fehlercodes.
+        """Validiert Exchange-Response auf Fehlercodes mittels Pydantic-Schema.
 
         Bybit: retCode == "0" bedeutet Erfolg.
         Bitget: code == "0" bedeutet Erfolg.
+        Binance: code == 0 bedeutet Erfolg.
         """
+        # Pydantic-Schema validiert strukturiert; extrahiert aber nur das "message"-Feld.
+        # Exchange-nachrichten liegen in msg (Binance/Bitget) oder retMsg (Bybit).
+        ExchangeResponseError.model_validate(response)
         ret_code = response.get("retCode", response.get("code"))
         if ret_code is not None and str(ret_code) != "0":
-            ret_msg = response.get("retMsg", response.get("msg", "Unknown error"))
+            message = (
+                response.get("msg")
+                or response.get("retMsg")
+                or response.get("message")
+                or "Unknown error"
+            )
             raise ResponseValidationError(
                 code=str(ret_code),
-                message=str(ret_msg),
+                message=message,
             )
 
     def _make_signed_request(
