@@ -647,9 +647,11 @@ class BinanceExchangeAdapter(BaseCryptoExchangeAdapter):
                 if attempt == max_retries - 1:
                     raise
                 time.sleep(0.5 * (2 ** attempt))
-            except httpx.ConnectError:
+            except httpx.ConnectError as e:
                 if attempt == max_retries - 1:
-                    raise
+                    raise ConnectionError(
+                        f"Connection failed after {max_retries} retries: {e}"
+                    ) from e
                 time.sleep(0.5 * (2 ** attempt))
 
         raise ExchangeAdapterError("Unexpected retry exhaustion")
