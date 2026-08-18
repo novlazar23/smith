@@ -836,8 +836,8 @@ class TestCredentialManagerIntegration:
 
     def test_credentials_configured_passes(self, adapter):
         """Pipeline geht durch wenn Credentials konfiguriert sind."""
-        os.environ["API_KEY"] = "test-key"
-        os.environ["API_SECRET"] = "test-secret"
+        os.environ["TRADE_API_KEY"] = "test-key"
+        os.environ["TRADE_API_SECRET"] = "test-secret"
         try:
             cm = CredentialManager()
             svc = LiveExecutionService(
@@ -856,14 +856,14 @@ class TestCredentialManagerIntegration:
             )
             assert result["status"] == "FILLED"
         finally:
-            os.environ.pop("API_KEY", None)
-            os.environ.pop("API_SECRET", None)
+            os.environ.pop("TRADE_API_KEY", None)
+            os.environ.pop("TRADE_API_SECRET", None)
 
     def test_credentials_missing_rejected(self, adapter):
         """Pipeline wird blockiert wenn Credentials fehlen."""
         # Stelle sicher dass env vars nicht gesetzt sind
-        os.environ.pop("API_KEY", None)
-        os.environ.pop("API_SECRET", None)
+        os.environ.pop("TRADE_API_KEY", None)
+        os.environ.pop("TRADE_API_SECRET", None)
         cm = CredentialManager()
         svc = LiveExecutionService(
             exchange_adapter=adapter,
@@ -880,12 +880,12 @@ class TestCredentialManagerIntegration:
             price=50000.0,
         )
         assert result["status"] == "REJECTED"
-        assert result["error"] == "CREDENTIALS_NOT_CONFIGURED"
+        assert result["error"] == "TRADE_CREDENTIALS_NOT_CONFIGURED"
 
     def test_missing_api_key_rejected(self, adapter):
-        """Pipeline wird blockiert wenn nur API_SECRET gesetzt ist."""
-        os.environ["API_KEY"] = ""
-        os.environ["API_SECRET"] = "test-secret"
+        """Pipeline wird blockiert wenn nur TRADE_API_SECRET gesetzt ist."""
+        os.environ["TRADE_API_KEY"] = ""
+        os.environ["TRADE_API_SECRET"] = "test-secret"
         try:
             cm = CredentialManager()
             svc = LiveExecutionService(
@@ -903,10 +903,10 @@ class TestCredentialManagerIntegration:
                 price=50000.0,
             )
             assert result["status"] == "REJECTED"
-            assert result["error"] == "CREDENTIALS_NOT_CONFIGURED"
+            assert result["error"] == "TRADE_CREDENTIALS_NOT_CONFIGURED"
         finally:
-            os.environ.pop("API_KEY", None)
-            os.environ.pop("API_SECRET", None)
+            os.environ.pop("TRADE_API_KEY", None)
+            os.environ.pop("TRADE_API_SECRET", None)
 
 
 class TestFullPipelineIntegration:
@@ -929,8 +929,8 @@ class TestFullPipelineIntegration:
         rl = RateLimiter(global_limit=100, symbol_limit=50)
         dd = OrderDeduplicator()
         np = NetworkPolicy(allowed_patterns=[".*"])
-        os.environ["API_KEY"] = "test-key"
-        os.environ["API_SECRET"] = "test-secret"
+        os.environ["TRADE_API_KEY"] = "test-key"
+        os.environ["TRADE_API_SECRET"] = "test-secret"
         try:
             cm = CredentialManager()
             re = RiskEngine(policy=policy)
@@ -960,8 +960,8 @@ class TestFullPipelineIntegration:
             assert result["risk_approved"] is True
             assert result["risk_max_position_size"] > 0
         finally:
-            os.environ.pop("API_KEY", None)
-            os.environ.pop("API_SECRET", None)
+            os.environ.pop("TRADE_API_KEY", None)
+            os.environ.pop("TRADE_API_SECRET", None)
 
     def test_full_pipeline_killswitch_blocks_first(self, adapter):
         """KillSwitch wird vor allen anderen Checks geprüft."""
@@ -979,8 +979,8 @@ class TestFullPipelineIntegration:
         ks = KillSwitch(enabled=True)
         cm = CredentialManager()
         np = NetworkPolicy(allowed_patterns=[".*"])
-        os.environ["API_KEY"] = "test-key"
-        os.environ["API_SECRET"] = "test-secret"
+        os.environ["TRADE_API_KEY"] = "test-key"
+        os.environ["TRADE_API_SECRET"] = "test-secret"
         try:
             svc = LiveExecutionService(
                 kill_switch=ks,
@@ -1006,5 +1006,227 @@ class TestFullPipelineIntegration:
             assert result["error"] == "KILL_SWITCH_ACTIVE"
             assert result["risk_approved"] is False
         finally:
-            os.environ.pop("API_KEY", None)
-            os.environ.pop("API_SECRET", None)
+            os.environ.pop("TRADE_API_KEY", None)
+            os.environ.pop("TRADE_API_SECRET", None)
+
+
+class TestReadTradeApiSeparation:
+    """R5.21–R5.22: Separate Auth für Trade-Aktionen vs. Lese-Zugriffe."""
+
+    def test_submit_requires_trade_credentials(self):
+        """submit_order verlangt TRADE_API_KEY + TRADE_API_SECRET."""
+        adapter = PaperExchangeAdapter(paper_exchange=PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store()))
+        cm = CredentialManager()
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            credential_manager=cm,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc.activate_live()
+        result = svc.submit_order(
+            decision_id="rta-1",
+            run_id="run-1",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+        )
+        assert result["status"] == "REJECTED"
+        assert result["error"] == "TRADE_CREDENTIALS_NOT_CONFIGURED"
+
+    def test_submit_with_trade_credentials_succeeds(self):
+        """submit_order mit TRADE_API_KEY + TRADE_API_SECRET durchläuft."""
+        adapter = PaperExchangeAdapter(paper_exchange=PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store()))
+        cm = CredentialManager()
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            credential_manager=cm,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc.activate_live()
+        os.environ["TRADE_API_KEY"] = "trade-key"
+        os.environ["TRADE_API_SECRET"] = "trade-secret"
+        try:
+            result = svc.submit_order(
+                decision_id="rta-2",
+                run_id="run-1",
+                symbol="BTCUSDT",
+                side="LONG",
+                quantity=1.0,
+                price=50000.0,
+            )
+            assert result["status"] == "FILLED"
+        finally:
+            os.environ.pop("TRADE_API_KEY", None)
+            os.environ.pop("TRADE_API_SECRET", None)
+
+    def test_read_order_status_requires_read_credentials(self):
+        """get_order_status verlangt READ_API_KEY + READ_API_SECRET."""
+        adapter = PaperExchangeAdapter(paper_exchange=PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store()))
+        cm = CredentialManager()
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            credential_manager=cm,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc.activate_live()
+        result = svc.get_order_status("order-1")
+        assert result["status"] == "REJECTED"
+        assert result["error"] == "READ_CREDENTIALS_NOT_CONFIGURED"
+
+    def test_read_order_status_with_read_credentials_succeeds(self):
+        """get_order_status mit READ_API_KEY + READ_API_SECRET durchläuft Credential-Check."""
+        adapter = PaperExchangeAdapter(paper_exchange=PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store()))
+        cm = CredentialManager()
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            credential_manager=cm,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc.activate_live()
+        os.environ["READ_API_KEY"] = "read-key"
+        os.environ["READ_API_SECRET"] = "read-secret"
+        try:
+            result = svc.get_order_status("order-1")
+            assert result["status"] == "NOT_FOUND"  # PaperExchangeAdapter: order nicht vorhanden
+        finally:
+            os.environ.pop("READ_API_KEY", None)
+            os.environ.pop("READ_API_SECRET", None)
+
+    def test_cancel_order_requires_trade_credentials(self):
+        """cancel_order verlangt TRADE_API_KEY + TRADE_API_SECRET (write operation)."""
+        adapter = PaperExchangeAdapter(paper_exchange=PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store()))
+        cm = CredentialManager()
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            credential_manager=cm,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc.activate_live()
+        result = svc.cancel_order("order-1")
+        assert result["success"] is False
+        assert result["error"] == "TRADE_CREDENTIALS_NOT_CONFIGURED"
+
+    def test_cancel_order_with_trade_credentials_succeeds(self):
+        """cancel_order mit TRADE_API_KEY + TRADE_API_SECRET durchläuft Credential-Check."""
+        adapter = PaperExchangeAdapter(paper_exchange=PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store()))
+        cm = CredentialManager()
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            credential_manager=cm,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc.activate_live()
+        os.environ["TRADE_API_KEY"] = "trade-key"
+        os.environ["TRADE_API_SECRET"] = "trade-secret"
+        try:
+            result = svc.cancel_order("order-1")
+            assert result["success"] is False  # PaperExchangeAdapter: Trade nicht gefunden, aber Credential-Check bestanden
+            assert result["error"] == "TRADE_NOT_FOUND"
+        finally:
+            os.environ.pop("TRADE_API_KEY", None)
+            os.environ.pop("TRADE_API_SECRET", None)
+
+    def test_config_has_custom_key_refs(self):
+        """ExecutionConfig erlaubt benutzerdefinierte Key-Ref-Namen."""
+        cfg = ExecutionConfig(
+            live_execution_enabled=True,
+            trade_api_key_ref="MY_TRADE_KEY",
+            trade_api_secret_ref="MY_TRADE_SECRET",
+            read_api_key_ref="MY_READ_KEY",
+            read_api_secret_ref="MY_READ_SECRET",
+        )
+        assert cfg.trade_api_key_ref == "MY_TRADE_KEY"
+        assert cfg.read_api_key_ref == "MY_READ_KEY"
+
+
+class TestAllowedExchangesEnforcement:
+    """allowed_exchanges Whitelist Enforcement im Execution Pipeline."""
+
+    def test_allowed_exchanges_blocks_unlisted_exchange(self):
+        """Order an nicht-listeter Exchange wird REJECTED."""
+        adapter = PaperExchangeAdapter(paper_exchange=PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store()))
+        cm = CredentialManager()
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            credential_manager=cm,
+            config=ExecutionConfig(
+                live_execution_enabled=True,
+                allowed_exchanges=["bybit", "binance"],
+            ),
+        )
+        svc.activate_live()
+        os.environ["TRADE_API_KEY"] = "trade-key"
+        os.environ["TRADE_API_SECRET"] = "trade-secret"
+        try:
+            result = svc.submit_order(
+                decision_id="ae-1",
+                run_id="run-1",
+                symbol="BTCUSDT",
+                side="LONG",
+                quantity=1.0,
+                price=50000.0,
+                exchange_name="kraken",
+            )
+            assert result["status"] == "REJECTED"
+            assert result["error"] == "EXCHANGE_NOT_ALLOWED"
+        finally:
+            os.environ.pop("TRADE_API_KEY", None)
+            os.environ.pop("TRADE_API_SECRET", None)
+
+    def test_allowed_exchanges_allows_listed_exchange(self):
+        """Order an gelisteter Exchange durchläuft."""
+        adapter = PaperExchangeAdapter(paper_exchange=PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store()))
+        cm = CredentialManager()
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            credential_manager=cm,
+            config=ExecutionConfig(
+                live_execution_enabled=True,
+                allowed_exchanges=["bybit", "binance"],
+            ),
+        )
+        svc.activate_live()
+        os.environ["TRADE_API_KEY"] = "trade-key"
+        os.environ["TRADE_API_SECRET"] = "trade-secret"
+        try:
+            result = svc.submit_order(
+                decision_id="ae-2",
+                run_id="run-1",
+                symbol="BTCUSDT",
+                side="LONG",
+                quantity=1.0,
+                price=50000.0,
+                exchange_name="binance",
+            )
+            assert result["status"] == "FILLED"
+        finally:
+            os.environ.pop("TRADE_API_KEY", None)
+            os.environ.pop("TRADE_API_SECRET", None)
+
+    def test_allowed_exchanges_empty_allows_any(self):
+        """Leere allowed_exchanges erlaubt jede Exchange (Default-Verhalten)."""
+        adapter = PaperExchangeAdapter(paper_exchange=PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store()))
+        cm = CredentialManager()
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            credential_manager=cm,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc.activate_live()
+        os.environ["TRADE_API_KEY"] = "trade-key"
+        os.environ["TRADE_API_SECRET"] = "trade-secret"
+        try:
+            result = svc.submit_order(
+                decision_id="ae-3",
+                run_id="run-1",
+                symbol="BTCUSDT",
+                side="LONG",
+                quantity=1.0,
+                price=50000.0,
+                exchange_name="unknown-exchange",
+            )
+            assert result["status"] == "FILLED"
+        finally:
+            os.environ.pop("TRADE_API_KEY", None)
+            os.environ.pop("TRADE_API_SECRET", None)

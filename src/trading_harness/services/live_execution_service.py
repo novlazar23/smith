@@ -31,7 +31,10 @@ from trading_harness.services.risk_engine import RiskEngine
 
 
 class ExecutionConfig(BaseModel):
-    """Konfiguration des Execution Service."""
+    """Konfiguration des Execution Service.
+
+    R5.21–R5.22: Separate Auth für Trade-Aktionen vs. Lese-Zugriffe.
+    """
 
     live_execution_enabled: bool = False
     global_rate_limit: int = 10
@@ -40,6 +43,11 @@ class ExecutionConfig(BaseModel):
     allowed_endpoints: list[str] = Field(default_factory=list)
     allowed_exchanges: list[str] = Field(default_factory=list)
     symbol_whitelist: list[str] = Field(default_factory=list)
+    # R5.21–R5.22: Read/Trade API Separation — Key-Namen für CredentialManager
+    trade_api_key_ref: str = "TRADE_API_KEY"
+    trade_api_secret_ref: str = "TRADE_API_SECRET"
+    read_api_key_ref: str = "READ_API_KEY"
+    read_api_secret_ref: str = "READ_API_SECRET"
 
 
 class ExecutionLog(BaseModel):
@@ -159,6 +167,17 @@ class LiveExecutionService:
                 error="SYMBOL_NOT_WHITELISTED",
             )
 
+        # 5b. Check allowed exchanges (R5.21, erlaubte Exchanges enforced)
+        if self._config.allowed_exchanges and exchange_name and exchange_name not in self._config.allowed_exchanges:
+                return self._log_and_return(
+                    decision_id,
+                    run_id,
+                    symbol,
+                    side,
+                    "REJECTED",
+                    error="EXCHANGE_NOT_ALLOWED",
+                )
+
         # 6. Check min capital
         if quantity < self._config.min_capital:
             return self._log_and_return(
@@ -221,18 +240,18 @@ class LiveExecutionService:
                     error="NETWORK_POLICY_VIOLATION",
                 )
 
-        # 10. Credential Check (R5.18–R5.20)
+        # 10. Credential Check — Trade Operations (R5.18–R5.20, R5.21–R5.22)
         if self._credential_manager:
-            api_key = self._credential_manager.get("API_KEY")
-            api_secret = self._credential_manager.get("API_SECRET")
-            if not api_key or not api_secret:
+            trade_key = self._credential_manager.get(self._config.trade_api_key_ref)
+            trade_secret = self._credential_manager.get(self._config.trade_api_secret_ref)
+            if not trade_key or not trade_secret:
                 return self._log_and_return(
                     decision_id,
                     run_id,
                     symbol,
                     side,
                     "REJECTED",
-                    error="CREDENTIALS_NOT_CONFIGURED",
+                    error="TRADE_CREDENTIALS_NOT_CONFIGURED",
                 )
 
         # 11. Submit to Exchange
@@ -368,6 +387,12 @@ class LiveExecutionService:
             return {"status": "REJECTED", "order_id": order_id, "error": "LIVE_EXECUTION_DISABLED"}
         if self._kill_switch.is_active():
             return {"status": "REJECTED", "order_id": order_id, "error": "KILL_SWITCH_ACTIVE"}
+        # R5.21–R5.22: Read operations require READ API credentials
+        if self._credential_manager:
+            read_key = self._credential_manager.get(self._config.read_api_key_ref)
+            read_secret = self._credential_manager.get(self._config.read_api_secret_ref)
+            if not read_key or not read_secret:
+                return {"status": "REJECTED", "order_id": order_id, "error": "READ_CREDENTIALS_NOT_CONFIGURED"}
         if self._network_policy:
             exchange_url = self._get_exchange_url()
             if not self._network_policy.is_allowed("GET", exchange_url):
@@ -387,6 +412,12 @@ class LiveExecutionService:
             return {"success": False, "order_id": order_id, "error": "LIVE_EXECUTION_DISABLED"}
         if self._kill_switch.is_active():
             return {"success": False, "order_id": order_id, "error": "KILL_SWITCH_ACTIVE"}
+        # R5.21–R5.22: Cancel is a write operation — require TRADE API credentials
+        if self._credential_manager:
+            trade_key = self._credential_manager.get(self._config.trade_api_key_ref)
+            trade_secret = self._credential_manager.get(self._config.trade_api_secret_ref)
+            if not trade_key or not trade_secret:
+                return {"success": False, "order_id": order_id, "error": "TRADE_CREDENTIALS_NOT_CONFIGURED"}
         if self._network_policy:
             exchange_url = self._get_exchange_url()
             if not self._network_policy.is_allowed("DELETE", exchange_url):
