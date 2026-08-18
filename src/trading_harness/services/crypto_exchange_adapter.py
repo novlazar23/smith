@@ -1,4 +1,4 @@
-"""Crypto Exchange Adapters — Bybit & Bitget via shared base class.
+"""Crypto Exchange Adapters — Bybit V5 & Bitget V3 via shared base class.
 
 Real HTTP integration (httpx) with HMAC-SHA256 signing.
 Simulation mode enabled when credentials are not configured.
@@ -7,8 +7,10 @@ Network policy enforced; credentials sourced via CredentialManager.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
+import json
 import time
 from abc import ABC, abstractmethod
 from typing import Any
@@ -38,16 +40,20 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         network_policy: NetworkPolicy | None = None,
         credential_manager: CredentialManager | None = None,
         credential_key_prefix: str = "",
+        passphrase: str = "",
     ) -> None:
         self._network_policy = network_policy
         self._credential_manager = credential_manager
         self._credential_key_prefix = credential_key_prefix
+        self._passphrase = passphrase
 
         # Credentials: explizit übergeben ODER über CredentialManager
         if not api_key and credential_manager and credential_key_prefix:
             api_key = credential_manager.get(f"{credential_key_prefix}_API_KEY") or ""
         if not api_secret and credential_manager and credential_key_prefix:
             api_secret = credential_manager.get(f"{credential_key_prefix}_API_SECRET") or ""
+        if not passphrase and credential_manager and credential_key_prefix:
+            passphrase = credential_manager.get(f"{credential_key_prefix}_API_PASSPHRASE") or ""
 
         self._api_key = api_key
         self._api_secret = api_secret
@@ -60,7 +66,9 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         ...
 
     @abstractmethod
-    def _sign_request(self, params: dict[str, Any], timestamp: str) -> dict[str, str]:
+    def _sign_request(
+        self, params: dict[str, Any], timestamp: str, data: dict[str, Any] | None = None
+    ) -> dict[str, str]:
         """Signiert eine Anfrage mit HMAC-SHA256."""
         ...
 
@@ -107,15 +115,14 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         if self._network_policy and not self._network_policy.is_allowed(method, url):
             raise ExchangeAdapterError(f"NETWORK_POLICY_BLOCKED: {method} {url}")
 
-        if not params:
-            params = {}
-        params["apiKey"] = self._api_key
-        params["recvWindow"] = 5000
         timestamp = str(int(time.time() * 1000))
-        signed = self._sign_request(params, timestamp)
-        params.update(signed)
+        signed = self._sign_request(params or {}, timestamp, data)
 
         headers = self._build_headers()
+        # Merge signature fields into headers
+        for k, v in signed.items():
+            headers[k] = v
+
         try:
             if method == "GET":
                 resp = self._client.get(url, params=params, headers=headers)
@@ -136,17 +143,17 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         """Simulierte Antwort (keine echte Netzwerk-Aktion)."""
         params = params or {}
         data = data or {}
-        if "order/create" in url or "createOrder" in url or "/spot/trade/order" in url:
+        if "order/create" in url or "createOrder" in url or "/trade/place-order" in url:
             return {
                 "success": True,
                 "order_id": f"sim-{int(time.time() * 1000)}",
                 "status": "FILLED",
                 "filled_quantity": params.get("qty", 1.0) or data.get("qty", 1.0),
             }
-        if "realtime" in url or "order/detail" in url:
-            return {"orderId": params.get("orderId", ""), "status": "FILLED"}
+        if "order/realtime" in url or "order/detail" in url:
+            return {"orderId": params.get("orderId", data.get("orderId", "")), "status": "FILLED"}
         if "cancel" in url:
-            return {"success": True, "order_id": params.get("orderId", "")}
+            return {"success": True, "order_id": params.get("orderId", data.get("orderId", ""))}
         if "balance" in url:
             return {"USDT": 100000.0, "BTC": 1.0}
         if "ticker" in url or "tickers" in url:
@@ -217,31 +224,40 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
 
 
 class BybitExchangeAdapter(BaseCryptoExchangeAdapter):
-    """Bybit V5 API Adapter."""
+    """Bybit V5 API Adapter.
+
+    Signing for POST /v5/order/create:
+      signature_string = timestamp + api_key + recv_window + jsonBody
+    Headers: X-BAPI-API-KEY, X-BAPI-TIMESTAMP, X-BAPI-SIGN, X-BAPI-RECV-WINDOW
+    """
 
     API_BASE = "https://api.bybit.com"
+    _RECV_WINDOW = "5000"
 
     @property
     def name(self) -> str:
         return "BYBIT"
 
     def _sign_request(
-        self, params: dict[str, Any], timestamp: str
+        self, params: dict[str, Any], timestamp: str, data: dict[str, Any] | None = None
     ) -> dict[str, str]:
-        query = "&".join(
-            f"{k}={v}" for k, v in sorted(params.items()) if v
-        )
-        query += f"&recvWindow=5000&timestamp={timestamp}"
+        # POST requests: sign timestamp + apiKey + recvWindow + jsonBody
+        body_str = json.dumps(data, separators=(",", ":")) if data else ""
+        signature_string = f"{timestamp}{self._api_key}{self._RECV_WINDOW}{body_str}"
         signature = hmac.new(
             self._api_secret.encode(),
-            query.encode(),
+            signature_string.encode(),
             hashlib.sha256,
         ).hexdigest()
-        return {"sign": signature, "timestamp": timestamp}
+        return {
+            "X-BAPI-SIGN": signature,
+            "X-BAPI-TIMESTAMP": timestamp,
+        }
 
     def _build_headers(self) -> dict[str, str]:
         return {
-            "X-Bybit-API-Key": self._api_key,
+            "X-BAPI-API-KEY": self._api_key,
+            "X-BAPI-RECV-WINDOW": self._RECV_WINDOW,
             "Content-Type": "application/json",
         }
 
@@ -262,7 +278,11 @@ class BybitExchangeAdapter(BaseCryptoExchangeAdapter):
 
 
 class BitgetExchangeAdapter(BaseCryptoExchangeAdapter):
-    """Bitget V3 API Adapter."""
+    """Bitget V3 (UTA) API Adapter.
+
+    Signing: timestamp + METHOD + requestPath + body  (base64-encoded HMAC)
+    Headers: ACCESS-KEY, ACCESS-SIGN, ACCESS-TIMESTAMP, ACCESS-PASSPHRASE
+    """
 
     API_BASE = "https://api.bitget.com"
 
@@ -271,27 +291,32 @@ class BitgetExchangeAdapter(BaseCryptoExchangeAdapter):
         return "BITGET"
 
     def _sign_request(
-        self, params: dict[str, Any], timestamp: str
+        self, params: dict[str, Any], timestamp: str, data: dict[str, Any] | None = None
     ) -> dict[str, str]:
-        prehash = f"{timestamp}GET/api/v3/spot/trade/order"
-        for k in sorted(params.keys()):
-            prehash += f"{k}={params[k]}"
-        signature = hmac.new(
+        # Use the actual request path; params are for GET query strings only
+        path = "/api/v3/trade/place-order"
+        body_str = json.dumps(data, separators=(",", ":")) if data else ""
+        prehash = f"{timestamp}POST{path}{body_str}"
+        digest = hmac.new(
             self._api_secret.encode(),
             prehash.encode(),
             hashlib.sha256,
-        ).hexdigest()
-        return {"sign": signature, "accessKey": self._api_key, "timestamp": timestamp}
+        ).digest()
+        signature = base64.b64encode(digest).decode("utf-8")
+        return {
+            "ACCESS-SIGN": signature,
+            "ACCESS-TIMESTAMP": timestamp,
+        }
 
     def _build_headers(self) -> dict[str, str]:
         return {
             "Content-Type": "application/json",
             "ACCESS-KEY": self._api_key,
-            "ACCESS-PASSPHRASE": self._api_secret,
+            "ACCESS-PASSPHRASE": self._passphrase or self._api_secret,
         }
 
     def _submit_order_url(self) -> str:
-        return f"{self.API_BASE}/api/v3/spot/trade/order"
+        return f"{self.API_BASE}/api/v3/trade/place-order"
 
     def _get_order_url(self, order_id: str) -> str:
         return f"{self.API_BASE}/api/v2/spot/order/detail"
