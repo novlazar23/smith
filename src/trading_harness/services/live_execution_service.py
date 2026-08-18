@@ -275,6 +275,12 @@ class LiveExecutionService:
             return "https://api.bybit.com/*"
         elif "bitget" in adapter_type:
             return "https://api.bitget.com/*"
+        elif "binance" in adapter_type:
+            return "https://api.binance.com/*"
+        elif "coinbase" in adapter_type:
+            return "https://api.coinbase.com/*"
+        elif "crypto" in adapter_type:
+            return "https://*"
         return "*"
 
     def activate_live(self) -> None:

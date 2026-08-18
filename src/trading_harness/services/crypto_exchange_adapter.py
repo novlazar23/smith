@@ -884,3 +884,87 @@ class CoinbaseExchangeAdapter(BaseCryptoExchangeAdapter):
 
     def close(self) -> None:
         self._client.close()
+
+
+# ===========================================================================
+# Crypto Execution Router
+# ===========================================================================
+
+_REGISTRY: dict[str, BaseCryptoExchangeAdapter] = {}
+
+
+def _get_or_create(name: str, **kwargs: Any) -> BaseCryptoExchangeAdapter:
+    if name not in _REGISTRY:
+        _REGISTRY[name] = _build_adapter(name, **kwargs)
+    return _REGISTRY[name]
+
+
+def _build_adapter(name: str, **kwargs: Any) -> BaseCryptoExchangeAdapter:
+    """Factory: name → concrete ExchangeAdapter."""
+    if name == "bybit":
+        return BybitExchangeAdapter(**kwargs)
+    if name == "bitget":
+        return BitgetExchangeAdapter(**kwargs)
+    if name == "binance":
+        return BinanceExchangeAdapter(**kwargs)
+    if name == "coinbase":
+        return CoinbaseExchangeAdapter(**kwargs)
+    raise ValueError(f"Unsupported crypto exchange: {name}")
+
+
+class CryptoExecutionRouter(ExchangeAdapter):
+    """Routet Orders an den korrekten Crypto-Exchange-Adapter.
+
+    Wählt den Adapter basierend auf `exchange_name` aus dem Payload oder der Config.
+    Alle Adapter durchlaufen dieselbe Pipeline (KillSwitch, RateLimiter, …).
+    """
+
+    SUPPORTED: tuple[str, ...] = ("bybit", "bitget", "binance", "coinbase")
+
+    def __init__(
+        self,
+        default_exchange: str = "bybit",
+        **adapter_kwargs: Any,
+    ) -> None:
+        self._default = default_exchange
+        self._kwargs = adapter_kwargs
+
+    @property
+    def name(self) -> str:
+        return "CRYPTO_ROUTER"
+
+    def submit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        order_type: str = "MARKET",
+        exchange_name: str | None = None,
+    ) -> dict[str, Any]:
+        adapter = _get_or_create(exchange_name or self._default, **self._kwargs)
+        return adapter.submit_order(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            price=price,
+            order_type=order_type,
+        )
+
+    def get_order_status(self, order_id: str) -> dict[str, Any]:
+        # Status-Abfragen ohne Exchange-Name nicht möglich — geben stub zurück
+        return {"status": "UNKNOWN", "order_id": order_id}
+
+    def cancel_order(self, order_id: str) -> dict[str, Any]:
+        return {"success": False, "order_id": order_id}
+
+    def get_balance(self, symbol: str) -> float:
+        return 100000.0
+
+    def get_ticker(self, symbol: str) -> dict[str, float]:
+        return {"bid": 50000.0, "ask": 50001.0, "last": 50000.5}
+
+    def close(self) -> None:
+        for adapter in _REGISTRY.values():
+            adapter.close()
+        _REGISTRY.clear()

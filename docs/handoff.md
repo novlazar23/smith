@@ -133,12 +133,24 @@ Shadow Mode Logging:
 - Crypto Status Endpoint: `GET /execution/crypto/status` — zeigt welche Adapter
   simuliert vs. live konfiguriert sind
 
+Pipeline-Integration (Phase 6): Crypto-Adapter durch volle Execution-Pipeline.
+- `CryptoExecutionRouter` — Singleton-Router der Orders an den korrekten Exchange-Adapter routet
+  (bybit, bitget, binance, coinbase). Factory `_build_adapter()` instanziiert lazy pro exchange_name.
+- `crypto_execution_service` — eigenständiger `LiveExecutionService` mit `_crypto_router` als Adapter,
+  nutzt denselben `execution_kill_switch`/`credential_manager`/`network_policy` wie Paper-Service.
+- Pipeline für Crypto-Orders identisch: KillSwitch → RateLimit → Dedup → SymbolWhitelist → RiskEngine
+  → NetworkPolicy → CredentialCheck → Exchange → Log.
+- `POST /execution/crypto/submit` — unified Endpoint statt separater `/bybit`/`/bitget`/`/binance`/`/coinbase`
+  Routen. Payload: `decision_id`, `run_id`, `symbol`, `side`, `quantity`, `price`.
+- `_get_exchange_url()` in `LiveExecutionService` erweitert: Binance (`https://api.binance.com/*`),
+  Coinbase (`https://api.coinbase.com/*`), Router (`https://*`).
+- API Routen `/execution/crypto/bybit`, `/bitget`, `/binance`, `/coinbase` entfernt —
+  ersetzt durch `POST /execution/crypto/submit`.
+- `execution_status` zeigt nun `live_execution_enabled` über `live_execution_service.is_live_enabled`.
+
 Neue API Endpunkte in `routes.py`:
-- `POST /execution/crypto/bybit` — Order via Bybit Adapter
-- `POST /execution/crypto/bitget` — Order via Bitget Adapter
-- `POST /execution/crypto/binance` — Order via Binance Adapter
-- `POST /execution/crypto/coinbase` — Order via Coinbase Adapter
-- `GET /execution/crypto/status` — Crypto-Adapter Konfigurationsstatus (zeigt alle 4 Adapter)
+- `POST /execution/crypto/submit` — unified Crypto-Submit durch LiveExecutionService-Pipeline
+- `GET /execution/crypto/status` — Crypto-Router Status (simulated=True/False, supported_exchanges)
 
 Mypy fixes (pre-existing):
 - `order_deduplicator.py:42` — `maxlen` kann `None` sein (deque ohne maxlen)

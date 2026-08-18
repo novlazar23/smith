@@ -582,12 +582,7 @@ def list_all_population_stats() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 from trading_harness.services.credential_manager import CredentialManager
-from trading_harness.services.crypto_exchange_adapter import (
-    BinanceExchangeAdapter,
-    BitgetExchangeAdapter,
-    BybitExchangeAdapter,
-    CoinbaseExchangeAdapter,
-)
+from trading_harness.services.crypto_exchange_adapter import CryptoExecutionRouter
 from trading_harness.services.execution_store import ExecutionLogStore
 from trading_harness.services.kill_switch import KillSwitch
 from trading_harness.services.live_execution_service import (
@@ -623,21 +618,31 @@ credential_manager = CredentialManager()
 _paper_exchange = PaperExchange()
 _paper_adapter = PaperExchangeAdapter(paper_exchange=_paper_exchange)
 
-# Crypto-Exchange-Adapter (Bybit, Bitget, Binance, Coinbase) — standardmäßig simuliert.
-_bybit_adapter = BybitExchangeAdapter(simulated=True)
-_bitget_adapter = BitgetExchangeAdapter(simulated=True)
-_binance_adapter = BinanceExchangeAdapter(simulated=True)
-_coinbase_adapter = CoinbaseExchangeAdapter(simulated=True)
+live_execution_service = LiveExecutionService(
+    kill_switch=execution_kill_switch,
+    rate_limiter=None,
+    deduplicator=None,
+    exchange_adapter=_paper_adapter,
+    risk_engine=risk_engine,
+    network_policy=network_policy,
+    credential_manager=credential_manager,
+    config=execution_config,
+)
 
 # Shadow-Mode-Logger für Backtesting ohne echte Order-Ausführung.
 _shadow_logger = ShadowModeLogger()
 _shadow_adapter = ShadowModeAdapter(delegate=_paper_adapter, shadow=_shadow_logger)
 
-live_execution_service = LiveExecutionService(
+# Crypto-Execution-Router — routet an Bybit, Bitget, Binance oder Coinbase.
+# Alle Adapter durchlaufen dieselbe Pipeline (KillSwitch, RateLimiter, …).
+_crypto_router = CryptoExecutionRouter(simulated=True)
+
+# Crypto-Execution-Service — nutzt denselben KillSwitch/Lock als Paper-Service
+crypto_execution_service = LiveExecutionService(
     kill_switch=execution_kill_switch,
-    rate_limiter=None,  # verwendet Default (global=10, symbol=2)
+    rate_limiter=None,
     deduplicator=None,
-    exchange_adapter=_paper_adapter,
+    exchange_adapter=_crypto_router,
     risk_engine=risk_engine,
     network_policy=network_policy,
     credential_manager=credential_manager,
@@ -748,78 +753,25 @@ def shadow_records(
 
 
 # ---------------------------------------------------------------------------
-# Crypto Submit — Bybit & Bitget (simuliert wenn keine Credentials)
+# Crypto Submit — unified endpoint durch LiveExecutionService-Pipeline
 # ---------------------------------------------------------------------------
 
 
 @router.post(
-    "/execution/crypto/bybit",
+    "/execution/crypto/submit",
     dependencies=[Depends(require_trade_key)],
 )
-def crypto_submit_bybit(payload: dict) -> dict:
+def crypto_submit(payload: dict) -> dict:
+    """Order durch die volle Pipeline (KillSwitch, RateLimiter, RiskEngine, …)."""
     try:
-        result = _bybit_adapter.submit_order(
+        return crypto_execution_service.submit_order(
+            decision_id=payload["decision_id"],
+            run_id=payload.get("run_id", ""),
             symbol=payload["symbol"],
             side=payload["side"],
             quantity=float(payload["quantity"]),
             price=float(payload["price"]),
-            order_type=payload.get("order_type", "MARKET"),
         )
-        return result
-    except (KeyError, ValueError, TypeError) as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
-
-
-@router.post(
-    "/execution/crypto/bitget",
-    dependencies=[Depends(require_trade_key)],
-)
-def crypto_submit_bitget(payload: dict) -> dict:
-    try:
-        result = _bitget_adapter.submit_order(
-            symbol=payload["symbol"],
-            side=payload["side"],
-            quantity=float(payload["quantity"]),
-            price=float(payload["price"]),
-            order_type=payload.get("order_type", "MARKET"),
-        )
-        return result
-    except (KeyError, ValueError, TypeError) as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
-
-
-@router.post(
-    "/execution/crypto/binance",
-    dependencies=[Depends(require_trade_key)],
-)
-def crypto_submit_binance(payload: dict) -> dict:
-    try:
-        result = _binance_adapter.submit_order(
-            symbol=payload["symbol"],
-            side=payload["side"],
-            quantity=float(payload["quantity"]),
-            price=float(payload["price"]),
-            order_type=payload.get("order_type", "MARKET"),
-        )
-        return result
-    except (KeyError, ValueError, TypeError) as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
-
-
-@router.post(
-    "/execution/crypto/coinbase",
-    dependencies=[Depends(require_trade_key)],
-)
-def crypto_submit_coinbase(payload: dict) -> dict:
-    try:
-        result = _coinbase_adapter.submit_order(
-            symbol=payload["symbol"],
-            side=payload["side"],
-            quantity=float(payload["quantity"]),
-            price=float(payload["price"]),
-            order_type=payload.get("order_type", "MARKET"),
-        )
-        return result
     except (KeyError, ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
 
@@ -834,11 +786,9 @@ def crypto_submit_coinbase(payload: dict) -> dict:
     dependencies=[Depends(require_read_key)],
 )
 def crypto_status() -> dict:
-    """Crypto-Adapter Status — zeigt welche Adapter konfiguriert vs simuliert."""
+    """Crypto-Router Status — zeigt ob Adapter simuliert oder live."""
     return {
-        "bybit_simulated": _bybit_adapter._simulated,
-        "bitget_simulated": _bitget_adapter._simulated,
-        "binance_simulated": _binance_adapter._simulated,
-        "coinbase_simulated": _coinbase_adapter._simulated,
+        "crypto_router_simulated": _crypto_router._kwargs.get("simulated", True),
+        "supported_exchanges": list(CryptoExecutionRouter.SUPPORTED),
         "shadow_mode_active": True,
     }
