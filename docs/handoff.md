@@ -220,6 +220,33 @@ BLE001 Lint fixes (pre-existing):
 - `test_order_deduplicator.py:79` — concurrent stress test
 - `test_paper_exchange.py:462,491,499` — concurrent stress tests
 
+Phase 10 — Connection/Error-Handling & Edge-Case Tests: ✅ COMPLETE.
+22 neue Tests (347 Zeilen), 645 Tests gesamt grün, ruff + mypy clean.
+
+ConnectionError-Retry (simulated=False):
+- DNS-Fehler: 3x retry dann ConnectionError mit message
+- Timeout: 3x retry dann ConnectionError
+- SSL-Fehler: 3x retry dann ConnectionError
+- Alle 4 Adapter (Bybit, Bitget, Binance, Coinbase) abgedeckt
+
+HTTP-400 Response Handling:
+- Bybit 400: retCode "-1017" → ExchangeAdapterError mit Error-Code
+- Binance 400: code -1121 → ExchangeAdapterError
+- Coinbase 400: error "invalid_order" → ExchangeAdapterError
+
+Response-Schema Edge Cases:
+- Empty ticker lists, missing fields, null values
+- Default-Werte bei fehlenden bidPx/askPx/lastPx
+- Balance ohne walletBalance/accounts → graceful handling
+- Order-Status ohne data-Objekt
+
+CryptoExecutionRouter Live-Mode:
+- Credential-Loading: beide Keys nötig für simulated=False
+- Mock-basierter Test: resolve_adapter_state prüft KEY+SECRET
+
+Bugfix in dieser Phase:
+- Binance `_make_signed_request`: ConnectError now raises ConnectionError with original message
+
 ## Next priority
 
 Phase 5 — Live Execution: ✅ **KOMPLETT MIT RISK ENGINE HARDENING**. Alle Core Services,
@@ -245,6 +272,7 @@ Nächste Schritte (in Reihenfolge):
    - Rate-Limit-Error-Handling (429, timeout retries)
    - Connection-Error-Handling (5xx, DNS, SSL)
    - `simulated=False` Tests mit mocked httpx responses
+   - ✅ PARTIALLY DONE: Retry Behavior und HTTP-Error Handling getestet (Phase 9/10)
 
 3. **Live Execution Safety Gate** — explizite Freigabe erforderlich
    - Audit-Log aller Live-Transaktionen
