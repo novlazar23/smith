@@ -1,4 +1,4 @@
-"""Tests für Bybit & Bitget Crypto Exchange Adapters."""
+"""Tests für Bybit, Bitget, Binance & Coinbase Crypto Exchange Adapters."""
 
 from __future__ import annotations
 
@@ -7,8 +7,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from trading_harness.services.crypto_exchange_adapter import (
+    BinanceExchangeAdapter,
     BitgetExchangeAdapter,
     BybitExchangeAdapter,
+    CoinbaseExchangeAdapter,
 )
 from trading_harness.services.exchange_adapter import ExchangeAdapterError, ResponseValidationError
 
@@ -107,6 +109,109 @@ class TestBitgetExchangeAdapter:
         adapter.close()
 
 
+class TestBinanceExchangeAdapter:
+    """Binance Exchange Adapter Tests."""
+
+    def test_name(self):
+        """Adapter-Name ist BINANCE."""
+        adapter = BinanceExchangeAdapter()
+        assert adapter.name == "BINANCE"
+
+    def test_submit_order_simulated(self):
+        """Simulierter Order-Submit gibt order_id und FILLED."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        result = adapter.submit_order("BTCUSDT", "BUY", 1.0, 50000.0)
+        assert result["status"] == "FILLED"
+        assert result["order_id"] is not None
+        adapter.close()
+
+    def test_get_balance_simulated(self):
+        """Simulierter Balance-Check gibt USDT-Amount."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        balance = adapter.get_balance("BTCUSDT")
+        assert balance == 100000.0
+        adapter.close()
+
+    def test_get_ticker_simulated(self):
+        """Simulierter Ticker-Check gibt bid/ask/last."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        ticker = adapter.get_ticker("BTCUSDT")
+        assert ticker["bid"] == 50000.0
+        assert ticker["ask"] == 50001.0
+        assert ticker["last"] == 50000.5
+        adapter.close()
+
+    def test_get_order_status_simulated(self):
+        """Simulierter Order-Status."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        result = adapter.get_order_status("order-123")
+        assert result["status"] == "FILLED"
+        adapter.close()
+
+    def test_cancel_order_simulated(self):
+        """Simulierter Order-Cancel."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        result = adapter.cancel_order("order-123")
+        assert result["success"] is True
+        adapter.close()
+
+    def test_invalid_response_raises(self):
+        """Binance code != 0 wirft ResponseValidationError."""
+        adapter = BinanceExchangeAdapter(simulated=True)
+        with pytest.raises(ResponseValidationError) as exc_info:
+            adapter._validate_response({"code": -1002, "msg": "Unknown service"})
+        assert exc_info.value.code == "-1002"
+        assert "Unknown service" in exc_info.value.message
+        adapter.close()
+
+
+class TestCoinbaseExchangeAdapter:
+    """Coinbase Exchange Adapter Tests."""
+
+    def test_name(self):
+        """Adapter-Name ist COINBASE."""
+        adapter = CoinbaseExchangeAdapter()
+        assert adapter.name == "COINBASE"
+
+    def test_submit_order_simulated(self):
+        """Simulierter Order-Submit gibt order_id und FILLED."""
+        adapter = CoinbaseExchangeAdapter(simulated=True)
+        result = adapter.submit_order("BTC-USDT", "BUY", 1.0, 50000.0)
+        assert result["status"] == "FILLED"
+        assert result["order_id"] is not None
+        adapter.close()
+
+    def test_get_balance_simulated(self):
+        """Simulierter Balance-Check gibt USDT-Amount."""
+        adapter = CoinbaseExchangeAdapter(simulated=True)
+        balance = adapter.get_balance("BTC-USDT")
+        assert balance == 100000.0
+        adapter.close()
+
+    def test_get_ticker_simulated(self):
+        """Simulierter Ticker-Check gibt bid/ask/last."""
+        adapter = CoinbaseExchangeAdapter(simulated=True)
+        ticker = adapter.get_ticker("BTC-USDT")
+        assert ticker["bid"] == 50000.0
+        assert ticker["ask"] == 50001.0
+        assert ticker["last"] == 50000.5
+        adapter.close()
+
+    def test_get_order_status_simulated(self):
+        """Simulierter Order-Status."""
+        adapter = CoinbaseExchangeAdapter(simulated=True)
+        result = adapter.get_order_status("order-123")
+        assert result["status"] == "FILLED"
+        adapter.close()
+
+    def test_cancel_order_simulated(self):
+        """Simulierter Order-Cancel."""
+        adapter = CoinbaseExchangeAdapter(simulated=True)
+        result = adapter.cancel_order("order-123")
+        assert result["success"] is True
+        adapter.close()
+
+
 class TestBaseCryptoExchangeAdapter:
     """Gemeinsame Tests für alle Crypto-Adapter."""
 
@@ -114,26 +219,27 @@ class TestBaseCryptoExchangeAdapter:
         """Alle Adapter implementieren ExchangeAdapter-Interface."""
         bybit = BybitExchangeAdapter()
         bitget = BitgetExchangeAdapter()
+        binance = BinanceExchangeAdapter()
+        coinbase = CoinbaseExchangeAdapter()
 
         # Name Property
         assert bybit.name == "BYBIT"
         assert bitget.name == "BITGET"
+        assert binance.name == "BINANCE"
+        assert coinbase.name == "COINBASE"
 
         # Methoden existieren
-        assert callable(bybit.submit_order)
-        assert callable(bybit.get_order_status)
-        assert callable(bybit.cancel_order)
-        assert callable(bybit.get_balance)
-        assert callable(bybit.get_ticker)
-
-        assert callable(bitget.submit_order)
-        assert callable(bitget.get_order_status)
-        assert callable(bitget.cancel_order)
-        assert callable(bitget.get_balance)
-        assert callable(bitget.get_ticker)
+        for adapter in (bybit, bitget, binance, coinbase):
+            assert callable(adapter.submit_order)
+            assert callable(adapter.get_order_status)
+            assert callable(adapter.cancel_order)
+            assert callable(adapter.get_balance)
+            assert callable(adapter.get_ticker)
 
         bybit.close()
         bitget.close()
+        binance.close()
+        coinbase.close()
 
 
 # ===========================================================================

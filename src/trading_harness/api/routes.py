@@ -583,8 +583,10 @@ def list_all_population_stats() -> list[dict]:
 
 from trading_harness.services.credential_manager import CredentialManager
 from trading_harness.services.crypto_exchange_adapter import (
+    BinanceExchangeAdapter,
     BitgetExchangeAdapter,
     BybitExchangeAdapter,
+    CoinbaseExchangeAdapter,
 )
 from trading_harness.services.execution_store import ExecutionLogStore
 from trading_harness.services.kill_switch import KillSwitch
@@ -621,9 +623,11 @@ credential_manager = CredentialManager()
 _paper_exchange = PaperExchange()
 _paper_adapter = PaperExchangeAdapter(paper_exchange=_paper_exchange)
 
-# Crypto-Exchange-Adapter (Bybit & Bitget) — standardmäßig simuliert.
+# Crypto-Exchange-Adapter (Bybit, Bitget, Binance, Coinbase) — standardmäßig simuliert.
 _bybit_adapter = BybitExchangeAdapter(simulated=True)
 _bitget_adapter = BitgetExchangeAdapter(simulated=True)
+_binance_adapter = BinanceExchangeAdapter(simulated=True)
+_coinbase_adapter = CoinbaseExchangeAdapter(simulated=True)
 
 # Shadow-Mode-Logger für Backtesting ohne echte Order-Ausführung.
 _shadow_logger = ShadowModeLogger()
@@ -784,6 +788,42 @@ def crypto_submit_bitget(payload: dict) -> dict:
         raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
 
 
+@router.post(
+    "/execution/crypto/binance",
+    dependencies=[Depends(require_trade_key)],
+)
+def crypto_submit_binance(payload: dict) -> dict:
+    try:
+        result = _binance_adapter.submit_order(
+            symbol=payload["symbol"],
+            side=payload["side"],
+            quantity=float(payload["quantity"]),
+            price=float(payload["price"]),
+            order_type=payload.get("order_type", "MARKET"),
+        )
+        return result
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
+
+
+@router.post(
+    "/execution/crypto/coinbase",
+    dependencies=[Depends(require_trade_key)],
+)
+def crypto_submit_coinbase(payload: dict) -> dict:
+    try:
+        result = _coinbase_adapter.submit_order(
+            symbol=payload["symbol"],
+            side=payload["side"],
+            quantity=float(payload["quantity"]),
+            price=float(payload["price"]),
+            order_type=payload.get("order_type", "MARKET"),
+        )
+        return result
+    except (KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {exc}") from exc
+
+
 # ---------------------------------------------------------------------------
 # Crypto Status — zeigt welche Adapter simuliert
 # ---------------------------------------------------------------------------
@@ -798,5 +838,7 @@ def crypto_status() -> dict:
     return {
         "bybit_simulated": _bybit_adapter._simulated,
         "bitget_simulated": _bitget_adapter._simulated,
+        "binance_simulated": _binance_adapter._simulated,
+        "coinbase_simulated": _coinbase_adapter._simulated,
         "shadow_mode_active": True,
     }

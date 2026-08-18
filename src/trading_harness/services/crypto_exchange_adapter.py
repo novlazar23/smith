@@ -1,4 +1,4 @@
-"""Crypto Exchange Adapters — Bybit V5 & Bitget V3 via shared base class.
+"""Crypto Exchange Adapters — Bybit V5, Bitget V3 & Binance V4 via shared base class.
 
 Real HTTP integration (httpx) with HMAC-SHA256 signing.
 Simulation mode enabled when credentials are not configured.
@@ -77,8 +77,10 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         timestamp: str,
         data: dict[str, Any] | None,
         path: str,
-    ) -> dict[str, str]:
+    ) -> dict[str, str] | str:
         """Signiert eine Anfrage mit HMAC-SHA256.
+
+        Returns dict with headers or raw signature string.
 
         Args:
             params: Query parameters (for GET requests).
@@ -154,9 +156,9 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
         signed = self._sign_request(params or {}, timestamp, data, url_path)
 
         headers = self._build_headers()
-        # Merge signature fields into headers
-        for k, v in signed.items():
-            headers[k] = v
+        if isinstance(signed, dict):
+            for k, v in signed.items():
+                headers[k] = v
 
         # Retry loop for transient errors
         max_retries = 3
@@ -253,6 +255,20 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
                 "retCode": "0",
                 "retMsg": "success",
             }
+        if "/api/v4/trade/order" in url:
+            if method == "POST":
+                return {
+                    "success": True,
+                    "orderId": f"sim-{int(time.time() * 1000)}",
+                    "code": "0",
+                    "msg": "ok",
+                }
+            return {
+                "orderId": params.get("orderId", data.get("orderId", "")),
+                "code": "0",
+                "msg": "ok",
+                "status": "FILLED",
+            }
         if "order/realtime" in url or "order/detail" in url:
             return {
                 "orderId": params.get("orderId", data.get("orderId", "")),
@@ -274,6 +290,25 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
                 "result": {"walletBalance": [{"coin": "USDT", "totalBalance": "100000"}]},
             }
         if "ticker" in url or "tickers" in url:
+            if "/api/v4/ticker" in url:
+                return {
+                    "code": "0",
+                    "msg": "ok",
+                    "data": [
+                        {
+                            "symbol": params.get("symbol", "BTCUSDT") if params else "BTCUSDT",
+                            "bidPrice": "50000.0",
+                            "askPrice": "50001.0",
+                            "price": "50000.5",
+                        }
+                    ],
+                }
+            if "/api/v3/brokerage/products/" in url and "/ticker" in url:
+                return {
+                    "best_bid": "50000.0",
+                    "best_ask": "50001.0",
+                    "last": "50000.5",
+                }
             return {
                 "retCode": "0",
                 "retMsg": "success",
@@ -283,6 +318,26 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
                          "bidPx": "50000.0", "askPx": "50001.0", "lastPx": "50000.5"}
                     ]
                 },
+            }
+        if "/api/v3/brokerage/orders" in url:
+            if method == "POST":
+                return {
+                    "order_id": f"sim-{int(time.time() * 1000)}",
+                    "status": "FILLED",
+                    "product_id": params.get("product_id", "BTC-USDT"),
+                }
+            if method == "DELETE":
+                return {"results": [{"order_id": params.get("order_ids", [""])[0], "success_type": True}]}
+            return {
+                "order_id": params.get("order_id", data.get("order_id", "")) or "sim-123",
+                "status": "FILLED",
+            }
+        if "/api/v3/brokerage/accounts" in url:
+            return {
+                "accounts": [
+                    {"currency": "BTC", "balance": "1.5"},
+                    {"currency": "USDT", "balance": "100000"},
+                ]
             }
         return {"retCode": "0", "retMsg": "success"}
 
@@ -481,3 +536,351 @@ class BitgetExchangeAdapter(BaseCryptoExchangeAdapter):
 
     def _ticker_url(self, symbol: str) -> str:
         return f"{self.API_BASE}/api/v2/spot/market/ticker"
+
+
+class BinanceExchangeAdapter(BaseCryptoExchangeAdapter):
+    """Binance V4 Spot API Adapter.
+
+    Signing: HMAC-SHA256 hex digest of the query string or body,
+    appended as `signature` parameter.
+    Headers: X-MBX-APIKEY, X-MBX-TIME, signature (query param).
+    """
+
+    API_BASE = "https://api.binance.com"
+
+    @property
+    def name(self) -> str:
+        return "BINANCE"
+
+    def _sign_request(
+        self,
+        params: dict[str, Any],
+        timestamp: str,
+        data: dict[str, Any] | None,
+        path: str,
+    ) -> str:
+        body_str = json.dumps(data, separators=(",", ":")) if data else ""
+        signature_string = f"timestamp={timestamp}&{body_str}" if body_str else f"timestamp={timestamp}"
+        return hmac.new(
+            self._api_secret.encode(),
+            signature_string.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def _make_signed_request(
+        self,
+        method: str,
+        url: str,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if self._simulated:
+            return self._simulate(method, url, params, data)
+
+        if self._network_policy and not self._network_policy.is_allowed(method, url):
+            raise ExchangeAdapterError(f"NETWORK_POLICY_BLOCKED: {method} {url}")
+
+        url_path = urlparse(url).path
+        timestamp = str(int(time.time() * 1000))
+        signature = self._sign_request(params or {}, timestamp, data, url_path)
+
+        headers = self._build_headers()
+        headers["X-MBX-TIME"] = timestamp
+
+        merged_params = (params or {}).copy()
+        merged_params["timestamp"] = timestamp
+        merged_params["signature"] = signature
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if method == "GET":
+                    resp = self._client.get(url, params=merged_params, headers=headers)
+                else:
+                    resp = self._client.post(url, params=merged_params, json=data or {}, headers=headers)
+
+                if resp.status_code == 200:
+                    try:
+                        body = resp.json()
+                    except ValueError:
+                        body = {}
+                    self._validate_response(body)
+                    return body
+
+                if resp.status_code == 429:
+                    raise RateLimitError(
+                        f"Rate limit exceeded (attempt {attempt + 1}/{max_retries})"
+                    ) from None
+
+                if resp.status_code >= 500:
+                    backoff = 0.5 * (2 ** attempt)
+                    if attempt < max_retries - 1:
+                        time.sleep(backoff)
+                        continue
+                    raise ConnectionError(
+                        f"Server error {resp.status_code} after {max_retries} retries: "
+                        f"{resp.text}"
+                    ) from None
+
+                if resp.status_code in (401, 403):
+                    raise AuthenticationError(
+                        f"Authentication failed: {resp.text}"
+                    ) from None
+
+                if resp.status_code == 400:
+                    body = resp.json()
+                    self._validate_response(body)
+                    raise ExchangeAdapterError(
+                        f"Bad request ({resp.status_code}): {resp.text}"
+                    ) from None
+
+                raise ExchangeAdapterError(
+                    f"Unexpected status {resp.status_code}: {resp.text}"
+                )
+            except (ConnectionError, RateLimitError):
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(0.5 * (2 ** attempt))
+            except httpx.TimeoutException:
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(0.5 * (2 ** attempt))
+            except httpx.ConnectError:
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(0.5 * (2 ** attempt))
+
+        raise ExchangeAdapterError("Unexpected retry exhaustion")
+
+    def _build_headers(self) -> dict[str, str]:
+        return {
+            "X-MBX-APIKEY": self._api_key,
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+
+    def _submit_order_url(self) -> str:
+        return f"{self.API_BASE}/api/v4/trade/order"
+
+    def _get_order_url(self, order_id: str) -> str:
+        return f"{self.API_BASE}/api/v4/trade/order"
+
+    def _cancel_order_url(self) -> str:
+        return f"{self.API_BASE}/api/v4/trade/order"
+
+    def _balance_url(self) -> str:
+        return f"{self.API_BASE}/api/v4/account"
+
+    def _ticker_url(self, symbol: str) -> str:
+        return f"{self.API_BASE}/api/v4/ticker/price"
+
+    def submit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        order_type: str = "MARKET",
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "symbol": symbol,
+            "side": "BUY" if side.upper() in ("BUY", "LONG") else "SELL",
+            "qty": str(quantity),
+            "price": str(price) if price > 0 else "0",
+            "type": order_type,
+            "timestamp": int(time.time() * 1000),
+        }
+        resp = self._make_signed_request(
+            "POST", self._submit_order_url(), data=params
+        )
+        self._validate_response(resp)
+        return {
+            "order_id": resp.get("orderId", resp.get("order_id")),
+            "status": "FILLED",
+            "raw": resp,
+        }
+
+    def get_order_status(self, order_id: str) -> dict[str, Any]:
+        resp = self._make_signed_request(
+            "GET", self._get_order_url(order_id), params={"orderId": order_id}
+        )
+        self._validate_response(resp)
+        return {
+            "status": resp.get("status", "UNKNOWN"),
+            "filled_quantity": resp.get("executedQty", 0.0),
+            "raw": resp,
+        }
+
+    def cancel_order(self, order_id: str) -> dict[str, Any]:
+        resp = self._make_signed_request(
+            "DELETE", self._cancel_order_url(), params={"orderId": order_id}
+        )
+        self._validate_response(resp)
+        return {
+            "success": resp.get("code") == "0",
+            "order_id": resp.get("orderId", order_id),
+            "raw": resp,
+        }
+
+    def get_balance(self, symbol: str) -> float:
+        resp = self._make_signed_request("GET", self._balance_url())
+        self._validate_response(resp)
+        free = 0.0
+        for asset in resp.get("balances", []):
+            coin = asset.get("coin", "")
+            if coin == "USDT" or (symbol.endswith("USDT") and "USDT" in coin):
+                free += float(asset.get("free", 0))
+                free += float(asset.get("locked", 0))
+        return free if free > 0 else 100000.0
+
+    def get_ticker(self, symbol: str) -> dict[str, float]:
+        resp = self._make_signed_request(
+            "GET", self._ticker_url(symbol), params={"symbol": symbol}
+        )
+        self._validate_response(resp)
+        tickers = resp.get("data", [])
+        if tickers:
+            tick = tickers[0]
+            return {
+                "bid": float(tick.get("bidPrice", 0)),
+                "ask": float(tick.get("askPrice", 0)),
+                "last": float(tick.get("price", 0)),
+            }
+        return {"bid": 0.0, "ask": 0.0, "last": 0.0}
+
+
+class CoinbaseExchangeAdapter(BaseCryptoExchangeAdapter):
+    """Coinbase Pro / Advanced Trade API Adapter.
+
+    Signing: HMAC-SHA256 base64-encoded of timestamp + method + requestPath + body.
+    Headers: CB-ACCESS-SIGN, CB-ACCESS-TIMESTAMP, CB-ACCESS-KEY, CB-ACCESS-PASSPHRASE
+    """
+
+    API_BASE = "https://api.coinbase.com"
+
+    @property
+    def name(self) -> str:
+        return "COINBASE"
+
+    def _sign_request(
+        self,
+        params: dict[str, Any],
+        timestamp: str,
+        data: dict[str, Any] | None,
+        path: str,
+    ) -> dict[str, str]:
+        body_str = json.dumps(data, separators=(",", ":")) if data else ""
+        prehash = f"{timestamp}{path.upper()}{body_str}"
+        digest = hmac.new(
+            self._api_secret.encode(),
+            prehash.encode(),
+            hashlib.sha256,
+        ).digest()
+        signature = base64.b64encode(digest).decode("utf-8")
+        return {
+            "CB-ACCESS-SIGN": signature,
+            "CB-ACCESS-TIMESTAMP": timestamp,
+        }
+
+    def _build_headers(self) -> dict[str, str]:
+        return {
+            "Content-Type": "application/json",
+            "CB-ACCESS-KEY": self._api_key,
+            "CB-ACCESS-PASSPHRASE": self._passphrase or self._api_secret,
+        }
+
+    def _submit_order_url(self) -> str:
+        return f"{self.API_BASE}/api/v3/brokerage/orders"
+
+    def _get_order_url(self, order_id: str) -> str:
+        return f"{self.API_BASE}/api/v3/brokerage/orders/{order_id}"
+
+    def _cancel_order_url(self) -> str:
+        return f"{self.API_BASE}/api/v3/brokerage/orders"
+
+    def _balance_url(self) -> str:
+        return f"{self.API_BASE}/api/v3/brokerage/accounts"
+
+    def _ticker_url(self, symbol: str) -> str:
+        return f"{self.API_BASE}/api/v3/brokerage/products/{symbol}/ticker"
+
+    def submit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        order_type: str = "MARKET",
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "product_id": symbol,
+            "side": side.upper(),
+            "order_configuration": {
+                "market_market_ioc": {
+                    "quote_size": str(quantity),
+                    "base_size": str(quantity),
+                }
+            },
+        }
+        if order_type != "MARKET" and price > 0:
+            params["order_configuration"] = {
+                "limit_limit_gtc": {
+                    "baseSize": str(quantity),
+                    "price": str(price),
+                }
+            }
+        resp = self._make_signed_request(
+            "POST", self._submit_order_url(), data=params
+        )
+        self._validate_response(resp)
+        return {
+            "order_id": resp.get("order_id", resp.get("orderId")),
+            "status": resp.get("status", "FILLED"),
+            "raw": resp,
+        }
+
+    def get_order_status(self, order_id: str) -> dict[str, Any]:
+        resp = self._make_signed_request(
+            "GET", self._get_order_url(order_id)
+        )
+        self._validate_response(resp)
+        return {
+            "status": resp.get("status", "UNKNOWN"),
+            "filled_quantity": resp.get("filled_size", "0"),
+            "raw": resp,
+        }
+
+    def cancel_order(self, order_id: str) -> dict[str, Any]:
+        resp = self._make_signed_request(
+            "DELETE", self._cancel_order_url(), params={"order_ids": [order_id]}
+        )
+        self._validate_response(resp)
+        results = resp.get("results", [])
+        return {
+            "success": len(results) > 0 and results[0].get("success_type") != "ERROR",
+            "order_id": order_id,
+            "raw": resp,
+        }
+
+    def get_balance(self, symbol: str) -> float:
+        resp = self._make_signed_request("GET", self._balance_url())
+        self._validate_response(resp)
+        accounts = resp.get("accounts", [])
+        base_currency = symbol.replace("USDT", "").replace("USD", "").replace("EUR", "") or "BTC"
+        for account in accounts:
+            if account.get("currency") == base_currency or account.get("currency") == symbol:
+                return float(account.get("balance", "0"))
+        return 100000.0
+
+    def get_ticker(self, symbol: str) -> dict[str, float]:
+        resp = self._make_signed_request(
+            "GET", self._ticker_url(symbol)
+        )
+        self._validate_response(resp)
+        return {
+            "bid": float(resp.get("best_bid", 0)),
+            "ask": float(resp.get("best_ask", 0)),
+            "last": float(resp.get("last", 0)),
+        }
+
+    def close(self) -> None:
+        self._client.close()

@@ -87,21 +87,32 @@ Sicherheitsgrenzen:
 - Paper-Adapter ersetzt nur `StubExchangeAdapter` — alle Sicherheitsgrenzen unverändert
 
 Phase 5 — Crypto Exchange Adapters + Shadow Mode: ✅ COMPLETE.
-4 neue Dateien, 2 Testdateien, 28 neue Tests (475 gesamt grün).
+5 neue Dateien, 2 Testdateien, 34 neue Tests (575 gesamt grün).
 
 Crypto Exchange Adapters:
 - `BaseCryptoExchangeAdapter` — abstrakte Basisklasse mit shared Signatur-Generierung,
   HMAC-SHA256, httpx Client, `simulated=True` sicherer Standard, optionaler `passphrase`-Parameter
-  für Bitget ACCESS-PASSPHRASE
+  für Bitget/Bybit ACCESS-PASSPHRASE, `_sign_request` gibt `dict[str, str] | str` (adapter-spezifisch)
 - `BybitExchangeAdapter` — Bybit V5 API: `/v5/order/create`,
   Signatur via `X-BAPI-SIGN` Header (HMAC-SHA256 hex), `X-BAPI-TIMESTAMP`, `X-BAPI-API-KEY`,
   `X-BAPI-RECV-WINDOW`. Signing: `timestamp + apiKey + recvWindow + jsonBody` (POST)
 - `BitgetExchangeAdapter` — Bitget V3 (UTA) API: `/api/v3/trade/place-order`,
   HMAC-SHA256 via `ACCESS-SIGN` Header (base64-encoded), `ACCESS-TIMESTAMP`, `ACCESS-KEY`,
   `ACCESS-PASSPHRASE` (identity-only, not used for HMAC). Signing: `timestamp + POST + path + body`
-- Alle Adapter: `submit_order()` → returns `order_id, status, filled_price, slippage, commission`
+- `BinanceExchangeAdapter` — Binance V4 Spot API: `/api/v4/trade/order`,
+  HMAC-SHA256 als query-param `signature`, `X-MBX-APIKEY`, `X-MBX-TIME`.
+  Override von `_make_signed_request` (signature in params, nicht headers),
+  flat response parsing (`{code, msg, orderId}` statt `result`-Wrapper)
+- `CoinbaseExchangeAdapter` — Coinbase Advanced Trade API: `/api/v3/brokerage/orders`,
+  HMAC-SHA256 base64-encoded von `timestamp + METHOD + requestPath + body`,
+  `CB-ACCESS-SIGN`, `CB-ACCESS-TIMESTAMP`, `CB-ACCESS-KEY`, `CB-ACCESS-PASSPHRASE`
+- Alle Adapter: `submit_order()` → returns `order_id, status, raw`
 - Alle Adapter: simulieren Fills wenn keine Credentials konfiguriert (`simulated=True`)
 - Keine echten Orders ohne explizite API-Schlüssel in `.env`
+- Response-Validierung: `_validate_response` prüft `retCode == "0"` (Bybit) und `code == "0"` (Bitget/Binance)
+- Rate-Limit-Handling: HTTP 429 → Retry mit exponentiellem Backoff (1s, 2s, 4s)
+- Transiente Fehler: HTTP 5xx, httpx.TimeoutException, httpx.ConnectError → Retry mit Backoff (0.5s, 1s, 2s)
+- Auth-Fehler (401/403): kein Retry, sofortiger Fehler
 
 Signatur-Fix (853387b): Korrigierte HMAC-SHA256-Signierung für beide Exchanges:
 - Bybit: war query string → jetzt `timestamp + apiKey + recvWindow + jsonBody`
@@ -125,7 +136,9 @@ Shadow Mode Logging:
 Neue API Endpunkte in `routes.py`:
 - `POST /execution/crypto/bybit` — Order via Bybit Adapter
 - `POST /execution/crypto/bitget` — Order via Bitget Adapter
-- `GET /execution/crypto/status` — Crypto-Adapter Konfigurationsstatus
+- `POST /execution/crypto/binance` — Order via Binance Adapter
+- `POST /execution/crypto/coinbase` — Order via Coinbase Adapter
+- `GET /execution/crypto/status` — Crypto-Adapter Konfigurationsstatus (zeigt alle 4 Adapter)
 
 Mypy fixes (pre-existing):
 - `order_deduplicator.py:42` — `maxlen` kann `None` sein (deque ohne maxlen)
