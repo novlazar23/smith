@@ -718,28 +718,41 @@ Die Modelle sind logische Profile. Die eigentliche Zuordnung darf außerhalb des
 Aktuell:
 
 ```text
-Live Execution: DISABLED
-Paper/Shadow: Paper Trading Phase 4 ✅
-Phase 5 Core Services: ✅ COMPLETE (KillSwitch, RateLimiter, Deduplicator, ExchangeAdapter,
-                        LiveExecutionService, ExecutionLogStore, API Routes)
+Live Execution: DISABLED (simulated=True standardmäßig bei allen Crypto-Adaptern)
+Paper/Shadow: Paper Trading Phase 4 ✅ + Shadow Mode ✅
+Phase 5 Core Services: ✅ COMPLETE (KillSwitch, RateLimiter, Deduplicator, SymbolWhitelist,
+                        RiskEngine, NetworkPolicy, CredentialCheck, LiveExecutionService,
+                        ExecutionLogStore, API Routes)
+Crypto Adapters: Bybit (V5), Bitget (V3), Binance (V4), Coinbase (Pro) — Read/Trade API-Separation,
+                 Pydantic-Response-Validierung, Retry mit exponentiellem Backoff; simulated=True
+Shadow Mode: ✅ COMPLETE (ShadowModeLogger, ShadowModeAdapter, LiveExecutionService-Wiring,
+              /execution/shadow/* Endpunkte)
 Risk Engine: vorhanden
 Evolution Policy: vorhanden
-Agent Registry: In-Memory MVP
-Database: Infrastruktur vorbereitet
+Agent Registry: In-Memory MVP (+ PostgreSQL-Store mit Fallback)
+Database: PostgreSQL-Infrastruktur mit In-Memory-Fallback
 Redis: Infrastruktur vorbereitet
-Exchange Adapter: StubExchangeAdapter (NOT_IMPLEMENTED)
+Exchange Adapter: 4 Crypto-Adapter + PaperExchangeAdapter + ShadowModeAdapter
+                 + StubExchangeAdapter (NOT_IMPLEMENTED-Fallback, nur ohne Adapter-Injection)
 ```
 
 Phase 5 Core Services implementiert:
 - `KillSwitch` — thread-safe, SQLite-persistiert, standardmäßig aktiviert
 - `RateLimiter` — Token Bucket, global + pro Symbol
 - `OrderDeduplicator` — memory-bounded, periodischer Trim
-- `ExchangeAdapter` — abstrakte Schnittstelle, StubExchangeAdapter als Fallback
-- `LiveExecutionService` — Pipeline: KillSwitch→RateLimiter→Deduplicator→Exchange
+- `ExchangeAdapter` — abstrakte Schnittstelle, `StubExchangeAdapter` als Fallback
+- `LiveExecutionService` — Pipeline: KillSwitch→RateLimiter→Deduplicator→SymbolWhitelist→
+  RiskEngine→NetworkPolicy→CredentialCheck→Exchange→Log; optionaler `ShadowModeLogger`
+  protokolliert REJECTED/ERROR-Orders mit vollständigen Request-Parametern
 - `ExecutionLogStore` — JSON-Persistenz, in-memory Fallback
-- API Routes: `/execution/orders`, `/execution/kill-switch/{enabled}`, `/execution/status`, `/execution/logs`
+- `ShadowModeLogger` / `ShadowModeAdapter` — loggen Execution-Entscheidungen ohne Ausführen;
+  REJECTED-Records über `log_rejection()` (kein Fill, 0 PnL)
+- API Routes: `/execution/orders` (Trade-Key), `/execution/status` + `/execution/logs`
+  (Read-Key), `/kill-switch/{enabled}`, `/execution/shadow/{submit,summary,records}`,
+  `/execution/crypto/{submit,status,cancel,price}`
 
-78 Tests, 0 failures. Keine echte Exchange-Integration im MVP.
+697 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
+laufen standardmäßig simuliert.
 
 Das ist beabsichtigt.
 
