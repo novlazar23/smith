@@ -808,7 +808,166 @@ Erst nach stabiler Shadow-/Paper-Phase:
 
 ---
 
-# 10. Grundprinzip
+# 11. Systemnutzung
+
+## 11.1 Arbeitsablauf
+
+Das System durchläuft zyklisch vier Phasen:
+
+1. **Snapshot** — Markt-Daten einsammeln und hashen
+   ```bash
+   POST /snapshots
+   → {"snapshot_id": "snap-abc123", "timestamp": "2025-01-15T10:00:00Z", "hash": "sha256:..."}
+   ```
+
+2. **Agent-Analyse** — Agenten analysieren den Snapshot parallel
+   ```bash
+   POST /runs
+   → {"run_id": "run-xyz789", "snapshot_id": "snap-abc123", "agent_ids": [...]}
+   ```
+
+3. **Evaluation** — Ergebnisse bewerten (Brier, Expectancy, Regime)
+   ```bash
+   POST /evaluations
+   → {"evaluation_id": "eval-001", "agent_id": "agent-tech-01", "brier_score": 0.23, ...}
+   ```
+
+4. **Evolution** — Bessere Agenten promoten, schlechtere pensionieren
+   ```bash
+   POST /evolution/mutate
+   → {"agent_id": "agent-tech-02", "mutation_type": "INDICATOR_ADD", ...}
+   ```
+
+## 11.2 API-Endpunkte
+
+### Agents
+| Methode | Pfad | Beschreibung |
+|---|---|---|
+| GET | `/agents` | Liste aller Agenten |
+| GET | `/agents/{id}` | Agent-Details inkl. Genome |
+| POST | `/agents/generate` | Neuen Agenten generieren |
+
+### Evolution
+| Methode | Pfad | Beschreibung |
+|---|---|---|
+| POST | `/evolution/mutate` | Mutant von Parent erzeugen |
+| POST | `/evolution/recombine` | Zwei Parents rekombinieren |
+| POST | `/evolution/challengers/{agent_id}/add` | Challenger zum Pool hinzufügen |
+| GET | `/evolution/challengers/pairs/{category}` | Champion/Challenger-Paare |
+| POST | `/evolution/challengers/evaluate` | Promotion-Kriterien prüfen |
+| POST | `/evolution/challengers/promote` | Promotion durchführen |
+| POST | `/evolution/challengers/demote` | Demotion auf Probation |
+| POST | `/evolution/hall-of-fame` | Hall of Fame Eintrag |
+| GET | `/evolution/hall-of-fame` | Alle Hall of Fame Einträge |
+| GET | `/evolution/hall-of-fame/top/{category}` | Bester Agent pro Kategorie |
+| POST | `/evolution/graveyard` | Graveyard Eintrag |
+| GET | `/evolution/graveyard` | Alle Graveyard Einträge |
+| GET | `/evolution/promotion-history/{category}` | Promotions-Verlauf |
+| GET | `/evolution/rollbacks` | Alle Rollbacks |
+| POST | `/evolution/rollback` | Status zurücksetzen |
+| GET | `/evolution/population-stats/{category}` | Populationsstatistik |
+
+### Execution (standardmäßig deaktiviert)
+| Methode | Pfad | Beschreibung |
+|---|---|---|
+| POST | `/execution/orders` | Order senden (erfordert Trade-API-Key) |
+| POST | `/execution/kill-switch` | Kill Switch toggle |
+| GET | `/execution/status` | Execution-Status |
+| GET | `/execution/logs` | Audit-Log aller Execution-Versuche |
+| POST | `/execution/shadow/submit` | Shadow-Order loggen |
+| GET | `/execution/shadow/summary` | Shadow-Mode Zusammenfassung |
+| GET | `/execution/shadow/records` | Shadow-Records gefiltert |
+
+### Risk
+| Methode | Pfad | Beschreibung |
+|---|---|---|
+| POST | `/risk/evaluate` | Risk-Evaluation für Decision |
+| GET | `/risk/policy` | Aktuelle Risk Policy |
+
+### Research
+| Methode | Pfad | Beschreibung |
+|---|---|---|
+| POST | `/snapshots` | Neuen Snapshot erstellen |
+| GET | `/snapshots/{id}` | Snapshot-Details |
+| POST | `/runs` | Trading-Run starten |
+| GET | `/runs/{id}` | Run-Details |
+| POST | `/evaluations` | Evaluation starten |
+| GET | `/evaluations/{id}` | Evaluations-Ergebnis |
+
+## 11.3 Shadow Mode
+
+Shadow Mode loggt Execution-Entscheidungen ohne sie tatsächlich auszuführen.
+
+- Order an nicht-listetem Exchange → `EXCHANGE_NOT_ALLOWED` (keine Execution)
+- Live Execution deaktiviert → alle Orders shadow geloggt
+- Ergebnis: `{"shadow": true, "reason": "LIVE_EXECUTION_DISABLED"}`
+
+Shadow Mode dient zum Testen von Trade-Logik gegen Marktdaten ohne finanzielles Risiko.
+
+## 11.4 Sicherheitsrichtlinien
+
+| Richtlinie | Standardwert | Ändern durch |
+|---|---|---|
+| `live_execution_enabled` | `false` | Explizite Config-Änderung |
+| `kill_switch` | `true` | Manuelles Deaktivierung |
+| Symbol Whitelist | leer → alle erlaubt | Config |
+| Exchange Whitelist | leer → alle erlaubt | Config |
+| Max Hebel | 1.0x | Config |
+| Max Tagesverlust | 2% | Config |
+| Min Capital | 0.01 | Config |
+
+**Wichtig:** Keine dieser Grenzen darf von LLM-Ausgaben überschrieben werden. Deterministische Policy hat Vorrang.
+
+## 11.5 Agenten-Lifecycle
+
+```
+GENERATED → CANDIDATE → CHALLENGER → ACTIVE → CHAMPION
+                              ↓
+                          PROBATION → RETIRED → GRAVEYARD
+```
+
+- **GENERATED**: Neu erzeugt durch Mutation/Recombination
+- **CANDIDATE**: Evaluationsbereit
+- **CHALLENGER**: Läbt gegen Incumbent
+- **ACTIVE**: Im Portfolio, analysiert Markets
+- **CHAMPION**: Bester Agent der Kategorie
+- **PROBATION**: Nach gescheiterter Promotion
+- **RETIRED**: Aus dem System entfernt
+- **GRAVEYARD**: archivalisiert mit Final-Score
+
+## 11.6 Promotion-Kriterien
+
+Ein Challenger ersetzt einen Incumbent nur wenn ALLE erfüllt:
+
+1. Mindestanzahl Beobachtungen erreicht
+2. Out-of-Sample bestanden
+3. Walk-Forward bestanden
+4. Shadow Mode bestanden
+5. Security Check bestanden
+6. Positiver Ensemble-Beitrag
+7. Relativer Verbesserungsmargin erreicht (Default: +5%)
+
+Kein vollständiger Kategoriewechsel (Elliott → Technical). Nur Within-Category.
+
+## 11.7 Regime-Erkennung
+
+Das System erkennt folgende Marktphasen:
+
+- `strong_bull` — klarer Aufwärtstrend, hohe Volatilität
+- `weak_bull` — seitlich mit Aufwärtstendenz
+- `range` — seitwärts, keine klare Richtung
+- `weak_bear` — seitlich mit Abwärtstendenz
+- `strong_bear` — klarer Abwärtstrend, hohe Volatilität
+- `high_volatility` — unspezifisch, hohe Schwankung
+- `low_volatility` — unspezifisch, niedrige Schwankung
+- `crash` — plötzlicher starker Rückgang
+- `recovery` — Erholung nach Crash
+
+Agenten können regimespezifisch spezialisiert sein.
+
+---
+
+# 12. Grundprinzip
 
 Das System optimiert nicht auf maximale Trade-Frequenz.
 

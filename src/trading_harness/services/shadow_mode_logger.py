@@ -36,12 +36,18 @@ class ShadowTradeRecord(BaseModel):
     simulated_fill_price: float = 0.0
     simulated_slippage: float = 0.0
     simulated_commission: float = 0.0
+    error: str | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     run_id: str = ""
 
     @property
     def pnl_estimate(self) -> float:
-        """Geschätzter PnL basierend auf Slippage + Commission."""
+        """Geschätzter PnL basierend auf Slippage + Commission.
+
+        Nicht-ausgeführte Orders (REJECTED/ERROR) haben per Definition kein PnL.
+        """
+        if self.simulated_status != "FILLED":
+            return 0.0
         direction = 1 if self.side.upper() in ("BUY", "LONG") else -1
         return direction * (self.simulated_fill_price - self.price) * self.quantity
 
@@ -131,6 +137,39 @@ class ShadowModeLogger:
             side, symbol, quantity, price, fill_price,
             record.simulated_slippage / price * 100 if price else 0,
             commission,
+        )
+        return record
+
+    def log_rejection(
+        self,
+        decision_id: str,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        run_id: str = "",
+        error: str | None = None,
+    ) -> ShadowTradeRecord:
+        """Loggt eine nicht ausgeführte Order (REJECTED/ERROR) im Shadow-Mode.
+
+        Kein Fill, keine Slippage, keine Commission — die Order wurde
+        von der Execution Pipeline abgelehnt.
+        """
+        record = ShadowTradeRecord(
+            decision_id=decision_id,
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            price=price,
+            simulated_status="REJECTED",
+            error=error,
+            run_id=run_id,
+        )
+        with self._lock:
+            self._records.append(record)
+        logger.info(
+            "ShadowRejection: %s %s %.4f @ %.2f — %s",
+            side, symbol, quantity, price, error,
         )
         return record
 

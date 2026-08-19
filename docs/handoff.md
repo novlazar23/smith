@@ -273,8 +273,10 @@ Nächste Schritte (in Reihenfolge):
    - Connection-Error-Handling (5xx, DNS, SSL) ✅ DONE: ExchangeAdapterError subclasses (ConnectionError, TimeoutError, RateLimitError, ResponseValidationError), BaseCryptoExchangeAdapter shared retry logic
    - `simulated=False` Tests mit mocked httpx responses 🚧 TODO: No real API calls (simulated=True only for safety)
    - ✅ PHASE 9/10/11 COMPLETE: Retry Behavior, HTTP-Error Handling, Schema Validation, Error Class Hierarchy, Dynamic Credential Loading
-   - ✅ R5.21–R5.22 COMPLETE: Read/Trade API Separation — `ExecutionConfig` mit `trade_api_key_ref`/`trade_api_secret_ref`/`read_api_key_ref`/`read_api_secret_ref`; `submit_order` prüft TRADE API Keys, `get_order_status` prüft READ API Keys, `cancel_order` prüft TRADE API Keys (write operation); `allowed_exchanges` Whitelist enforced im Pipeline
-   - ✅ allowed_exchanges Enforcement: Pipeline step 5b — Order an nicht-listeter Exchange wird REJECTED mit `EXCHANGE_NOT_ALLOWED`
+    - ✅ R5.21–R5.22 COMPLETE: Read/Trade API Separation — `ExecutionConfig` mit `trade_api_key_ref`/`trade_api_secret_ref`/`read_api_key_ref`/`read_api_secret_ref`; `submit_order` prüft TRADE API Keys, `get_order_status` prüft READ API Keys, `cancel_order` prüft TRADE API Keys (write operation); `allowed_exchanges` Whitelist enforced im Pipeline
+    - ✅ allowed_exchanges Enforcement: Pipeline step 5b — Order an nicht-listeter Exchange wird REJECTED mit `EXCHANGE_NOT_ALLOWED`
+    - ✅ Shadow-Mode-Wiring COMPLETE: `LiveExecutionService` akzeptiert optionalen `ShadowModeLogger`; jede REJECTED/ERROR-Order wird mit vollständigen Request-Parametern (quantity, price, error, run_id) über `ShadowModeLogger.log_rejection()` protokolliert; `ShadowTradeRecord` mit neuem `error`-Feld; Bugfix: `pnl_estimate` liefert 0 für nicht-ausgeführte Orders (war vorher falsches PnL durch fill_price=0); Response-Feld `shadow_mode` kennzeichnet Shadow-Mode-Aktivität
+    - ✅ README Section 11 „Systemnutzung“: Arbeitsablauf, API-Endpunkt-Tabelle (Agents/Evolution/Execution/Risk/Research), Shadow Mode, Sicherheitsrichtlinien, Agenten-Lifecycle, Promotion-Kriterien, Regime-Erkennung
 
 3. **Live Execution Safety Gate** — explizite Freigabe erforderlich
    - Audit-Log aller Live-Transaktionen

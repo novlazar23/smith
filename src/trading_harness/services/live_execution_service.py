@@ -12,7 +12,7 @@ from __future__ import annotations
 import threading
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
@@ -28,6 +28,9 @@ from trading_harness.services.network_policy import NetworkPolicy
 from trading_harness.services.order_deduplicator import OrderDeduplicator
 from trading_harness.services.rate_limiter import RateLimiter
 from trading_harness.services.risk_engine import RiskEngine
+
+if TYPE_CHECKING:
+    from trading_harness.services.shadow_mode_logger import ShadowModeLogger
 
 
 class ExecutionConfig(BaseModel):
@@ -70,6 +73,7 @@ class LiveExecutionService:
     """Orchestrates KillSwitch → RateLimiter → Deduplicator → ExchangeAdapter.
 
     Alle Komponenten werden im Konstruktor injiziert. Standardmäßig deaktiviert.
+    Optional: ShadowModeLogger für Backtesting.
     """
 
     def __init__(
@@ -82,6 +86,7 @@ class LiveExecutionService:
         network_policy: NetworkPolicy | None = None,
         credential_manager: CredentialManager | None = None,
         config: ExecutionConfig | None = None,
+        shadow_logger: ShadowModeLogger | None = None,
     ) -> None:
         self._kill_switch = kill_switch or KillSwitch(enabled=False)
         self._rate_limiter = rate_limiter or RateLimiter(
@@ -96,6 +101,7 @@ class LiveExecutionService:
         self._enabled = self._config.live_execution_enabled
         self._lock = threading.Lock()
         self._logs: list[ExecutionLog] = []
+        self._shadow_logger = shadow_logger
 
     def submit_order(
         self,
@@ -120,6 +126,8 @@ class LiveExecutionService:
                 symbol,
                 side,
                 "REJECTED",
+                quantity=quantity,
+                price=price,
                 error="LIVE_EXECUTION_DISABLED",
             )
 
@@ -131,6 +139,8 @@ class LiveExecutionService:
                 symbol,
                 side,
                 "REJECTED",
+                quantity=quantity,
+                price=price,
                 error="KILL_SWITCH_ACTIVE",
             )
 
@@ -142,6 +152,8 @@ class LiveExecutionService:
                 symbol,
                 side,
                 "REJECTED",
+                quantity=quantity,
+                price=price,
                 error="RATE_LIMIT_EXCEEDED",
             )
 
@@ -153,6 +165,8 @@ class LiveExecutionService:
                 symbol,
                 side,
                 "REJECTED",
+                quantity=quantity,
+                price=price,
                 error="DUPLICATE_DECISION_ID",
             )
 
@@ -164,6 +178,8 @@ class LiveExecutionService:
                 symbol,
                 side,
                 "REJECTED",
+                quantity=quantity,
+                price=price,
                 error="SYMBOL_NOT_WHITELISTED",
             )
 
@@ -175,6 +191,8 @@ class LiveExecutionService:
                     symbol,
                     side,
                     "REJECTED",
+                    quantity=quantity,
+                    price=price,
                     error="EXCHANGE_NOT_ALLOWED",
                 )
 
@@ -186,6 +204,8 @@ class LiveExecutionService:
                 symbol,
                 side,
                 "REJECTED",
+                quantity=quantity,
+                price=price,
                 error="MIN_CAPITAL_NOT_MET",
             )
 
@@ -220,6 +240,8 @@ class LiveExecutionService:
                     symbol,
                     side,
                     "REJECTED",
+                    quantity=quantity,
+                    price=price,
                     error=risk_result.reason,
                 )
 
@@ -237,6 +259,8 @@ class LiveExecutionService:
                     symbol,
                     side,
                     "REJECTED",
+                    quantity=quantity,
+                    price=price,
                     error="NETWORK_POLICY_VIOLATION",
                 )
 
@@ -251,6 +275,8 @@ class LiveExecutionService:
                     symbol,
                     side,
                     "REJECTED",
+                    quantity=quantity,
+                    price=price,
                     error="TRADE_CREDENTIALS_NOT_CONFIGURED",
                 )
 
@@ -279,6 +305,8 @@ class LiveExecutionService:
                 side,
                 status,
                 order_id=order_id,
+                quantity=quantity,
+                price=price,
                 error=error,
                 risk_approved=risk_approved,
                 risk_max_position_size=max_position_size,
@@ -290,6 +318,8 @@ class LiveExecutionService:
                 symbol,
                 side,
                 "ERROR",
+                quantity=quantity,
+                price=price,
                 error=str(e),
             )
 
@@ -347,8 +377,14 @@ class LiveExecutionService:
         error: str | None = None,
         risk_approved: bool = False,
         risk_max_position_size: float = 0.0,
+        quantity: float = 0.0,
+        price: float = 0.0,
     ) -> dict[str, Any]:
-        """Execution loggen und Antwort zurückgeben."""
+        """Execution loggen und Antwort zurückgeben.
+        
+        Wenn ShadowMode aktiv und Order nicht ausgeführt wurde, wird sie
+        shadow-geloggt für Backtesting.
+        """
         log = ExecutionLog(
             id=f"exec-{int(time.time() * 1000)}",
             decision_id=decision_id,
@@ -364,6 +400,18 @@ class LiveExecutionService:
         with self._lock:
             self._logs.append(log)
 
+        # Shadow Mode: logge nicht-ausgeführte Orders für Backtesting
+        if self._shadow_logger and status in ("REJECTED", "ERROR"):
+            self._shadow_logger.log_rejection(
+                decision_id=decision_id,
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                price=price,
+                run_id=run_id,
+                error=error,
+            )
+
         return {
             "decision_id": decision_id,
             "run_id": run_id,
@@ -374,6 +422,7 @@ class LiveExecutionService:
             "error": error,
             "risk_approved": risk_approved,
             "risk_max_position_size": risk_max_position_size,
+            "shadow_mode": bool(self._shadow_logger),
             "timestamp": log.timestamp.isoformat(),
         }
 

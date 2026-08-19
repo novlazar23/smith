@@ -20,6 +20,7 @@ from trading_harness.services.paper_exchange_adapter import PaperExchangeAdapter
 from trading_harness.services.paper_trade_store import InMemoryPaperTradeStore
 from trading_harness.services.rate_limiter import RateLimiter
 from trading_harness.services.risk_engine import RiskEngine
+from trading_harness.services.shadow_mode_logger import ShadowModeLogger
 
 
 def _make_store() -> InMemoryPaperTradeStore:
@@ -1230,3 +1231,98 @@ class TestAllowedExchangesEnforcement:
         finally:
             os.environ.pop("TRADE_API_KEY", None)
             os.environ.pop("TRADE_API_SECRET", None)
+
+
+class TestLiveExecutionServiceShadowMode:
+    """Shadow-Mode-Wiring: abgelehnte Orders werden im Shadow-Logger protokolliert."""
+
+    def test_rejected_order_logged_to_shadow_mode(self, adapter):
+        """Deaktivierte Live-Execution → Order wird als REJECTED shadow-geloggt."""
+        shadow = ShadowModeLogger()
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            shadow_logger=shadow,
+        )
+        result = svc.submit_order(
+            decision_id="sm-1",
+            run_id="run-1",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.5,
+            price=50000.0,
+        )
+        assert result["status"] == "REJECTED"
+        assert result["error"] == "LIVE_EXECUTION_DISABLED"
+        assert result["shadow_mode"] is True
+        records = shadow.get_records(decision_id="sm-1")
+        assert len(records) == 1
+        record = records[0]
+        assert record.simulated_status == "REJECTED"
+        assert record.error == "LIVE_EXECUTION_DISABLED"
+        assert record.run_id == "run-1"
+        assert record.symbol == "BTCUSDT"
+        assert record.side == "LONG"
+        assert record.quantity == 1.5
+        assert record.price == 50000.0
+        assert record.simulated_fill_price == 0.0
+        assert record.simulated_commission == 0.0
+
+    def test_kill_switch_rejection_shadow_logged(self):
+        """Kill-Switch-Rejection wird mit Request-Parametern shadow-geloggt."""
+        shadow = ShadowModeLogger()
+        ks = KillSwitch(enabled=False)
+        svc = LiveExecutionService(
+            kill_switch=ks,
+            shadow_logger=shadow,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc.activate_live()
+        ks.activate()
+        result = svc.submit_order(
+            decision_id="sm-2",
+            run_id="run-2",
+            symbol="ETHUSDT",
+            side="SHORT",
+            quantity=2.0,
+            price=3000.0,
+        )
+        assert result["status"] == "REJECTED"
+        assert result["error"] == "KILL_SWITCH_ACTIVE"
+        records = shadow.get_records(decision_id="sm-2")
+        assert len(records) == 1
+        assert records[0].error == "KILL_SWITCH_ACTIVE"
+        assert records[0].quantity == 2.0
+        assert records[0].price == 3000.0
+
+    def test_no_shadow_logger_flag_false(self, adapter):
+        """Ohne Shadow-Logger ist shadow_mode im Response False."""
+        svc = LiveExecutionService(exchange_adapter=adapter)
+        result = svc.submit_order(
+            decision_id="sm-3",
+            run_id="run-3",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+        )
+        assert result["shadow_mode"] is False
+
+    def test_successful_order_not_shadow_logged(self, adapter):
+        """Erfolgreich ausgeführte Orders werden nicht als REJECTED shadow-geloggt."""
+        shadow = ShadowModeLogger()
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            shadow_logger=shadow,
+            config=ExecutionConfig(live_execution_enabled=True),
+        )
+        svc.activate_live()
+        result = svc.submit_order(
+            decision_id="sm-4",
+            run_id="run-4",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+        )
+        assert result["status"] == "FILLED"
+        assert shadow.record_count == 0

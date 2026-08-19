@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from trading_harness.services.shadow_mode_logger import (
     ShadowModeAdapter,
     ShadowModeLogger,
@@ -128,6 +130,48 @@ class TestShadowModeLogger:
         logger.log_order("dec-1", "BTCUSDT", "LONG", 1.0, 50000.0)
         logger.log_order("dec-2", "BTCUSDT", "LONG", 1.0, 50000.0)
         assert logger.total_slippage == 50.0
+
+    def test_log_rejection_creates_rejected_record(self):
+        """Abgelehnte Orders werden als REJECTED ohne Fill geloggt."""
+        logger = ShadowModeLogger()
+        record = logger.log_rejection(
+            decision_id="dec-1",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+            run_id="run-1",
+            error="KILL_SWITCH_ACTIVE",
+        )
+        assert record.simulated_status == "REJECTED"
+        assert record.error == "KILL_SWITCH_ACTIVE"
+        assert record.run_id == "run-1"
+        assert record.quantity == 1.0
+        assert record.price == 50000.0
+        assert record.simulated_fill_price == 0.0
+        assert record.simulated_slippage == 0.0
+        assert record.simulated_commission == 0.0
+
+    def test_summary_counts_rejections(self):
+        """Summary zählt REJECTED Records separat, PnL enthält nur FILLED."""
+        logger = ShadowModeLogger(default_slippage=0.0, default_commission=0.0)
+        logger.log_order("dec-1", "BTCUSDT", "LONG", 1.0, 50000.0)
+        logger.log_rejection(
+            "dec-2", "BTCUSDT", "SHORT", 1.0, 50000.0, error="RATE_LIMIT_EXCEEDED"
+        )
+        summary = logger.summary()
+        assert summary["total_orders"] == 2
+        assert summary["filled"] == 1
+        assert summary["rejected"] == 1
+        assert summary["estimated_pnl"] == pytest.approx(0.0)
+
+    def test_rejected_record_has_zero_pnl(self):
+        """Abgelehnte Orders haben per Definition kein PnL."""
+        logger = ShadowModeLogger()
+        record = logger.log_rejection(
+            "dec-1", "BTCUSDT", "LONG", 1.0, 50000.0, error="KILL_SWITCH_ACTIVE"
+        )
+        assert record.pnl_estimate == 0.0
 
 
 class TestShadowModeAdapter:
