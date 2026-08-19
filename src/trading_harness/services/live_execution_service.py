@@ -341,6 +341,15 @@ class LiveExecutionService:
                 status = "ERROR"
                 error = "NO_EXCHANGE_ADAPTER_IMPLEMENTED"
 
+            # R5.6: Anomalie-Ereignis — Exchange-Fehler zählen, FILLED setzt Streak zurück
+            auto_triggered = False
+            if status == "FILLED":
+                self._kill_switch.record_success()
+            elif status == "ERROR":
+                auto_triggered = self._kill_switch.record_anomaly(
+                    reason=f"EXCHANGE_ERROR: {error or 'unknown'}"
+                )
+
             return self._log_and_return(
                 decision_id,
                 run_id,
@@ -353,8 +362,14 @@ class LiveExecutionService:
                 error=error,
                 risk_approved=risk_approved,
                 risk_max_position_size=max_position_size,
+                kill_switch_auto_triggered=auto_triggered,
             )
         except Exception as e:  # noqa: BLE001 — execution pipeline: any unexpected adapter/IO error
+            # R5.6: Exception zählt als Anomalie (nur Exception-Typ, keine
+            # Exception-Nachricht — diese kann Exchange-/System-Details enthalten)
+            auto_triggered = self._kill_switch.record_anomaly(
+                reason=f"EXCEPTION: {type(e).__name__}"
+            )
             return self._log_and_return(
                 decision_id,
                 run_id,
@@ -364,6 +379,7 @@ class LiveExecutionService:
                 quantity=quantity,
                 price=price,
                 error=str(e),
+                kill_switch_auto_triggered=auto_triggered,
             )
 
     def _get_exchange_url(self) -> str:
@@ -471,6 +487,7 @@ class LiveExecutionService:
         risk_max_position_size: float = 0.0,
         quantity: float = 0.0,
         price: float = 0.0,
+        kill_switch_auto_triggered: bool = False,
     ) -> dict[str, Any]:
         """Execution loggen und Antwort zurückgeben.
         
@@ -527,6 +544,7 @@ class LiveExecutionService:
             "risk_approved": risk_approved,
             "risk_max_position_size": risk_max_position_size,
             "shadow_mode": bool(self._shadow_logger),
+            "kill_switch_auto_triggered": kill_switch_auto_triggered,
             "timestamp": log.timestamp.isoformat(),
         }
 

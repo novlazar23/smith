@@ -15,6 +15,12 @@ class KillSwitchConfig(BaseModel):
     enabled: bool = False
     last_toggled_at: float = Field(default_factory=time.time)
     toggle_count: int = 0
+    # R5.6: automatische Auslösung bei Anomalie-Ereignissen
+    auto_trigger_enabled: bool = True
+    auto_trigger_threshold: int = Field(default=3, ge=1)
+    anomaly_streak: int = 0
+    auto_triggered: bool = False
+    trigger_reason: str | None = None
 
 
 class KillSwitch:
@@ -43,7 +49,19 @@ class KillSwitch:
                 with open(path, "r") as f:
                     data = json.load(f)
                     self._enabled = data.get("enabled", False)
-                    self._persisted_config.enabled = self._enabled
+                    cfg = self._persisted_config
+                    cfg.enabled = self._enabled
+                    cfg.last_toggled_at = data.get("last_toggled_at", cfg.last_toggled_at)
+                    cfg.toggle_count = data.get("toggle_count", cfg.toggle_count)
+                    cfg.auto_trigger_enabled = data.get(
+                        "auto_trigger_enabled", cfg.auto_trigger_enabled
+                    )
+                    cfg.auto_trigger_threshold = data.get(
+                        "auto_trigger_threshold", cfg.auto_trigger_threshold
+                    )
+                    cfg.anomaly_streak = data.get("anomaly_streak", cfg.anomaly_streak)
+                    cfg.auto_triggered = data.get("auto_triggered", cfg.auto_triggered)
+                    cfg.trigger_reason = data.get("trigger_reason", cfg.trigger_reason)
         except (OSError, json.JSONDecodeError):
             # Fallback: Startzustand verwenden
             pass
@@ -57,12 +75,18 @@ class KillSwitch:
             path.parent.mkdir(parents=True, exist_ok=True)
             import json
 
+            cfg = self._persisted_config
             with open(path, "w") as f:
                 json.dump(
                     {
                         "enabled": self._enabled,
-                        "last_toggled_at": self._persisted_config.last_toggled_at,
-                        "toggle_count": self._persisted_config.toggle_count,
+                        "last_toggled_at": cfg.last_toggled_at,
+                        "toggle_count": cfg.toggle_count,
+                        "auto_trigger_enabled": cfg.auto_trigger_enabled,
+                        "auto_trigger_threshold": cfg.auto_trigger_threshold,
+                        "anomaly_streak": cfg.anomaly_streak,
+                        "auto_triggered": cfg.auto_triggered,
+                        "trigger_reason": cfg.trigger_reason,
                     },
                     f,
                 )
@@ -71,27 +95,70 @@ class KillSwitch:
             pass
 
     def activate(self) -> None:
-        """Kill Switch aktivieren (thread-sicher)."""
+        """Kill Switch aktivieren (thread-sicher, manuell)."""
         with self._lock:
             self._enabled = True
             now = time.time()
-            self._persisted_config.last_toggled_at = now
-            self._persisted_config.toggle_count += 1
+            cfg = self._persisted_config
+            cfg.last_toggled_at = now
+            cfg.toggle_count += 1
+            cfg.auto_triggered = False
+            cfg.trigger_reason = "manual"
             self._save_state()
 
     def deactivate(self) -> None:
-        """Kill Switch deaktivieren (thread-sicher)."""
+        """Kill Switch deaktivieren (thread-sicher).
+
+        Operator-Neustart: der Anomalie-Streak wird zurückgesetzt, damit
+        der Count nach dem manuellen Resume von vorne beginnt.
+        """
         with self._lock:
             self._enabled = False
             now = time.time()
-            self._persisted_config.last_toggled_at = now
-            self._persisted_config.toggle_count += 1
+            cfg = self._persisted_config
+            cfg.last_toggled_at = now
+            cfg.toggle_count += 1
+            cfg.anomaly_streak = 0
             self._save_state()
 
     def is_active(self) -> bool:
         """Prüfen ob Kill Switch aktiv ist (thread-sicher, <100ms)."""
         with self._lock:
             return self._enabled
+
+    def record_anomaly(self, reason: str) -> bool:
+        """R5.6: Anomalie-Ereignis erfassen.
+
+        Bei `auto_trigger_threshold` aufeinanderfolgenden Anomalien (ohne
+        erfolgreiche Ausführung dazwischen) wird der Kill Switch
+        automatisch aktiviert. Liefert True, wenn der Trigger ausgelöst
+        wurde.
+        """
+        with self._lock:
+            if self._enabled or not self._persisted_config.auto_trigger_enabled:
+                return False
+            cfg = self._persisted_config
+            cfg.anomaly_streak += 1
+            if cfg.anomaly_streak >= cfg.auto_trigger_threshold:
+                cfg.anomaly_streak = 0
+                cfg.auto_triggered = True
+                cfg.trigger_reason = (
+                    f"{reason} (auto, {cfg.auto_trigger_threshold} consecutive anomalies)"
+                )
+                self._enabled = True
+                cfg.last_toggled_at = time.time()
+                cfg.toggle_count += 1
+                self._save_state()
+                return True
+            self._save_state()
+            return False
+
+    def record_success(self) -> None:
+        """R5.6: Erfolgreiche Ausführung — setzt den Anomalie-Streak zurück."""
+        with self._lock:
+            if self._persisted_config.anomaly_streak:
+                self._persisted_config.anomaly_streak = 0
+                self._save_state()
 
     @property
     def config(self) -> KillSwitchConfig:
@@ -101,4 +168,9 @@ class KillSwitch:
                 enabled=self._enabled,
                 last_toggled_at=self._persisted_config.last_toggled_at,
                 toggle_count=self._persisted_config.toggle_count,
+                auto_trigger_enabled=self._persisted_config.auto_trigger_enabled,
+                auto_trigger_threshold=self._persisted_config.auto_trigger_threshold,
+                anomaly_streak=self._persisted_config.anomaly_streak,
+                auto_triggered=self._persisted_config.auto_triggered,
+                trigger_reason=self._persisted_config.trigger_reason,
             )

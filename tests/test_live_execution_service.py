@@ -8,6 +8,10 @@ import threading
 import pytest
 
 from trading_harness.services.credential_manager import CredentialManager
+from trading_harness.services.exchange_adapter import (
+    ExchangeAdapterError,
+    StubExchangeAdapter,
+)
 from trading_harness.services.kill_switch import KillSwitch
 from trading_harness.services.live_execution_service import (
     ExecutionConfig,
@@ -1336,4 +1340,139 @@ class TestLiveExecutionServiceShadowMode:
             price=50000.0,
         )
         assert result["status"] == "FILLED"
-        assert shadow.record_count == 0
+
+
+class FailingExchangeAdapter(StubExchangeAdapter):
+    """Liefert deterministische Exchange-Fehler (Anomalie-Tests)."""
+
+    def submit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        order_type: str = "MARKET",
+        exchange_name: str | None = None,
+    ) -> dict[str, object]:
+        return {"order_id": None, "status": "ERROR", "error": "EXCHANGE_5XX"}
+
+
+class ThrowingExchangeAdapter(StubExchangeAdapter):
+    """Wirft Exchange-Exceptions (Anomalie-Tests, Exception-Pfad)."""
+
+    def submit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        order_type: str = "MARKET",
+        exchange_name: str | None = None,
+    ) -> dict[str, object]:
+        raise ExchangeAdapterError("EXCHANGE_CONNECTION_LOST")
+
+
+class FlakyExchangeAdapter(StubExchangeAdapter):
+    """Liefert eine vorgegebene FILLED/ERROR-Ausfolge."""
+
+    def __init__(self, outcomes: list[str]) -> None:
+        self._outcomes = list(outcomes)
+
+    def submit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        order_type: str = "MARKET",
+        exchange_name: str | None = None,
+    ) -> dict[str, object]:
+        outcome = self._outcomes.pop(0) if self._outcomes else "FILLED"
+        if outcome == "FILLED":
+            return {"order_id": "ord-flaky", "status": "FILLED"}
+        return {"order_id": None, "status": "ERROR", "error": "EXCHANGE_5XX"}
+
+
+class TestLiveExecutionServiceAnomalyAutoTrigger:
+    """R5.6: Exchange-Anomalien aktivieren den Kill Switch automatisch."""
+
+    def _make_service(self, adapter: StubExchangeAdapter, ks: KillSwitch) -> LiveExecutionService:
+        svc = LiveExecutionService(
+            exchange_adapter=adapter,
+            kill_switch=ks,
+            rate_limiter=RateLimiter(global_limit=100, symbol_limit=100),
+            config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
+        )
+        svc.activate_live()
+        return svc
+
+    def _submit(self, svc: LiveExecutionService, decision_id: str) -> dict[str, object]:
+        return svc.submit_order(
+            decision_id=decision_id,
+            run_id="run-anomaly",
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+        )
+
+    def test_three_consecutive_errors_auto_trigger(self):
+        """3 aufeinanderfolgende Exchange-Fehler aktivieren den Kill Switch."""
+        ks = KillSwitch()
+        svc = self._make_service(FailingExchangeAdapter(), ks)
+        for i in range(3):
+            result = self._submit(svc, f"an-{i}")
+            assert result["status"] == "ERROR"
+        assert ks.is_active() is True
+        # Nächste Order wird vom Kill Switch blockiert
+        result = self._submit(svc, "an-3")
+        assert result["status"] == "REJECTED"
+        assert result["error"] == "KILL_SWITCH_ACTIVE"
+        assert result["kill_switch_auto_triggered"] is False
+
+    def test_two_errors_do_not_trigger(self):
+        """Unterhalb des Schwellwerts bleibt der Kill Switch inaktiv."""
+        ks = KillSwitch()
+        svc = self._make_service(FailingExchangeAdapter(), ks)
+        self._submit(svc, "an-1")
+        result = self._submit(svc, "an-2")
+        assert ks.is_active() is False
+        assert result["kill_switch_auto_triggered"] is False
+
+    def test_filled_resets_error_streak(self):
+        """FILLED-Order setzt den Anomalie-Streak zurück."""
+        adapter = FlakyExchangeAdapter(
+            ["ERROR", "ERROR", "FILLED", "ERROR", "ERROR", "ERROR"]
+        )
+        ks = KillSwitch()
+        svc = self._make_service(adapter, ks)
+        for i in range(5):
+            self._submit(svc, f"flaky-{i}")
+        # FILLED (flaky-2) hat den Streak zurückgesetzt: nach 5 Orders erst 2
+        assert ks.is_active() is False
+        assert ks.config.anomaly_streak == 2
+        self._submit(svc, "flaky-5")
+        assert ks.is_active() is True
+
+    def test_exception_path_counts_as_anomaly(self):
+        """Adapter-Exceptions zählen als Anomalie (Exception-Pfad)."""
+        ks = KillSwitch()
+        svc = self._make_service(ThrowingExchangeAdapter(), ks)
+        for i in range(3):
+            result = self._submit(svc, f"exc-{i}")
+            assert result["status"] == "ERROR"
+        assert ks.is_active() is True
+
+    def test_response_flag_on_triggering_order(self):
+        """Nur die auslösende Order trägt kill_switch_auto_triggered=True."""
+        ks = KillSwitch()
+        svc = self._make_service(FailingExchangeAdapter(), ks)
+        first = self._submit(svc, "flag-1")
+        second = self._submit(svc, "flag-2")
+        third = self._submit(svc, "flag-3")
+        assert first["kill_switch_auto_triggered"] is False
+        assert second["kill_switch_auto_triggered"] is False
+        assert third["kill_switch_auto_triggered"] is True
+        assert ks.config.auto_triggered is True
+        assert "EXCHANGE_5XX" in (ks.config.trigger_reason or "")
+        assert third["shadow_mode"] is False

@@ -737,7 +737,9 @@ Exchange Adapter: 4 Crypto-Adapter + PaperExchangeAdapter + ShadowModeAdapter
 ```
 
 Phase 5 Core Services implementiert:
-- `KillSwitch` — thread-safe, SQLite-persistiert, standardmäßig aktiviert
+- `KillSwitch` — thread-safe, SQLite-persistiert, standardmäßig aktiviert; R5.6 Auto-Trigger:
+  3 aufeinanderfolgende Exchange-Fehler ohne FILLED-Order aktivieren den Kill Switch
+  automatisch (persistiert `auto_triggered` + `trigger_reason`)
 - `RateLimiter` — Token Bucket, global + pro Symbol
 - `OrderDeduplicator` — memory-bounded, periodischer Trim
 - `ExchangeAdapter` — abstrakte Schnittstelle, `StubExchangeAdapter` als Fallback
@@ -753,7 +755,7 @@ Phase 5 Core Services implementiert:
   (Read-Key), `/kill-switch/{enabled}`, `/execution/shadow/{submit,summary,records}`,
   `/execution/crypto/{submit,status,cancel,price}`
 
-726 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
+742 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
 laufen standardmäßig simuliert.
 
 Das ist beabsichtigt.

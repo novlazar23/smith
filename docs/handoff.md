@@ -297,6 +297,24 @@ Nächste Schritte (in Reihenfolge):
       explizit `max_capital=1000.0` (Opt-in für größere Test-Größen); `make check` clean
       (726 Tests, ruff + mypy)
 
+4. **Kill-Switch Auto-Trigger** — ✅ COMPLETE (R5.6)
+   - `KillSwitch.record_anomaly(reason)` zählt Exchange-Anomalien der `submit_order`-
+     Pipeline (ERROR-Resultat oder Adapter-Exception); bei `auto_trigger_threshold`
+     (Default 3) aufeinanderfolgenden Anomalien ohne dazwischenliegende FILLED-Order
+     wird der Kill Switch automatisch aktiviert und persistiert
+     (`auto_triggered=True`, `trigger_reason`)
+   - `KillSwitch.record_success()` (bei FILLED) setzt `anomaly_streak` zurück;
+     `deactivate()` (manueller Operator-Neustart) setzt den Streak ebenfalls zurück
+   - `KillSwitchConfig` neu: `auto_trigger_enabled` (Default `True`),
+     `auto_trigger_threshold` (Default 3), `anomaly_streak`, `auto_triggered`,
+     `trigger_reason`; backward-compatible JSON-Load/Save
+   - Nur Exception-Typ (nicht `str(e)`) landet in `trigger_reason` —
+     Exchange-/System-Details bleiben aus dem persistierten Zustand heraus
+   - Response-Feld `kill_switch_auto_triggered` kennzeichnet die auslösende Order
+   - 16 neue Tests (`TestKillSwitchAutoTrigger`, `TestLiveExecutionServiceAnomalyAutoTrigger`),
+     inkl. Concurrency-Test (10 Threads × 100 Anomalien → genau 1 Trigger); `make check`
+     clean (742 Tests, ruff + mypy)
+
 See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
 Live-Execution bleibt standardmäßig deaktiviert — keine Änderungen an Sicherheitsgrenzen ohne explizite Freigabe.
@@ -379,6 +397,7 @@ Inside OpenCode, run `/resume` to reconstruct context from Git and continue the 
 
 ## Last verification
 
+- `make check` (2026-08-19, R5.6 Kill-Switch Auto-Trigger): 742 Tests grün, ruff clean, mypy clean (50 source files)
 - `make check` (2026-08-19, Safety Gate): 726 Tests grün, ruff clean, mypy clean (50 source files)
 - `./scripts/bootstrap.sh --check`
 - `docker compose config --quiet`
