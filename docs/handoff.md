@@ -314,6 +314,17 @@ Nächste Schritte (in Reihenfolge):
    - 16 neue Tests (`TestKillSwitchAutoTrigger`, `TestLiveExecutionServiceAnomalyAutoTrigger`),
      inkl. Concurrency-Test (10 Threads × 100 Anomalien → genau 1 Trigger); `make check`
      clean (742 Tests, ruff + mypy)
+   - Unabhängiges Review (verifiziert: 742 Tests/ruff/mypy reproduziert): **approved**;
+     Close-out-Conditions umgesetzt (2 Negative-Tests für Sanitierung + PENDING-Semantik)
+
+5. **Kill-Switch Persistenz-Wiring (bekanntes Safety Gap, vorbestehend)** — 📋 ZU BEARBEITEN
+   - `src/trading_harness/api/routes.py:603`: `execution_kill_switch = KillSwitch()` ohne
+     `db_path` → Kill-Switch-Zustand (inkl. R5.6 Auto-Trigger UND manueller Aktivierung)
+     geht bei Prozess-Neustart verloren; Switch startet inaktiv (fail-open)
+   - Aus demselben Review: nicht-atomarer State-File-Write (`_save_state` öffnet mit "w")
+     → Crash mid-write korruptiert die JSON → Fallback `enabled=False` (fail-open);
+     empfohlen: tmp-Datei + atomarer Rename
+   - **Blocker vor echter Live-Integration** — eigenes Workitem nötig
 
 See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 

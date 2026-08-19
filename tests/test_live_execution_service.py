@@ -1393,6 +1393,21 @@ class FlakyExchangeAdapter(StubExchangeAdapter):
         return {"order_id": None, "status": "ERROR", "error": "EXCHANGE_5XX"}
 
 
+class PendingExchangeAdapter(StubExchangeAdapter):
+    """Liefert neutrale PENDING-Orders (weder Fill noch Fehler)."""
+
+    def submit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        order_type: str = "MARKET",
+        exchange_name: str | None = None,
+    ) -> dict[str, object]:
+        return {"order_id": "ord-pending", "status": "PENDING"}
+
+
 class TestLiveExecutionServiceAnomalyAutoTrigger:
     """R5.6: Exchange-Anomalien aktivieren den Kill Switch automatisch."""
 
@@ -1476,3 +1491,36 @@ class TestLiveExecutionServiceAnomalyAutoTrigger:
         assert ks.config.auto_triggered is True
         assert "EXCHANGE_5XX" in (ks.config.trigger_reason or "")
         assert third["shadow_mode"] is False
+
+    def test_exception_reason_sanitized(self):
+        """Exception-Text bleibt aus dem persistierten trigger_reason heraus."""
+        ks = KillSwitch()
+        svc = self._make_service(ThrowingExchangeAdapter(), ks)
+        for i in range(3):
+            self._submit(svc, f"san-{i}")
+        assert ks.is_active() is True
+        reason = ks.config.trigger_reason or ""
+        assert "EXCHANGE_CONNECTION_LOST" not in reason
+        assert "ExchangeAdapterError" in reason
+
+    def test_neutral_status_neither_counts_nor_resets(self):
+        """PENDING zählt keine Anomalie und setzt den Streak nicht zurück."""
+        ks = KillSwitch()
+        svc = self._make_service(FailingExchangeAdapter(), ks)
+        self._submit(svc, "pend-1")
+        self._submit(svc, "pend-2")
+        assert ks.config.anomaly_streak == 2
+        pend_svc = self._make_service(PendingExchangeAdapter(), ks)
+        result = pend_svc.submit_order(
+            decision_id="pend-3",
+            run_id="run-anomaly",
+            symbol="ETHUSDT",
+            side="LONG",
+            quantity=1.0,
+            price=50000.0,
+        )
+        assert result["status"] == "PENDING"
+        # PENDING verändert den Streak in keine Richtung (2 → weder 3 noch 0)
+        assert ks.config.anomaly_streak == 2
+        self._submit(svc, "pend-4")
+        assert ks.is_active() is True
