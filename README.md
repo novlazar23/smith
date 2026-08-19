@@ -722,7 +722,7 @@ Live Execution: DISABLED (simulated=True standardmäßig bei allen Crypto-Adapte
 Paper/Shadow: Paper Trading Phase 4 ✅ + Shadow Mode ✅
 Phase 5 Core Services: ✅ COMPLETE (KillSwitch, RateLimiter, Deduplicator, SymbolWhitelist,
                         RiskEngine, NetworkPolicy, CredentialCheck, LiveExecutionService,
-                        ExecutionLogStore, API Routes)
+                        ExecutionLogStore, Safety Gate, API Routes)
 Crypto Adapters: Bybit (V5), Bitget (V3), Binance (V4), Coinbase (Pro) — Read/Trade API-Separation,
                  Pydantic-Response-Validierung, Retry mit exponentiellem Backoff; simulated=True
 Shadow Mode: ✅ COMPLETE (ShadowModeLogger, ShadowModeAdapter, LiveExecutionService-Wiring,
@@ -742,8 +742,10 @@ Phase 5 Core Services implementiert:
 - `OrderDeduplicator` — memory-bounded, periodischer Trim
 - `ExchangeAdapter` — abstrakte Schnittstelle, `StubExchangeAdapter` als Fallback
 - `LiveExecutionService` — Pipeline: KillSwitch→RateLimiter→Deduplicator→SymbolWhitelist→
-  RiskEngine→NetworkPolicy→CredentialCheck→Exchange→Log; optionaler `ShadowModeLogger`
-  protokolliert REJECTED/ERROR-Orders mit vollständigen Request-Parametern
+  MinCapital→MaxCapital→RiskEngine→NetworkPolicy→CredentialCheck→Exchange→Log; optionale
+  `ExecutionLogStore` persistiert jeden Trade-Versuch (R5.3); `verify_safety_gate()` +
+  fail-closed `activate_live()` (Safety Gate); optionaler `ShadowModeLogger` protokolliert
+  REJECTED/ERROR-Orders mit vollständigen Request-Parametern
 - `ExecutionLogStore` — JSON-Persistenz, in-memory Fallback
 - `ShadowModeLogger` / `ShadowModeAdapter` — loggen Execution-Entscheidungen ohne Ausführen;
   REJECTED-Records über `log_rejection()` (kein Fill, 0 PnL)
@@ -751,7 +753,7 @@ Phase 5 Core Services implementiert:
   (Read-Key), `/kill-switch/{enabled}`, `/execution/shadow/{submit,summary,records}`,
   `/execution/crypto/{submit,status,cancel,price}`
 
-709 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
+726 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
 laufen standardmäßig simuliert.
 
 Das ist beabsichtigt.
@@ -928,6 +930,7 @@ Shadow Mode dient zum Testen von Trade-Logik gegen Marktdaten ohne finanzielles 
 | Max Hebel | 1.0x | Config |
 | Max Tagesverlust | 2% | Config |
 | Min Capital | 0.01 | Config |
+| Max Capital (pro Order) | = Min Capital (0.01) | Config (`max_capital`) |
 
 **Wichtig:** Keine dieser Grenzen darf von LLM-Ausgaben überschrieben werden. Deterministische Policy hat Vorrang.
 

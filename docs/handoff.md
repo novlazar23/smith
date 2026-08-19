@@ -57,7 +57,7 @@ Phase 1 Persistence (PostgreSQL-backed stores) additions committed:
 
 Phase 4 — Paper Trading: ✅ COMPLETE. 12 Dateien, 2840 Zeilen, 323 Tests grün.
 
-Phase 5 — Live Execution: ✅ CORE SERVICES + Read/Trade API Auth + Crypto Adapters + Shadow Mode + Network Isolation + Credential Management + Minimal Capital COMPLETE.
+Phase 5 — Live Execution: ✅ CORE SERVICES + Read/Trade API Auth + Crypto Adapters + Shadow Mode + Network Isolation + Credential Management + Minimal Capital + Safety Gate COMPLETE.
 11 Services, 15 Testdateien, 534 Tests grün.
 
 Services implementiert:
@@ -278,10 +278,24 @@ Nächste Schritte (in Reihenfolge):
     - ✅ Shadow-Mode-Wiring COMPLETE: `LiveExecutionService` akzeptiert optionalen `ShadowModeLogger`; jede REJECTED/ERROR-Order wird mit vollständigen Request-Parametern (quantity, price, error, run_id) über `ShadowModeLogger.log_rejection()` protokolliert; `ShadowTradeRecord` mit neuem `error`-Feld; Bugfix: `pnl_estimate` liefert 0 für nicht-ausgeführte Orders (war vorher falsches PnL durch fill_price=0); Response-Feld `shadow_mode` kennzeichnet Shadow-Mode-Aktivität
     - ✅ README Section 11 „Systemnutzung“: Arbeitsablauf, API-Endpunkt-Tabelle (Agents/Evolution/Execution/Risk/Research), Shadow Mode, Sicherheitsrichtlinien, Agenten-Lifecycle, Promotion-Kriterien, Regime-Erkennung
 
-3. **Live Execution Safety Gate** — explizite Freigabe erforderlich
-   - Audit-Log aller Live-Transaktionen
-   - Kill Switch Monitoring (wirkliche Exchange-Verbindung)
-   - Maximaler Kapitaleinsatz auf MinCapital beschränkt (ExecutionConfig.min_capital)
+3. **Live Execution Safety Gate** — ✅ COMPLETE (R5.3, R5.7, R5.23, R5.24)
+    - ✅ Audit-Log (R5.3): optionale `ExecutionLogStore`-Injection in `LiveExecutionService`;
+      jeder Trade-Versuch (FILLED/REJECTED/ERROR) wird persistiert (decision_id, timestamp,
+      status, order_id, error); Credentials erscheinen nie im Log (R5.20)
+    - ✅ Kill-Switch-Monitoring (R5.7): `kill_switch_status()` meldet `enabled`,
+      `toggle_count`, `last_toggled_at`; aktiver Kill Switch blockiert Orders sofort
+      (Pipeline-Step 1, synchron, < 100 ms); Exchange-Connection-Check folgt mit echter
+      Exchange-Integration (im MVP simulated=True)
+    - ✅ Maximaler Kapitaleinsatz (R5.23/R5.24): `ExecutionConfig.max_capital`
+      (Default `None` → Cap = `min_capital` = 0.01 Einheiten, d. h. standardmäßig nur der
+      minimale Test-Betrag); `quantity > max_capital` → REJECTED `MAX_CAPITAL_EXCEEDED`
+      (Pipeline-Step 6b)
+    - ✅ Safety Gate: `verify_safety_gate()` prüft `kill_switch_present`,
+      `min_capital_positive`, `max_capital_valid` und liefert `SafetyGateResult`;
+      `activate_live()` ist fail-closed (Live-Aktivierung nur bei bestandenem Gate)
+    - 15 neue Tests in `tests/test_execution_safety_gate.py`; Bestands-Tests setzen
+      explizit `max_capital=1000.0` (Opt-in für größere Test-Größen); `make check` clean
+      (726 Tests, ruff + mypy)
 
 See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
@@ -365,6 +379,7 @@ Inside OpenCode, run `/resume` to reconstruct context from Git and continue the 
 
 ## Last verification
 
+- `make check` (2026-08-19, Safety Gate): 726 Tests grün, ruff clean, mypy clean (50 source files)
 - `./scripts/bootstrap.sh --check`
 - `docker compose config --quiet`
 - locked Docker image build and `/health` smoke test

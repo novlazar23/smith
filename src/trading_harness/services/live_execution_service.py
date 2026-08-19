@@ -23,6 +23,7 @@ from trading_harness.services.exchange_adapter import (
     ExchangeAdapterError,
     StubExchangeAdapter,
 )
+from trading_harness.services.execution_store import ExecutionLogStore
 from trading_harness.services.kill_switch import KillSwitch
 from trading_harness.services.network_policy import NetworkPolicy
 from trading_harness.services.order_deduplicator import OrderDeduplicator
@@ -43,6 +44,8 @@ class ExecutionConfig(BaseModel):
     global_rate_limit: int = 10
     symbol_rate_limit: int = 2
     min_capital: float = 0.01
+    # R5.23/R5.24: Maximaler Kapitaleinsatz pro Order (Einheiten); None = min_capital.
+    max_capital: float | None = None
     allowed_endpoints: list[str] = Field(default_factory=list)
     allowed_exchanges: list[str] = Field(default_factory=list)
     symbol_whitelist: list[str] = Field(default_factory=list)
@@ -69,6 +72,26 @@ class ExecutionLog(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class SafetyGateCheck(BaseModel):
+    """Ergebnis eines einzelnen Safety-Gate-Checks."""
+
+    name: str
+    passed: bool
+    detail: str = ""
+
+
+class SafetyGateResult(BaseModel):
+    """Ergebnis der Safety-Gate-Prüfung vor der Live-Aktivierung."""
+
+    ready: bool
+    checks: list[SafetyGateCheck] = Field(default_factory=list)
+
+    @property
+    def failed(self) -> list[str]:
+        """Namen der fehlgeschlagenen Checks."""
+        return [check.name for check in self.checks if not check.passed]
+
+
 class LiveExecutionService:
     """Orchestrates KillSwitch → RateLimiter → Deduplicator → ExchangeAdapter.
 
@@ -87,6 +110,7 @@ class LiveExecutionService:
         credential_manager: CredentialManager | None = None,
         config: ExecutionConfig | None = None,
         shadow_logger: ShadowModeLogger | None = None,
+        log_store: ExecutionLogStore | None = None,
     ) -> None:
         self._kill_switch = kill_switch or KillSwitch(enabled=False)
         self._rate_limiter = rate_limiter or RateLimiter(
@@ -102,6 +126,7 @@ class LiveExecutionService:
         self._lock = threading.Lock()
         self._logs: list[ExecutionLog] = []
         self._shadow_logger = shadow_logger
+        self._log_store = log_store
 
     def submit_order(
         self,
@@ -207,6 +232,24 @@ class LiveExecutionService:
                 quantity=quantity,
                 price=price,
                 error="MIN_CAPITAL_NOT_MET",
+            )
+
+        # 6b. Check max capital (R5.23/R5.24: standardmäßig = min_capital)
+        effective_max_capital = (
+            self._config.max_capital
+            if self._config.max_capital is not None
+            else self._config.min_capital
+        )
+        if quantity > effective_max_capital:
+            return self._log_and_return(
+                decision_id,
+                run_id,
+                symbol,
+                side,
+                "REJECTED",
+                quantity=quantity,
+                price=price,
+                error="MAX_CAPITAL_EXCEEDED",
             )
 
         # 7. Risk Policy Re-Check (R5.6, Sicherheitsgrenze)
@@ -339,10 +382,59 @@ class LiveExecutionService:
             return "https://api.*/*"
         return "*"
 
-    def activate_live(self) -> None:
-        """Live Execution aktivieren (muss explizit aufgerufen werden)."""
-        with self._lock:
-            self._enabled = True
+    def verify_safety_gate(self) -> SafetyGateResult:
+        """Prüft die Sicherheitsvoraussetzungen für die Live-Aktivierung."""
+        checks: list[SafetyGateCheck] = []
+
+        checks.append(
+            SafetyGateCheck(
+                name="kill_switch_present",
+                passed=self._kill_switch is not None,
+                detail="Kill Switch verdrahtet"
+                if self._kill_switch is not None
+                else "Kein Kill Switch verdrahtet",
+            )
+        )
+
+        min_capital = self._config.min_capital
+        checks.append(
+            SafetyGateCheck(
+                name="min_capital_positive",
+                passed=min_capital > 0,
+                detail=f"min_capital={min_capital}",
+            )
+        )
+
+        max_capital = self._config.max_capital
+        checks.append(
+            SafetyGateCheck(
+                name="max_capital_valid",
+                passed=max_capital is None or max_capital > 0,
+                detail="max_capital=unset (Default: min_capital)"
+                if max_capital is None
+                else f"max_capital={max_capital}",
+            )
+        )
+
+        return SafetyGateResult(
+            ready=all(check.passed for check in checks), checks=checks
+        )
+
+    def kill_switch_status(self) -> dict[str, Any]:
+        """Monitoring-Zustand des Kill Switches (R5.7)."""
+        return self._kill_switch.config.model_dump()
+
+    def activate_live(self) -> SafetyGateResult:
+        """Live Execution aktivieren — nur bei bestandenem Safety Gate.
+
+        Fail-closed: Bei nicht bestandenem Gate bleibt Live Execution
+        deaktiviert; das Ergebnis dokumentiert die fehlgeschlagenen Checks.
+        """
+        result = self.verify_safety_gate()
+        if result.ready:
+            with self._lock:
+                self._enabled = True
+        return result
 
     def deactivate_live(self) -> None:
         """Live Execution deaktivieren."""
@@ -399,6 +491,18 @@ class LiveExecutionService:
         )
         with self._lock:
             self._logs.append(log)
+
+        # R5.3: Audit-Log persistieren (ohne Credentials)
+        if self._log_store is not None:
+            self._log_store.add(
+                decision_id=decision_id,
+                run_id=run_id,
+                symbol=symbol,
+                side=side,
+                status=status,
+                order_id=order_id,
+                error=error,
+            )
 
         # Shadow Mode: logge nicht-ausgeführte Orders für Backtesting
         if self._shadow_logger and status in ("REJECTED", "ERROR"):

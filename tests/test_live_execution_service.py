@@ -187,6 +187,7 @@ class TestLiveExecutionServiceMinCapital:
             config=ExecutionConfig(
                 live_execution_enabled=True,
                 min_capital=0.5,
+                max_capital=1000.0,
             ),
         )
         svc.activate_live()
@@ -295,7 +296,7 @@ class TestLiveExecutionServicePaperPipeline:
         adapter = self._make_adapter_with_fill_rate()
         svc = LiveExecutionService(
             exchange_adapter=adapter,
-            config=ExecutionConfig(live_execution_enabled=True),
+            config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
         )
         svc.activate_live()
         result = svc.submit_order(
@@ -317,7 +318,7 @@ class TestLiveExecutionServicePaperPipeline:
         adapter = self._make_adapter_with_fill_rate()
         svc = LiveExecutionService(
             exchange_adapter=adapter,
-            config=ExecutionConfig(live_execution_enabled=True),
+            config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
         )
         svc.activate_live()
         result = svc.submit_order(
@@ -438,7 +439,7 @@ class TestLiveExecutionServicePaperPipeline:
         adapter = self._make_adapter_with_fill_rate()
         svc = LiveExecutionService(
             exchange_adapter=adapter,
-            config=ExecutionConfig(live_execution_enabled=True),
+            config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
         )
         svc.activate_live()
         svc.submit_order(
@@ -479,7 +480,7 @@ class TestLiveExecutionServicePaperPipeline:
         svc = LiveExecutionService(
             exchange_adapter=adapter,
             rate_limiter=rl,
-            config=ExecutionConfig(live_execution_enabled=True),
+            config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
         )
         svc.activate_live()
         result_btc = svc.submit_order(
@@ -551,6 +552,7 @@ class TestRiskEngineIntegration:
             config=ExecutionConfig(
                 live_execution_enabled=True,
                 symbol_whitelist=["BTCUSDT"],
+                max_capital=1000.0,
             ),
         )
         svc.activate_live()
@@ -574,6 +576,7 @@ class TestRiskEngineIntegration:
             config=ExecutionConfig(
                 live_execution_enabled=True,
                 symbol_whitelist=[],  # leer → Whitelist-Check skipped, RiskEngine erreicht Trade
+                max_capital=1000.0,
             ),
         )
         svc.activate_live()
@@ -597,6 +600,7 @@ class TestRiskEngineIntegration:
             config=ExecutionConfig(
                 live_execution_enabled=True,
                 symbol_whitelist=["BTCUSDT"],
+                max_capital=1000.0,
             ),
         )
         svc.activate_live()
@@ -625,6 +629,7 @@ class TestSymbolWhitelistIntegration:
             config=ExecutionConfig(
                 live_execution_enabled=True,
                 symbol_whitelist=["BTCUSDT", "ETHUSDT"],
+                max_capital=1000.0,
             ),
         )
         svc.activate_live()
@@ -666,6 +671,7 @@ class TestSymbolWhitelistIntegration:
             config=ExecutionConfig(
                 live_execution_enabled=True,
                 symbol_whitelist=[],
+                max_capital=1000.0,
             ),
         )
         svc.activate_live()
@@ -690,6 +696,7 @@ class TestAllowedExchangesIntegration:
             config=ExecutionConfig(
                 live_execution_enabled=True,
                 allowed_exchanges=["PAPER"],
+                max_capital=1000.0,
             ),
         )
         svc.activate_live()
@@ -710,6 +717,7 @@ class TestAllowedExchangesIntegration:
             config=ExecutionConfig(
                 live_execution_enabled=True,
                 allowed_exchanges=[],
+                max_capital=1000.0,
             ),
         )
         svc.activate_live()
@@ -754,6 +762,7 @@ class TestMaxPositionSizeEnforcement:
             config=ExecutionConfig(
                 live_execution_enabled=True,
                 symbol_whitelist=["BTCUSDT"],
+                max_capital=1000.0,
             ),
         )
         svc.activate_live()
@@ -794,7 +803,7 @@ class TestNetworkPolicyIntegration:
         svc2 = LiveExecutionService(
             exchange_adapter=adapter,
             network_policy=np2,
-            config=ExecutionConfig(live_execution_enabled=True),
+            config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
         )
         svc2.activate_live()
         result = svc2.submit_order(
@@ -815,7 +824,7 @@ class TestNetworkPolicyIntegration:
                 paper_exchange=PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store())
             ),
             network_policy=np,
-            config=ExecutionConfig(live_execution_enabled=True),
+            config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
         )
         svc.activate_live()
         # Da _get_exchange_url "*" für PaperExchangeAdapter zurückgibt und "*"
@@ -844,7 +853,7 @@ class TestCredentialManagerIntegration:
             svc = LiveExecutionService(
                 exchange_adapter=adapter,
                 credential_manager=cm,
-                config=ExecutionConfig(live_execution_enabled=True),
+                config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
             )
             svc.activate_live()
             result = svc.submit_order(
@@ -869,7 +878,7 @@ class TestCredentialManagerIntegration:
         svc = LiveExecutionService(
             exchange_adapter=adapter,
             credential_manager=cm,
-            config=ExecutionConfig(live_execution_enabled=True),
+            config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
         )
         svc.activate_live()
         result = svc.submit_order(
@@ -892,7 +901,7 @@ class TestCredentialManagerIntegration:
             svc = LiveExecutionService(
                 exchange_adapter=adapter,
                 credential_manager=cm,
-                config=ExecutionConfig(live_execution_enabled=True),
+                config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
             )
             svc.activate_live()
             result = svc.submit_order(
@@ -946,6 +955,7 @@ class TestFullPipelineIntegration:
                 config=ExecutionConfig(
                     live_execution_enabled=True,
                     symbol_whitelist=["BTCUSDT"],
+                    max_capital=1000.0,
                 ),
             )
             svc.activate_live()
@@ -1021,7 +1031,7 @@ class TestReadTradeApiSeparation:
         svc = LiveExecutionService(
             exchange_adapter=adapter,
             credential_manager=cm,
-            config=ExecutionConfig(live_execution_enabled=True),
+            config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
         )
         svc.activate_live()
         result = svc.submit_order(
@@ -1042,7 +1052,7 @@ class TestReadTradeApiSeparation:
         svc = LiveExecutionService(
             exchange_adapter=adapter,
             credential_manager=cm,
-            config=ExecutionConfig(live_execution_enabled=True),
+            config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
         )
         svc.activate_live()
         os.environ["TRADE_API_KEY"] = "trade-key"
@@ -1185,6 +1195,7 @@ class TestAllowedExchangesEnforcement:
             config=ExecutionConfig(
                 live_execution_enabled=True,
                 allowed_exchanges=["bybit", "binance"],
+                max_capital=1000.0,
             ),
         )
         svc.activate_live()
@@ -1212,7 +1223,7 @@ class TestAllowedExchangesEnforcement:
         svc = LiveExecutionService(
             exchange_adapter=adapter,
             credential_manager=cm,
-            config=ExecutionConfig(live_execution_enabled=True),
+            config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
         )
         svc.activate_live()
         os.environ["TRADE_API_KEY"] = "trade-key"
@@ -1313,7 +1324,7 @@ class TestLiveExecutionServiceShadowMode:
         svc = LiveExecutionService(
             exchange_adapter=adapter,
             shadow_logger=shadow,
-            config=ExecutionConfig(live_execution_enabled=True),
+            config=ExecutionConfig(live_execution_enabled=True, max_capital=1000.0),
         )
         svc.activate_live()
         result = svc.submit_order(
