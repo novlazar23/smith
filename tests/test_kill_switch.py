@@ -263,3 +263,54 @@ class TestKillSwitchAutoTrigger:
         assert ks.is_active() is True
         # Genau ein Auto-Trigger (1 Toggle), keine doppelte Aktivierung
         assert ks.config.toggle_count == 1
+
+
+class TestKillSwitchPersistenceWiring:
+    """Persistenz: manueller Kill-Switch-State überlebt einen Neustart (WI-P5-10)."""
+
+    def test_manual_activation_survives_restart(self, tmp_path: Path):
+        state_file = tmp_path / "kill_switch.json"
+        ks = KillSwitch(db_path=str(state_file))
+        ks.activate()
+
+        reloaded = KillSwitch(db_path=str(state_file))
+        assert reloaded.is_active() is True
+        assert reloaded.config.auto_triggered is False
+        assert reloaded.config.trigger_reason == "manual"
+
+    def test_deactivation_survives_restart(self, tmp_path: Path):
+        state_file = tmp_path / "kill_switch.json"
+        ks = KillSwitch(db_path=str(state_file))
+        ks.activate()
+        ks.deactivate()
+
+        reloaded = KillSwitch(db_path=str(state_file))
+        assert reloaded.is_active() is False
+
+
+class TestKillSwitchAtomicPersistence:
+    """Atomarer State-Write: ein Crash mid-write lässt den vorherigen Stand intakt (WI-P5-10)."""
+
+    def test_crash_before_replace_keeps_previous_state(
+        self, tmp_path: Path, monkeypatch
+    ):
+        state_file = tmp_path / "kill_switch.json"
+        ks = KillSwitch(db_path=str(state_file))
+        ks.activate()
+        assert state_file.exists()
+
+        def boom(*args, **kwargs):
+            raise OSError("simulated crash before atomic replace")
+
+        monkeypatch.setattr("trading_harness.services.kill_switch.os.replace", boom)
+        ks.deactivate()  # _save_state scheitert — alter File-Stand bleibt
+
+        reloaded = KillSwitch(db_path=str(state_file))
+        assert reloaded.is_active() is True
+
+    def test_no_tmp_remains_after_successful_save(self, tmp_path: Path):
+        state_file = tmp_path / "kill_switch.json"
+        ks = KillSwitch(db_path=str(state_file))
+        ks.activate()
+        ks.deactivate()
+        assert not (tmp_path / "kill_switch.json.tmp").exists()

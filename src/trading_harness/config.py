@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     live_execution_enabled: bool = False
     kill_switch_default: bool = True
+    kill_switch_state_path: str = "data/kill_switch.json"
     risk_policy_path: str = "config/risk-policy.yaml"
     population_policy_path: str = "config/population-policy.yaml"
 

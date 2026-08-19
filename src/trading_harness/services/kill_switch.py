@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -24,7 +26,7 @@ class KillSwitchConfig(BaseModel):
 
 
 class KillSwitch:
-    """Thread-sicherer Kill Switch mit SQLite-Persistenz.
+    """Thread-sicherer Kill Switch mit atomarer JSON-Persistenz.
 
     Aktivierung innerhalb von 100ms wirksam.
     Zustand wird persistent gespeichert und bei Neustart wiederhergestellt.
@@ -44,8 +46,6 @@ class KillSwitch:
         try:
             path = Path(self._db_path)
             if path.exists():
-                import json
-
                 with open(path, "r") as f:
                     data = json.load(f)
                     self._enabled = data.get("enabled", False)
@@ -67,16 +67,15 @@ class KillSwitch:
             pass
 
     def _save_state(self) -> None:
-        """Aktuellen Zustand persistieren."""
+        """Aktuellen Zustand persistieren (atomar: tmp-Datei + os.replace)."""
         if self._db_path is None:
             return
         try:
             path = Path(self._db_path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            import json
-
+            tmp_path = path.with_name(path.name + ".tmp")
             cfg = self._persisted_config
-            with open(path, "w") as f:
+            with open(tmp_path, "w") as f:
                 json.dump(
                     {
                         "enabled": self._enabled,
@@ -90,8 +89,13 @@ class KillSwitch:
                     },
                     f,
                 )
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
         except OSError:
-            # Persistenzfehler nicht kritisch — Zustand ist im Speicher
+            # Persistenzfehler nicht kritisch — Zustand bleibt im Speicher.
+            # Atomic-Write (tmp + os.replace) garantiert: nach einem Crash
+            # ist der vorherige File-Stand intakt (keine halbe JSON).
             pass
 
     def activate(self) -> None:
@@ -125,6 +129,11 @@ class KillSwitch:
         """Prüfen ob Kill Switch aktiv ist (thread-sicher, <100ms)."""
         with self._lock:
             return self._enabled
+
+    @property
+    def db_path(self) -> str | None:
+        """Aktueller Persistenz-Pfad (None = nur In-Memory)."""
+        return self._db_path
 
     def record_anomaly(self, reason: str) -> bool:
         """R5.6: Anomalie-Ereignis erfassen.

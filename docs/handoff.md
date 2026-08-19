@@ -317,14 +317,24 @@ Nächste Schritte (in Reihenfolge):
    - Unabhängiges Review (verifiziert: 742 Tests/ruff/mypy reproduziert): **approved**;
      Close-out-Conditions umgesetzt (2 Negative-Tests für Sanitierung + PENDING-Semantik)
 
-5. **Kill-Switch Persistenz-Wiring (bekanntes Safety Gap, vorbestehend)** — 📋 ZU BEARBEITEN
-   - `src/trading_harness/api/routes.py:603`: `execution_kill_switch = KillSwitch()` ohne
-     `db_path` → Kill-Switch-Zustand (inkl. R5.6 Auto-Trigger UND manueller Aktivierung)
-     geht bei Prozess-Neustart verloren; Switch startet inaktiv (fail-open)
-   - Aus demselben Review: nicht-atomarer State-File-Write (`_save_state` öffnet mit "w")
-     → Crash mid-write korruptiert die JSON → Fallback `enabled=False` (fail-open);
-     empfohlen: tmp-Datei + atomarer Rename
-   - **Blocker vor echter Live-Integration** — eigenes Workitem nötig
+5. **Kill-Switch Persistenz-Wiring (bekanntes Safety Gap, vorbestehend)** — ✅ COMPLETE (WI-P5-10)
+    - Gap: `routes.py` erzeugte `KillSwitch()` ohne `db_path` → Kill-Switch-Zustand
+      (inkl. R5.6 Auto-Trigger UND manueller Aktivierung) ging bei Prozess-Neustart
+      verloren (fail-open); nicht-atomarer State-File-Write (`open(..., "w")`) konnte
+      bei Crash mid-write die JSON korruptieren → Fallback `enabled=False` (fail-open)
+    - Fix: `execution_kill_switch = KillSwitch(db_path=settings.kill_switch_state_path)`
+      (neue `Settings`-Option, Default `data/kill_switch.json`, via `.env` überschreibbar);
+      `_save_state` schreibt jetzt tmp-Datei + `os.fsync` + atomares `os.replace`
+    - Neue `KillSwitch.db_path`-Property (Observability/Wiring-Test); Docstring-Korrektur
+      (JSON-, nicht SQLite-Persistenz)
+    - 6 neue Tests (manueller + Deaktivierungs-Restart-Roundtrip, Crash-mid-write lässt
+      vorherigen Stand intakt, kein tmp-Rest, API-Wiring, API-Neustart-Simulation);
+      `make check` clean (750 Tests, ruff + mypy)
+    - Gebliebene offene Punkte (bewusst nicht ohne Freigabe geändert):
+      `kill_switch_default` (Settings) bleibt unverdrahtet — ein fail-closed First-Start-Default
+      wäre eine Verhaltensänderung der Sicherheitsgrenze; `ExecutionLogStore()` in
+      `routes.py` hat ebenfalls kein `db_path` (Audit-Log-Persistenz-Wiring, eigenes
+      Workitem)
 
 See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
@@ -408,6 +418,7 @@ Inside OpenCode, run `/resume` to reconstruct context from Git and continue the 
 
 ## Last verification
 
+- `make check` (2026-08-19, WI-P5-10 Kill-Switch Persistenz-Wiring): 750 Tests grün, ruff clean, mypy clean (50 source files)
 - `make check` (2026-08-19, R5.6 Kill-Switch Auto-Trigger): 742 Tests grün, ruff clean, mypy clean (50 source files)
 - `make check` (2026-08-19, Safety Gate): 726 Tests grün, ruff clean, mypy clean (50 source files)
 - `./scripts/bootstrap.sh --check`

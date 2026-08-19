@@ -342,7 +342,6 @@ class TestCryptoExecutionEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "REJECTED"
-        # Pipeline prüft live_execution_enabled zuerst
         assert "LIVE_EXECUTION_DISABLED" in data.get("error", "")
 
     def test_crypto_submit_live_disabled(self):
@@ -400,3 +399,38 @@ class TestCryptoExecutionEndpoints:
         data = resp.json()
         assert data["status"] == "REJECTED"
         assert "LIVE_EXECUTION_DISABLED" in data.get("error", "")
+
+
+class TestExecutionKillSwitchWiring:
+    """Kill-Switch-Persistenz-Wiring im API-Modul (Review-Finding: db_path fehlte).
+
+    Review-Finding 1 (MAJOR, R5.6-Review): das API-Singleton wurde ohne db_path
+    erzeugt, daher ging der Kill-Switch-State (inkl. Auto-Trigger) bei jedem
+    Prozess-Neustart verloren — fail-open. WI-P5-10 schließt diese Lücke.
+    """
+
+    def test_kill_switch_wired_with_state_path(self):
+        """Das API-Singleton persistiert in den konfigurierten State-Pfad."""
+        from trading_harness.api import routes
+
+        assert routes.execution_kill_switch.db_path == (
+            routes.settings.kill_switch_state_path
+        )
+
+    def test_kill_switch_state_survives_process_restart(self, tmp_path, monkeypatch):
+        """Aktivierter Kill Switch überlebt einen (simulierten) Prozess-Neustart."""
+        from trading_harness.api import routes
+
+        state_file = tmp_path / "kill_switch.json"
+        monkeypatch.setattr(routes.execution_kill_switch, "_db_path", str(state_file))
+
+        response = client.post("/execution/kill-switch/True")
+        assert response.status_code == 200
+
+        # Simulierter Neustart: neue Instanz lädt denselben State-File
+        reloaded = KillSwitch(db_path=str(state_file))
+        assert reloaded.is_active() is True
+
+        # Singleton wieder deaktivieren, damit andere Tests nicht betroffen sind
+        response = client.post("/execution/kill-switch/False")
+        assert response.status_code == 200

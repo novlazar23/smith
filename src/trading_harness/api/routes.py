@@ -600,7 +600,8 @@ from trading_harness.services.shadow_mode_logger import (
 )
 
 execution_log_store = ExecutionLogStore()
-execution_kill_switch = KillSwitch()
+# Persistenter Kill Switch: State (inkl. Auto-Trigger) überlebt Prozess-Neustarts
+execution_kill_switch = KillSwitch(db_path=settings.kill_switch_state_path)
 execution_config = ExecutionConfig(
     live_execution_enabled=settings.live_execution_enabled,
     allowed_endpoints=settings.network_allowed_patterns,
