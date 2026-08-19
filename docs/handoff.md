@@ -327,10 +327,20 @@ Nächste Schritte (in Reihenfolge):
       `_save_state` schreibt jetzt tmp-Datei + `os.fsync` + atomares `os.replace`
     - Neue `KillSwitch.db_path`-Property (Observability/Wiring-Test); Docstring-Korrektur
       (JSON-, nicht SQLite-Persistenz)
-    - 6 neue Tests (manueller + Deaktivierungs-Restart-Roundtrip, Crash-mid-write lässt
-      vorherigen Stand intakt, kein tmp-Rest, API-Wiring, API-Neustart-Simulation);
-      `make check` clean (750 Tests, ruff + mypy)
-    - Gebliebene offene Punkte (bewusst nicht ohne Freigabe geändert):
+     - 6 neue Tests (manueller + Deaktivierungs-Restart-Roundtrip, Crash-mid-write lässt
+       vorherigen Stand intakt, kein tmp-Rest, API-Wiring, API-Neustart-Simulation);
+       `make check` clean (750 Tests, ruff + mypy)
+     - Unabhängiges Review (verifiziert: 750 Tests/ruff/mypy reproduziert, Invarianten
+       I1 Crash-Safety, I2 Restart-Persistenz, I3 keine Sicherheitsgrenzen-Änderung,
+       I4 Thread-Safety — alle PASS): **approved**; 6 Findings (3 MINOR, 3 NIT) als
+       Folge-Workitems empfohlen: (a) Test-Suite persistiert `enabled: true` ins echte
+       `data/kill_switch.json` → nach `make check` startet `make run` mit aktivem Kill
+       Switch (fail-closed-Richtung, Test-Isolations-Defekt; Fix: `conftest.py`-Fixture
+       mit tmp-Pfad), (b) deterministischer tmp-Dateiname → Multi-Writer-Kollision
+       (latent, Single-Writer-Deployments sicher; Fix: `tempfile.mkstemp` +
+       `os.unlink` im except), (c) Docker mountet `./data` nicht → Persistenz
+       überlebt keine Container-Recreation (Fix: Bind-Mount/Volume + Vermerk)
+     - Gebliebene offene Punkte (bewusst nicht ohne Freigabe geändert):
       `kill_switch_default` (Settings) bleibt unverdrahtet — ein fail-closed First-Start-Default
       wäre eine Verhaltensänderung der Sicherheitsgrenze; `ExecutionLogStore()` in
       `routes.py` hat ebenfalls kein `db_path` (Audit-Log-Persistenz-Wiring, eigenes
