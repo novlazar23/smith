@@ -352,6 +352,8 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
             try:
                 if method == "GET":
                     resp = self._client.get(url, params=params, headers=headers)
+                elif method == "DELETE":
+                    resp = self._client.delete(url, params=params, headers=headers)
                 else:
                     resp = self._client.post(url, params=params, json=data or {}, headers=headers)
 
@@ -572,8 +574,13 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
             "POST", self._cancel_order_url(), data={"orderId": order_id}
         )
         result = resp.get("result", resp)
+        code = resp.get("retCode", resp.get("code"))
+        if code is not None:
+            success = str(code) == "0"
+        else:
+            success = bool(result.get("success")) or result.get("retCode") == "0"
         return {
-            "success": result.get("retCode") == "0",
+            "success": success,
             "raw": resp,
         }
 
@@ -724,6 +731,26 @@ class BitgetExchangeAdapter(BaseCryptoExchangeAdapter):
     def _ticker_url(self, symbol: str) -> str:
         return f"{self.API_BASE}/api/v2/spot/market/ticker"
 
+    def submit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        order_type: str = "MARKET",
+        exchange_name: str | None = None,
+    ) -> dict[str, Any]:
+        result = super().submit_order(
+            symbol, side, quantity, price, order_type, exchange_name
+        )
+        # Bitget V3 nestet orderId unter data[0] (Live-Response-Shape)
+        if result.get("order_id") is None:
+            resp = result.get("raw") or {}
+            data = resp.get("data")
+            if isinstance(data, list) and data:
+                result["order_id"] = data[0].get("orderId", data[0].get("order_id"))
+        return result
+
 
 class BinanceExchangeAdapter(BaseCryptoExchangeAdapter):
     """Binance V4 Spot API Adapter.
@@ -783,6 +810,8 @@ class BinanceExchangeAdapter(BaseCryptoExchangeAdapter):
             try:
                 if method == "GET":
                     resp = self._client.get(url, params=merged_params, headers=headers)
+                elif method == "DELETE":
+                    resp = self._client.delete(url, params=merged_params, headers=headers)
                 else:
                     resp = self._client.post(url, params=merged_params, json=data or {}, headers=headers)
 
@@ -905,8 +934,10 @@ class BinanceExchangeAdapter(BaseCryptoExchangeAdapter):
             "DELETE", self._cancel_order_url(), params={"orderId": order_id}
         )
         self._validate_response(resp)
+        code = resp.get("code")
+        success = code is None or str(code) == "0"
         return {
-            "success": resp.get("code") == "0",
+            "success": success,
             "order_id": resp.get("orderId", order_id),
             "raw": resp,
         }

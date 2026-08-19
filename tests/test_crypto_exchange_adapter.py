@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -1602,4 +1603,225 @@ class TestCryptoExchangeAdapterValidationIntegration:
         adapter = CoinbaseExchangeAdapter(simulated=True)
         balance = adapter.get_balance("USDT")
         assert balance > 0  # simulated balance > 0
+
+
+# ===========================================================================
+# simulated=False — HTTP-Success-Pfade (gemocktes httpx Transport)
+# ===========================================================================
+
+
+class TestSimulatedFalseHTTPPath:
+    """simulated=False: Success-Pfade über die echte HTTP-Schicht.
+
+    Deckt die bisher ungeprüften Live-Pfade ab: submit_order-Parsing,
+    GET/DELETE-Verb-Routing und signierte Auth auf dem Wire.
+    httpx.MockTransport — keine echten API-Calls.
+    """
+
+    def _make_live_adapter(self, adapter_cls, response):
+        """Erstellt Adapter mit simulated=False und MockTransport, der Requests fängt."""
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["method"] = request.method
+            captured["path"] = request.url.path
+            captured["query"] = dict(request.url.params)
+            captured["headers"] = dict(request.headers)
+            captured["body"] = request.content.decode("utf-8")
+            return httpx.Response(200, json=response)
+
+        adapter = adapter_cls(
+            api_key="test-key", api_secret="test-secret", simulated=False
+        )
+        adapter._client = httpx.Client(transport=httpx.MockTransport(handler))
+        return adapter, captured
+
+    @staticmethod
+    def _header(captured, name):
+        # httpx normalisiert Wire-Header auf lowercase — case-insensitiver Zugriff
+        return captured["headers"].get(name.lower())
+
+    def test_bybit_submit_order_live_success(self):
+        """Bybit POST /v5/order/create: order_id aus result, Auth-Header auf dem Wire."""
+        adapter, captured = self._make_live_adapter(
+            BybitExchangeAdapter,
+            {"retCode": "0", "retMsg": "OK", "result": {"orderId": "byb-123"}},
+        )
+        result = adapter.submit_order("BTCUSDT", "BUY", 0.5, 0.0)
+        assert result["order_id"] == "byb-123"
+        assert result["status"] == "FILLED"
+        assert captured["method"] == "POST"
+        assert captured["path"] == "/v5/order/create"
+        assert self._header(captured, "X-BAPI-API-KEY") == "test-key"
+        assert self._header(captured, "X-BAPI-RECV-WINDOW") == "5000"
+        assert re.fullmatch(r"[0-9a-f]{64}", self._header(captured, "X-BAPI-SIGN"))
+        assert self._header(captured, "X-BAPI-TIMESTAMP").isdigit()
+        adapter.close()
+
+    def test_bybit_signature_covers_wire_body(self):
+        """Bybit X-BAPI-SIGN = HMAC-SHA256(timestamp + key + recvWindow + body)."""
+        adapter, captured = self._make_live_adapter(
+            BybitExchangeAdapter,
+            {"retCode": "0", "retMsg": "OK", "result": {"orderId": "byb-123"}},
+        )
+        adapter.submit_order("BTCUSDT", "BUY", 0.5, 0.0)
+        timestamp = self._header(captured, "X-BAPI-TIMESTAMP")
+        expected = hmac.new(
+            b"test-secret",
+            f"{timestamp}test-key5000{captured['body']}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        assert self._header(captured, "X-BAPI-SIGN") == expected
+        adapter.close()
+
+    def test_bitget_submit_order_live_success(self):
+        """Bitget POST /api/v3/trade/place-order: order_id aus data[0].orderId."""
+        adapter, captured = self._make_live_adapter(
+            BitgetExchangeAdapter,
+            {"code": "0", "msg": "Success", "data": [{"orderId": "btg-456"}]},
+        )
+        result = adapter.submit_order("BTCUSDT", "BUY", 0.5, 0.0)
+        assert result["order_id"] == "btg-456"
+        assert result["status"] == "FILLED"
+        assert captured["method"] == "POST"
+        assert captured["path"] == "/api/v3/trade/place-order"
+        assert self._header(captured, "ACCESS-KEY") == "test-key"
+        assert self._header(captured, "ACCESS-SIGN")
+        assert self._header(captured, "ACCESS-PASSPHRASE")
+        payload = json.loads(captured["body"])
+        assert payload["symbol"] == "BTCUSDT"
+        assert payload["side"] == "BUY"
+        adapter.close()
+
+    def test_binance_submit_order_live_success(self):
+        """Binance POST /api/v4/trade/order: flache orderId, signierte Query-Params."""
+        adapter, captured = self._make_live_adapter(
+            BinanceExchangeAdapter,
+            {"orderId": 777, "symbol": "BTCUSDT", "status": "FILLED", "executedQty": "0.5"},
+        )
+        result = adapter.submit_order("BTCUSDT", "BUY", 0.5, 0.0)
+        assert result["order_id"] == 777
+        assert result["status"] == "FILLED"
+        assert captured["method"] == "POST"
+        assert captured["path"] == "/api/v4/trade/order"
+        assert self._header(captured, "X-MBX-APIKEY") == "test-key"
+        assert captured["query"]["timestamp"].isdigit()
+        signature = captured["query"]["signature"]
+        assert re.fullmatch(r"[0-9a-f]{64}", signature)
+        body_str = json.dumps(json.loads(captured["body"]), separators=(",", ":"))
+        expected = hmac.new(
+            b"test-secret",
+            f"timestamp={captured['query']['timestamp']}&{body_str}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        assert signature == expected
+        adapter.close()
+
+    def test_coinbase_submit_order_live_success(self):
+        """Coinbase POST /api/v3/brokerage/orders: order_id, CB-ACCESS-Headers."""
+        adapter, captured = self._make_live_adapter(
+            CoinbaseExchangeAdapter,
+            {"order_id": "cb-789", "status": "OPEN", "product_id": "BTC-USDT"},
+        )
+        result = adapter.submit_order("BTC-USDT", "BUY", 0.5, 0.0)
+        assert result["order_id"] == "cb-789"
+        assert result["status"] == "OPEN"
+        assert captured["method"] == "POST"
+        assert captured["path"] == "/api/v3/brokerage/orders"
+        assert self._header(captured, "CB-ACCESS-KEY") == "test-key"
+        assert self._header(captured, "CB-ACCESS-SIGN")
+        assert self._header(captured, "CB-ACCESS-TIMESTAMP").isdigit()
+        adapter.close()
+
+    def test_bybit_get_order_status_uses_http_get(self):
+        """Bybit GET /v5/order/realtime: orderId als Query-Param, state-Parsing."""
+        adapter, captured = self._make_live_adapter(
+            BybitExchangeAdapter,
+            {"retCode": "0", "retMsg": "OK",
+             "result": {"orderId": "byb-1", "state": "Filled", "dealVolume": "0.5"}},
+        )
+        result = adapter.get_order_status("byb-1")
+        assert result["status"] == "Filled"
+        assert captured["method"] == "GET"
+        assert captured["path"] == "/v5/order/realtime"
+        assert captured["query"]["orderId"] == "byb-1"
+        adapter.close()
+
+    def test_binance_get_order_status_uses_http_get(self):
+        """Binance GET /api/v4/trade/order: orderId + signierte Query-Params."""
+        adapter, captured = self._make_live_adapter(
+            BinanceExchangeAdapter,
+            {"orderId": 777, "status": "FILLED", "executedQty": "0.5"},
+        )
+        result = adapter.get_order_status("777")
+        assert result["status"] == "FILLED"
+        assert captured["method"] == "GET"
+        assert captured["path"] == "/api/v4/trade/order"
+        assert captured["query"]["orderId"] == "777"
+        assert captured["query"]["signature"]
+        adapter.close()
+
+    def test_coinbase_get_order_status_uses_http_get(self):
+        """Coinbase GET /api/v3/brokerage/orders/{id}."""
+        adapter, captured = self._make_live_adapter(
+            CoinbaseExchangeAdapter,
+            {"order_id": "cb-789", "status": "OPEN", "filled_size": "0.5"},
+        )
+        result = adapter.get_order_status("cb-789")
+        assert result["status"] == "OPEN"
+        assert captured["method"] == "GET"
+        assert captured["path"] == "/api/v3/brokerage/orders/cb-789"
+        adapter.close()
+
+    def test_coinbase_cancel_uses_http_delete(self):
+        """Coinbase DELETE /api/v3/brokerage/orders: order_ids als Query-Param."""
+        adapter, captured = self._make_live_adapter(
+            CoinbaseExchangeAdapter,
+            {"results": [{"order_id": "cb-789", "success_type": True}]},
+        )
+        result = adapter.cancel_order("cb-789")
+        assert captured["method"] == "DELETE"
+        assert captured["path"] == "/api/v3/brokerage/orders"
+        assert captured["query"]["order_ids"] == "cb-789"
+        assert result["success"] is True
+        assert result["order_id"] == "cb-789"
+        adapter.close()
+
+    def test_binance_cancel_uses_http_delete(self):
+        """Binance DELETE /api/v4/trade/order: signiert, success ohne Code-Feld."""
+        adapter, captured = self._make_live_adapter(
+            BinanceExchangeAdapter,
+            {"orderId": 777, "symbol": "BTCUSDT", "status": "CANCELED"},
+        )
+        result = adapter.cancel_order("777")
+        assert captured["method"] == "DELETE"
+        assert captured["path"] == "/api/v4/trade/order"
+        assert captured["query"]["orderId"] == "777"
+        assert captured["query"]["signature"]
+        assert result["success"] is True
+        adapter.close()
+
+    def test_bybit_cancel_live_success(self):
+        """Bybit POST /v5/order/cancel: success aus top-level retCode."""
+        adapter, captured = self._make_live_adapter(
+            BybitExchangeAdapter,
+            {"retCode": "0", "retMsg": "OK", "result": {"orderId": "byb-1"}},
+        )
+        result = adapter.cancel_order("byb-1")
+        assert captured["method"] == "POST"
+        assert captured["path"] == "/v5/order/cancel"
+        assert result["success"] is True
+        adapter.close()
+
+    def test_bitget_cancel_live_success(self):
+        """Bitget POST /api/v3/spot/order/cancel: success aus top-level code."""
+        adapter, captured = self._make_live_adapter(
+            BitgetExchangeAdapter,
+            {"code": "0", "msg": "Success", "data": {"orderId": "btg-456"}},
+        )
+        result = adapter.cancel_order("btg-456")
+        assert captured["method"] == "POST"
+        assert captured["path"] == "/api/v3/spot/order/cancel"
+        assert result["success"] is True
+        adapter.close()
         adapter.close()
