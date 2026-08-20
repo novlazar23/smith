@@ -15,6 +15,7 @@ services:
       - ./config:/app/config:ro
       - ./prompts:/app/prompts:ro
       - ./schemas:/app/schemas:ro
+      - ./data:/app/data
 
   postgres:
     image: timescale/timescaledb:latest-pg17

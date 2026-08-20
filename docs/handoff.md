@@ -408,6 +408,43 @@ Nächste Schritte (in Reihenfolge):
        kein dir-fsync nach `os.replace` (bestehendes Property, Hardening-
        Kandidat); Red-Run-Exzernt konsistent
  
+8. **Docker `./data`-Bind-Mount für Kill-Switch-/Execution-State-Persistenz (Review-MINOR-3 von WI-P5-10)** — ✅ COMPLETE (WI-P5-13)
+    - Problem: `docker-compose.yml` mountete nur `./config`, `./prompts`,
+      `./schemas` (alle read-only) in den `api`-Container — der in
+      `data/kill_switch.json` (`kill_switch_state_path`, relativ zum
+      WORKDIR `/app`) persistierende Kill-Switch-State (und ab WI-P5-15
+      `data/execution_log.json`) lag damit im Container-Layer und ging bei
+      jeder Container-Recreation verloren
+    - Fix: genau eine neue Mount-Zeile — `volumes` des `api`-Services erhält
+      `- ./data:/app/data` (schreibbar, ohne `:ro`) nach dem `./schemas`-
+      Eintrag; bestehende Mounts, Ports, `depends_on`, `env_file` und die
+      postgres/redis-Services unverändert; kein Python-Code-/Test-Change
+    - README (Abschnitt 5 "Schnellstart"): Vermerk, dass `./data`
+      schreibbar nach `/app/data` eingebunden wird, damit Kill-Switch-State
+      und Execution-Logs Container-Recreation überleben, und dass der
+      Inhalt lokal bleibt (gitignoriert, ausgenommen `.gitkeep`)
+    - Verifikation (2026-08-20): `docker compose config --quiet` exit 0
+      (ohne Ausgabe); `docker compose build` → `Image smith-api Built`
+      (exit 0, Image `sha256:d14826ec009e…`); Smoke-Test: `up -d` →
+      `/health` ok (~4 s: `{"status":"ok","live_execution_enabled":false,
+      "kill_switch":true}`) → `POST /execution/kill-switch/true` →
+      Host-Datei `data/kill_switch.json` zeigt `"enabled": true`
+      (`toggle_count: 1`) → `up -d --force-recreate api` → Host-Datei
+      byte-identisch (`"enabled": true`, `toggle_count: 1`), frischer
+      Container meldet via `/execution/status` `kill_switch: true`
+      (persistenter Startzustand) → `POST /execution/kill-switch/false` →
+      Host-Datei `"enabled": false` (`toggle_count: 2`) →
+      `docker compose down` (ohne `-v`), 0 smith-Container übrig;
+      `make check` clean (754 passed, 1 warning in 52.47s; ruff
+      `All checks passed!`; mypy `Success: no issues found in 50 source
+      files`)
+    - Abweichung: Host-Ports 5432/6379 waren durch einen fremden Stack
+      (`aurora`) belegt — kein Konflikt, da der smith-Compose-Stack nur
+      Port 8080 publiziert (postgres/redis ohne Host-Port-Mapping,
+      interne Compose-DNS); Smoke-Test dadurch vollständig durchführbar
+    - Keine Sicherheitsgrenzen-/Verhaltensänderung: Live-Execution bleibt
+      deaktiviert, Kill-Switch-Semantik unverändert; Review steht aus
+ 
  See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
 Live-Execution bleibt standardmäßig deaktiviert — keine Änderungen an Sicherheitsgrenzen ohne explizite Freigabe.

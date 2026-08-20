@@ -627,6 +627,14 @@ OpenAPI:
 http://localhost:8080/docs
 ```
 
+Zustands-Persistenz: Der `api`-Service bindet zusätzlich das lokale Verzeichnis
+`./data` schreibbar nach `/app/data` ein — als einziges schreibbares Mount neben
+den read-only-Mounts für `./config`, `./prompts` und `./schemas`. Kill-Switch-State
+(`data/kill_switch.json`) und Execution-Logs (`data/execution_log.json`, ab WI-P5-15)
+werden dort persistiert und überleben damit eine Container-Recreation. Der Inhalt
+von `./data` bleibt bewusst lokal: `.gitignore` schließt `data/*` aus, ausgenommen
+`data/.gitkeep`.
+
 ---
 
 # 6. Lokale Entwicklung
