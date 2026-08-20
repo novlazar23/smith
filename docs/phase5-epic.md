@@ -105,14 +105,32 @@ finanziellen Schaden verursachen. Dieser Epic bleibt standardmäßig deaktiviert
 
 **Dateien**:
 - `src/trading_harness/services/execution_store.py` — new
-- `src/trading_harness/services/db.py` — extend INIT_SQL
+- `src/trading_harness/services/db.py` — extend INIT_SQL (revidiert 2026-08-20: NICHT ausgeführt — JSON-Datei-Entscheidung, siehe unten)
 - `tests/test_execution_store.py` — new
 
 **Akzeptanz**:
-- execution_log Tabelle
+- Persistenz (revidiert 2026-08-20): JSON-Datei `data/execution_log.json` statt `execution_log`-Tabelle — siehe dokumentierte Architektur-Entscheidung
 - In-Memory-Fallback
 - Credentials nie in Logs
 - 10+ Tests, alle grün
+
+**Dokumentierte Architektur-Entscheidung (2026-08-20, Review-ID 13 / B2)**:
+
+Die ursprüngliche Akzeptanzzeile "execution_log Tabelle" (mit `db.py — extend
+INIT_SQL`) wird ausdrücklich revidiert.
+
+**Entscheidung**: JSON-Datei-Persistenz (`data/execution_log.json`, atomar via
+`mkstemp` + `os.replace`) statt `execution_log`-Tabelle in `db.py`.
+
+**Begründung**:
+1. Dieselbe Abweichungsklasse wie WI-P5-1 KillSwitch (Review-ID 8, akzeptiert als nicht blockierend).
+2. Die Zustand-Dateien der Phase-5-Services sind konsistent als atomare JSON-Dateien angelegt (`data/kill_switch.json`, `data/execution_log.json`).
+3. Die Persistenz-Anforderung (Restart-Überleben, In-Memory-Fallback, Credentials-Sanitization) ist voll erfüllt und getestet (`tests/test_api_execution.py`, WI-P5-15, Review-ID 6 approved).
+4. Kein zweiter, redundanter Persistenzmechanismus für dieselben Daten.
+
+Die übrigen Akzeptanzpunkte (In-Memory-Fallback, Credentials nie in Logs,
+10+ Tests) bleiben unverändert; "10+ Tests, alle grün" wird seit der
+Review-13-Nachbesserung (B1) tatsächlich erfüllt.
 
 ### WI-P5-7: API Routes
 

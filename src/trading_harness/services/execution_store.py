@@ -148,18 +148,23 @@ class ExecutionLogStore:
         order_id: str | None = None,
         error: str | None = None,
     ) -> ExecutionLogEntry:
-        """Execution Log hinzufügen."""
-        entry = ExecutionLogEntry(
-            id=f"exec-{int(time.time() * 1000)}-{len(self._logs)}",
-            decision_id=decision_id,
-            run_id=run_id,
-            symbol=symbol,
-            side=side,
-            status=status,
-            order_id=order_id,
-            error=error,
-        )
+        """Execution Log hinzufügen.
+
+        Die ID (Zeitstempel und Counter) wird vollständig innerhalb des
+        Locks generiert, damit parallele Adds keine ID-Kollision erzeugen
+        können (Review-13, N2).
+        """
         with self._lock:
+            entry = ExecutionLogEntry(
+                id=f"exec-{int(time.time() * 1000)}-{len(self._logs)}",
+                decision_id=decision_id,
+                run_id=run_id,
+                symbol=symbol,
+                side=side,
+                status=status,
+                order_id=order_id,
+                error=error,
+            )
             self._logs.append(entry)
             self._save_state()
         return entry
