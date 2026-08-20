@@ -8,6 +8,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from trading_harness.services.kill_switch import KillSwitch
 
 
@@ -539,3 +541,89 @@ class TestKillSwitchMultiWriterIsolation:
         assert state_file.stat().st_mode & 0o777 == 0o644
         ks.deactivate()  # Überschreiben
         assert state_file.stat().st_mode & 0o777 == 0o644
+
+
+class TestIsolationFixtureTeardown:
+    """WI-P5-14: conftest-Teardown räumt den In-Memory-Log-State auf (NIT-A).
+
+    Regressionstest für den Review-NIT aus dem WI-P5-11-Review (Review-ID 3):
+    "marker-Opt-out überspringt auch den Teardown (zukunftssicherungs-relevant)"
+    — der Marker ``real_execution_log_state`` schaltet in der conftest-Fixture
+    die tmp-Umbindung UND (vor WI-P5-14) auch die Teardown-Aufräumung ab.
+    Ein Marker-Opt-out-Test, der direkt hinter einem Test mit
+    Log-Write läuft, erbt daher den In-Memory-Log-State des Vorgängers.
+    Zukunftsrelevant: der heutige einzige Marker-Test ist rein lesend; ein
+    schreibender Marker-Test hätte den Defekt ausgelöst.
+
+    Wichtig: ``test_opt_out_test_sees_clean_log_state`` hängt bewusst von
+    der Datei-Reihenfolge ab (pytest führt Tests in Datei-Reihenfolge aus)
+    und muss direkt nach ``test_writes_log_entry_for_next_test`` laufen.
+
+    Sicherheit: Die autouse-Fixture bindet den Log-Store pro Test auf einen
+    tmp-Pfad um, daher landet der Write von Test 1 nie in der echten
+    ``data/execution_log.json``; das WI-P5-14-Teardown-``clear()`` wirkt
+    vor der Monkeypatch-Rücksetzung und berührt die echte State-Datei
+    ebenfalls nicht.
+    """
+
+    def test_writes_log_entry_for_next_test(self):
+        """Test 1 (ohne Marker): Log-Write landet im tmp-gebundenen Store."""
+        from trading_harness.api import routes
+
+        routes.execution_log_store.add(
+            decision_id="nit-a-1",
+            run_id="nit-a-run",
+            symbol="BTCUSDT",
+            side="buy",
+            status="REJECTED",
+            error="LIVE_EXECUTION_DISABLED",
+        )
+        assert routes.execution_log_store.count == 1
+
+    @pytest.mark.real_execution_log_state
+    def test_opt_out_test_sees_clean_log_state(self):
+        """Test 2 (Marker-Opt-out) direkt nach Test 1 sieht einen leeren Store."""
+        from trading_harness.api import routes
+
+        # Ohne das WI-P5-14-Teardown-``clear()`` erbt dieser Test den
+        # In-Memory-Eintrag von Test 1 (count == 1) → Test rot.
+        assert routes.execution_log_store.count == 0
+
+
+class TestCorruptedStateFileFallback:
+    """WI-P5-14: Pin-Test für den Fail-Open-Fallback bei korrumpiertem State-File.
+
+    Pinnt den bestehenden Fallback (NIT aus dem WI-P5-10-Review, Review-ID 2,
+    NIT 6 "kein Pin-Test für Fail-Open-Fallback bei extern korrumpiertem
+    State-File"): ``KillSwitch._load_state`` fängt
+    ``(OSError, json.JSONDecodeError)`` und verwendet den Startzustand
+    ("Fallback: Startzustand verwenden"). Dieses Fail-Open-Verhalten wird
+    hier nur GEpinnt, nicht geändert — Fail-Closed wäre eine
+    Sicherheitsgrenzen-Änderung und erfordert explizite Freigabe. Der Test
+    muss daher auch vor jeder Quelländerung grün sein.
+    """
+
+    def test_corrupted_state_file_falls_back_to_init_state(self, tmp_path: Path):
+        """Extern korrumpiertes State-File → Fallback auf Startzustand (gepinnt)."""
+        state_file = tmp_path / "kill_switch.json"
+        state_file.write_text("{not valid json!!")
+
+        # (1) Korrumpiertes File + Startzustand enabled=False → keine
+        #     Exception beim Laden, Switch bleibt im Startzustand inaktiv.
+        ks = KillSwitch(enabled=False, db_path=str(state_file))
+        assert ks.is_active() is False
+
+        # (2) Erneut korrumpiertes File + Startzustand enabled=True →
+        #     Startzustand bleibt aktiv (pinnt die Fail-Open-Semantik:
+        #     Fallback auf den Konstruktor-Initialzustand, nicht auf
+        #     einen "sicheren" Wert).
+        state_file.write_text("{not valid json!!")
+        ks_enabled = KillSwitch(enabled=True, db_path=str(state_file))
+        assert ks_enabled.is_active() is True
+
+        # (3) Folge-Write repariert die korrumpierte Datei: nach
+        #     ``deactivate()`` muss das File wieder gültiges, parsebares
+        #     JSON mit ``enabled == False`` enthalten.
+        ks_enabled.deactivate()
+        data = json.loads(state_file.read_text())
+        assert data["enabled"] is False

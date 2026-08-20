@@ -519,19 +519,101 @@ Nächste Schritte (in Reihenfolge):
       - Keine Sicherheitsgrenzen-/Verhaltensänderung: Live-Execution bleibt
         deaktiviert, Kill-Switch-Semantik unverändert, keine
         Risk-Policy-/Whitelist-/Limit-Änderung
-      - Review (2026-08-20, `Sisyphus-Junior (independent review)`, Review-ID 6):
-        **approved** — I1–I6 alle PASS (Kill-Switch-Code/-Semantik unverändert,
-        Live-Execution deaktiviert, Pipeline nur additiv um `log_store=`
-        ergänzt, atomares mkstemp+fsync+`os.replace`-Writing mit
-        Modus-Erhaltung, keine Secrets/State-Dateien committet,
-        Risk-Policy-/Whitelist-/Limit-/Auth unverändert); eigenständiges
-        Gate-Replay (757 passed / ruff / mypy clean), `data/kill_switch.json`
-        byte-identisch vor/nach dem Lauf; NITs (nicht blockierend,
-        Auflösungskandidat für ein späteres Doku-/Hygiene-Workitem): fehlende
-        End-zeilenumbrüche in `execution_store.py`/`test_api_execution.py`
-        (ruff-konform, kosmetisch), Whitespace-Reflow im Item-8-Text
+       - Review (2026-08-20, `Sisyphus-Junior (independent review)`, Review-ID 6):
+         **approved** — I1–I6 alle PASS (Kill-Switch-Code/-Semantik unverändert,
+         Live-Execution deaktiviert, Pipeline nur additiv um `log_store=`
+         ergänzt, atomares mkstemp+fsync+`os.replace`-Writing mit
+         Modus-Erhaltung, keine Secrets/State-Dateien committet,
+         Risk-Policy-/Whitelist-/Limit-/Auth unverändert); eigenständiges
+         Gate-Replay (757 passed / ruff / mypy clean), `data/kill_switch.json`
+         byte-identisch vor/nach dem Lauf; NITs (nicht blockierend,
+         Auflösungskandidat für ein späteres Doku-/Hygiene-Workitem): fehlende
+         End-zeilenumbrüche in `execution_store.py`/`test_api_execution.py`
+         (ruff-konform, kosmetisch), Whitespace-Reflow im Item-8-Text
 
-  See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
+ 10. **NIT-Bundle aus P5-10/P5-11-Reviews: conftest-Teardown bei Marker-Opt-out, finally-Cleanup ohne hartes Assert, Pin-Test korrumpiertes State-File** — ✅ COMPLETE (WI-P5-14)
+     - Problem: drei nicht blockierende NITs aus den Reviews zu WI-P5-10
+       (Review-ID 2) und WI-P5-11 (Review-ID 3) zur Execution-State-
+       Test-Isolation:
+       - NIT A (Review-ID 3): "marker-Opt-out überspringt auch den
+         Teardown (zukunftssicherungs-relevant)" — der
+         `real_execution_log_state`-Marker schaltete die conftest-
+         Aufräumung komplett ab; ein Marker-Opt-out-Test direkt hinter
+         einem Log-schreibenden Test würde den In-Memory-Log-State des
+         Vorgängers erben (heute unkritisch — einziger Marker-Test rein
+         lesend; jeder schreibende Marker-Test hätte den Defekt
+         ausgelöst)
+       - NIT B (Review-ID 2, NIT 4 "Cleanup-Deaktivierung im API-Test
+         nicht failure-gesichert (try/finally)" — verbleibender Teil;
+         in Review-ID 3 identisch als NIT): das harte
+         `assert response.status_code == 200` im `finally`-Cleanup-
+         Block von `test_kill_switch_toggle_via_api_leaves_real_state_
+         file_untouched` (`test_api_security.py`, einziger
+         finally-Assert der Suite — AST-Scan über `tests/`) kann die
+         Original-Exception des Tests maskieren
+       - NIT C (Review-ID 2, NIT 6): "kein Pin-Test für
+         Fail-Open-Fallback bei extern korrumpiertem State-File" —
+         `KillSwitch._load_state` fängt `(OSError, json.JSONDecodeError)`
+         und fällt auf den Startzustand zurück ("Fallback:
+         Startzustand verwenden"); das Verhalten war nicht gepinnt
+     - Fix:
+       - A: `tests/conftest.py` — Teardown der Autouse-Fixture räumt
+         zusätzlich `routes.execution_log_store.clear()` auf, guarded
+         durch `request.node.get_closest_marker(
+         "real_execution_log_state") is None` (Guard zwingend: nur
+         ohne Marker ist der Store auf den tmp-Pfad gebunden; ein
+         ungeguardetes Clear würde in die echte State-Datei
+         `data/execution_log.json` persistieren und die Isolation
+         brechen; wirkt vor der Monkeypatch-Rücksetzung, also auf dem
+         tmp-Pfad); Setup-Clear und Kill-Switch-Teardown unverändert
+       - B: `tests/test_api_security.py` — hartes Assert aus dem
+         `finally`-Block entfernt (Cleanup-POST
+         `client.post("/execution/kill-switch/False")` bleibt);
+         best-effort-Cleanup ohne hartes Assert, damit ein
+         Cleanup-Fehler die Original-Exception nicht maskiert
+       - C: `tests/test_kill_switch.py` — neue Klasse
+         `TestCorruptedStateFileFallback` (1 Test, 3 nummerierte
+         Assertion-Blöcke): korrumpiertes State-File
+         (`{not valid json!!`) → Konstruktor ohne Exception,
+         Fail-Open-Fallback auf Startzustand in beiden Richtungen
+         (`enabled=False` → inaktiv, `enabled=True` → aktiv), Folge-
+         `deactivate()` repariert das File zu gültigem JSON mit
+         `enabled == False`; dazu neue Klasse
+         `TestIsolationFixtureTeardown` (2 Tests, bewusst
+         Datei-Reihenfolge-abhängig): Regressionstest für NIT A —
+         Test 1 (ohne Marker) schreibt einen Log-Eintrag in den
+         tmp-gebundenen Store, Test 2 (Marker-Opt-out) direkt danach
+         sieht einen leeren Store (TDD-Red ohne Fix: `assert 1 == 0`)
+     - Verifikation (2026-08-20): TDD-Red vor dem conftest-Fix
+       (`test_opt_out_test_sees_clean_log_state` rot mit
+       `assert 1 == 0` — In-Memory-Rest von Test 1; Pin-Test C
+       bereits grün, da er bestehendes Verhalten pinnt und auch vor
+       jeder Quelländerung bestehen muss); danach 3/3 grün;
+       `make check` clean (760 passed, 1 warning in 56.31s; ruff
+       `All checks passed!`; mypy `Success: no issues found in 50
+       source files`, exit 0); finally-Assert-AST-Scan über den
+       ganzen `tests/`-Baum: pre-fix genau 1 Treffer
+       (`tests/test_api_security.py:354`), post-fix 0; `data/` vor
+       und nach dem Gate byte-identisch (`.gitkeep` +
+       `kill_switch.json`, 208 Bytes, sha256
+       `1389df52f9a2e125a05a2ee96b13263870a234236506d2487c12cbc06d2383a9`,
+       `enabled: false`, `toggle_count: 2`), keine
+       `data/execution_log.json` (vollständige verbatim-Ausgaben in
+       `evidence/wi-p5-14-nit-bundle-test-evidence.md`)
+     - Abweichungen (im Workitem-Scope deklariert, Details in der
+       Evidence-Datei): (1) `tests/test_api_security.py` liegt
+       außerhalb der Workitem-Dateiliste, trägt aber den NIT B
+       (einziger finally-Assert der Suite); (2) `README.md`
+       Test-Zähler 757 → 760 (gleiche Deklarationsabweichung wie
+       WI-P5-15)
+     - Keine Sicherheitsgrenzen-/Verhaltensänderung: der
+       Fail-Open-Fallback wird GEpinnt, nicht geändert (eine
+       Fail-Closed-Semantik wäre eine Sicherheitsgrenzen-Änderung
+       und erfordert explizite Freigabe); Live-Execution bleibt
+       deaktiviert; Kill-Switch-Semantik unverändert
+     - Review steht aus
+
+   See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
 Live-Execution bleibt standardmäßig deaktiviert — keine Änderungen an Sicherheitsgrenzen ohne explizite Freigabe.
 

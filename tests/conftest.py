@@ -47,5 +47,15 @@ def isolated_kill_switch_state(tmp_path, monkeypatch, request):
         # (symmetrisch zum Kill-Switch-Teardown): frischer, leerer Start.
         routes.execution_log_store.clear()
     yield
+    if request.node.get_closest_marker("real_execution_log_state") is None:
+        # Review-NIT (WI-P5-14): Der Marker-Opt-out überspringt den
+        # Setup-Clear — der In-Memory-Log-State muss auch im Teardown
+        # aufgeräumt werden, damit ein direkt folgender
+        # Marker-Opt-out-Test nichts erbt (zukunftssicherungs-relevant).
+        # Guard ist zwingend: nur ohne Marker ist der Store auf den
+        # tmp-Pfad gebunden; ein Clear im Opt-out-Fall würde in die
+        # echte State-Datei persistieren und die Isolation brechen.
+        # (Wirkt vor der Monkeypatch-Rücksetzung, also auf dem tmp-Pfad.)
+        routes.execution_log_store.clear()
     if routes.execution_kill_switch.is_active():
         routes.execution_kill_switch.deactivate()

@@ -349,9 +349,12 @@ class TestKillSwitchStateIsolation:
                 response = client.post("/execution/kill-switch/True")
                 assert response.status_code == 200
             finally:
-                # Singleton nicht im aktiven Zustand für Folgetests hinterlassen
+                # Best-effort-Cleanup ohne hartes Assert — ein
+                # Cleanup-Fehler darf die Original-Exception des Tests
+                # nicht maskieren (NIT aus den WI-P5-10-/WI-P5-11-Reviews).
+                # Singleton nicht im aktiven Zustand für Folgetests
+                # hinterlassen.
                 response = client.post("/execution/kill-switch/False")
-                assert response.status_code == 200
         after = real_path.read_bytes() if real_path.exists() else None
         assert after == before, (
             f"API-Test hat den echten Kill-Switch-State-Pfad verändert: {real_path}"
