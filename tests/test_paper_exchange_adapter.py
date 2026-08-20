@@ -26,6 +26,10 @@ class TestPaperExchangeAdapterInit:
         assert adapter._paper_exchange is not None
         assert isinstance(adapter._paper_exchange, PaperExchange)
 
+    def test_default_init_has_safe_trade_store(self) -> None:
+        adapter = PaperExchangeAdapter()
+        assert adapter._paper_exchange.stores is not None
+
     def test_custom_paper_exchange(self) -> None:
         pe = PaperExchange(fill_rate=1.0, fee_rate=0.002, stores=_make_store())
         adapter = PaperExchangeAdapter(paper_exchange=pe)
@@ -302,11 +306,11 @@ class TestPaperExchangeAdapterGetOrderStatus:
 class TestPaperExchangeAdapterCancelOrder:
     """Prüft die reale Order-Stornierung über PaperExchangeAdapter."""
 
-    def test_cancel_order_stores_not_configured(self) -> None:
+    def test_cancel_order_unknown_trade(self) -> None:
         adapter = PaperExchangeAdapter()
         result = adapter.cancel_order("any-order")
         assert result["success"] is False
-        assert result["error"] == "STORES_NOT_CONFIGURED"
+        assert result["error"] == "TRADE_NOT_FOUND"
 
     def test_cancel_order_on_filled_trade_fails(self) -> None:
         pe = PaperExchange(fill_rate=1.0, fee_rate=0.0, stores=_make_store())

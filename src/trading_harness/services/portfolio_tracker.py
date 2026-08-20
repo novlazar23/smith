@@ -2,21 +2,21 @@ from __future__ import annotations
 
 import threading
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from trading_harness.models import PaperPosition, PortfolioState
 
 
-class PortfolioStore:
+class PortfolioStore(Protocol):
     """Protocol for portfolio state persistence stores."""
 
-    def add(self, state: PortfolioState) -> PortfolioState: ...  # type: ignore[empty-body]
+    def add(self, state: PortfolioState) -> PortfolioState: ...
 
-    def get(self, state_id: str) -> PortfolioState | None: ...  # type: ignore[empty-body]
+    def get(self, state_id: str) -> PortfolioState | None: ...
 
-    def by_run(self, run_id: str) -> list[PortfolioState]: ...  # type: ignore[empty-body]
+    def by_run(self, run_id: str) -> list[PortfolioState]: ...
 
-    def all(self) -> list[PortfolioState]: ...  # type: ignore[empty-body]
+    def all(self) -> list[PortfolioState]: ...
 
 
 def _record_to_row(state: PortfolioState) -> dict[str, Any]:

@@ -14,11 +14,13 @@ Dient als erste echte Exchange-Integration in die LiveExecutionService-Pipeline.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from trading_harness.models import TradeProposal
+from trading_harness.models import PaperTradeStatus, TradeProposal
 from trading_harness.services.exchange_adapter import ExchangeAdapter
 from trading_harness.services.paper_exchange import PaperExchange
+from trading_harness.services.paper_trade_store import InMemoryPaperTradeStore
 
 if TYPE_CHECKING:
     from trading_harness.models import PaperTrade
@@ -37,9 +39,13 @@ class PaperExchangeAdapter(ExchangeAdapter):
         self,
         paper_exchange: PaperExchange | None = None,
         run_id: str = "run-1",
+        on_fill: Callable[[PaperTrade], None] | None = None,
     ) -> None:
-        self._paper_exchange = paper_exchange or PaperExchange()
+        self._paper_exchange = paper_exchange or PaperExchange(
+            stores=InMemoryPaperTradeStore()
+        )
         self._run_id = run_id
+        self._on_fill = on_fill
 
     @property
     def name(self) -> str:
@@ -103,6 +109,9 @@ class PaperExchangeAdapter(ExchangeAdapter):
             proposal=proposal,
             current_price=price,
         )
+
+        if paper_trade.status is PaperTradeStatus.FILLED and self._on_fill is not None:
+            self._on_fill(paper_trade)
 
         return {
             "order_id": paper_trade.id,

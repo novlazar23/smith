@@ -740,7 +740,8 @@ Evolution Policy: vorhanden
 Agent Registry: In-Memory MVP (+ PostgreSQL-Store mit Fallback)
 Database: PostgreSQL-Infrastruktur mit In-Memory-Fallback
 Redis: Infrastruktur vorbereitet
-Exchange Adapter: 4 Crypto-Adapter + PaperExchangeAdapter + ShadowModeAdapter
+Exchange Adapter: 4 Crypto-Adapter + PaperExchangeAdapter (PaperExecutionStack: Persisted
+                 Stores + PositionManager + PortfolioTracker/PnL, WI-P4-4) + ShadowModeAdapter
                  + StubExchangeAdapter (NOT_IMPLEMENTED-Fallback, nur ohne Adapter-Injection)
 ```
 
@@ -769,7 +770,7 @@ Phase 5 Core Services implementiert:
   (Read-Key), `/kill-switch/{enabled}`, `/execution/shadow/{submit,summary,records}`,
   `/execution/crypto/{submit,status,cancel,price}`
 
-772 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
+784 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
 laufen standardmäßig simuliert.
 
 Das ist beabsichtigt.

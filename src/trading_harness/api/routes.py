@@ -590,8 +590,7 @@ from trading_harness.services.live_execution_service import (
     LiveExecutionService,
 )
 from trading_harness.services.network_policy import NetworkPolicy
-from trading_harness.services.paper_exchange import PaperExchange
-from trading_harness.services.paper_exchange_adapter import PaperExchangeAdapter
+from trading_harness.services.paper_execution_stack import build_paper_execution_stack
 from trading_harness.services.policy_loader import load_yaml
 from trading_harness.services.risk_engine import RiskEngine
 from trading_harness.services.shadow_mode_logger import (
@@ -615,10 +614,12 @@ network_policy = NetworkPolicy(allowed_patterns=settings.network_allowed_pattern
 # Credential-Manager für API-Schlüssel
 credential_manager = CredentialManager()
 
-# PaperExchange-Adapter als erste echte Exchange-Integration.
+# Paper-Execution-Stack als erste echte Exchange-Integration:
+# PaperExchange mit persistenten Stores, PositionManager und PortfolioTracker.
 # Live Execution bleibt standardmäßig deaktiviert — muss explizit aktiviert werden.
-_paper_exchange = PaperExchange()
-_paper_adapter = PaperExchangeAdapter(paper_exchange=_paper_exchange)
+paper_execution_stack = build_paper_execution_stack(db=_db)
+_paper_exchange = paper_execution_stack.paper_exchange
+_paper_adapter = paper_execution_stack.paper_adapter
 
 live_execution_service = LiveExecutionService(
     kill_switch=execution_kill_switch,
