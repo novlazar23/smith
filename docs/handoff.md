@@ -7,25 +7,40 @@ environment, a frozen dependency lock, matching local/CI checks, and versioned O
 commands. The complete German OpenCode usage and cross-device workflow is documented in
 `docs/opencode-nutzung.md`.
 
-**Phase-5-Status (2026-08-20):** Alle 15 Arbeitspakete des Phase-5-Epics (WI-P5-1…WI-P5-15)
-sind `completed`. Unabhängige Reviews liegen für alle 15 Pakete vor (Review-IDs 1–13):
-WI-P5-9…WI-P5-15 `approved`; WI-P5-1, WI-P5-3, WI-P5-4, WI-P5-5 `approved`
-(Retro-Reviews „Wave 1", 2026-08-20); WI-P5-2 und WI-P5-6 waren zunächst
-`changes-requested` (Review 9: RateLimiter erzwingt die dokumentierte N/min-Sustained-Rate
-nicht; Review 13: ExecutionLogStore — Testabdeckung, dokumentierte Persistenz-Entscheidung,
-Lock-Race bei der ID-Erzeugung). Beide Findings sind behoben (Commits `e109400`,
-`4e4cd38`); die Re-Reviews laufen in „Wave 2".
+**Harness-Run CLOSEOUT (2026-08-20):** Der Harness-Run `RUN-20260818-115553` ist
+`completed`. Alle 22 Arbeitspakete (WI-P4-1…WI-P4-7, WI-P5-1…WI-P5-15) sind `completed`
+und unabhängig reviewed — Gate-Check: 22/22 latest Reviews `approved` (26 Reviews gesamt,
+Review-IDs 1–26). „Wave 2" (2026-08-20, 4 unabhängige Reviewer) plus Re-Reviews haben die
+letzten offenen Pakete geschlossen:
 
-**Harness-Buchhaltung (Bestandschuld, 2026-08-20 in Bearbeitung):** Die 7 Phase-4-Pakete
+- WI-P5-8 (Review 18, changes-requested): fehlende `docs/security-review-phase5.md` —
+  erstellt (Commit `64159df`, 14 Kontrolle-Sektionen + nicht blockierende Befunde:
+  `max_leverage 2.0` in `config/risk-policy.yaml:12` vs. README „1.0x", fail-open API-Auth
+  ohne konfigurierte Keys, unauthentizierte Legacy-Endpunkte); Re-Review 25 (unabhängig):
+  **approved**.
+- WI-P4-4 (Review 21, changes-requested): ausgelieferte Paper-Wiring in `routes.py` baute
+  `PaperExchange()` ohne Stores — jede Paper-Order → `RuntimeError('PaperExchange stores
+  not configured')` (3x in Folge → Kill-Switch-Auto-Trigger); PositionManager/PortfolioTracker
+  nirgends in src/ verdrahtet. TDD-Fix (Commit `f89a742`): neue Factory
+  `src/trading_harness/services/paper_execution_stack.py` — PaperExchange mit
+  Persisted*Stores, PositionManager, PortfolioTracker; Fill-Flow TradeProposal → PaperTrade →
+  PaperPosition → PortfolioState/PnL; `routes.py` baut den Stack via
+  `build_paper_execution_stack(db=_db)`; `PaperExchangeAdapter`-Default jetzt sicher
+  (In-Memory-Store) + `on_fill`-Callback; 11 neue Wiring-Tests (vor dem Fix rot, nach dem
+  Fix grün — Stash-Experiment belegt beide Zustände). Re-Review 26 (R8, unabhängig):
+  **approved** — alle 3 Befunde mit Zitation verifiziert, Sicherheitsinvarianten intakt.
+- Verifikation (2026-08-20, Orchestrator, HEAD `f89a742`): `make check` — 784 Tests grün,
+  ruff clean, mypy clean (51 source files); `data/kill_switch.json` byte-identisch
+  (sha256 `1389df52f9a2e125a05a2ee96b13263870a234236506d2487c12cbc06d2383a9`).
+  Live Execution bleibt standardmäßig deaktiviert; keine Sicherheitsgrenze wurde geändert.
+
+**Harness-Buchhaltung (abgeschlossen 2026-08-20):** Die 7 Phase-4-Pakete
 (WI-P4-1…WI-P4-7) wurden rückwirkend `completed` geschlossen, mit strukturierten,
 evidenzbasierten Results (Arbeit in der damaligen Session umgesetzt und verifiziert;
 Commits 77f0d37, 93ca0b4, 65e4d17, 6a1f202; dokumentierte Abweichungen: Pipeline-Wiring
 statt `paper_execution_service.py`, SQLite statt PostgreSQL, keine 12 dedizierten
-Endpoints; 201 Tests grün). Der Übergang `execution-running → completed` ist erst möglich,
-wenn alle 22 Arbeitspakete abgeschlossen UND unabhängig reviewed sind — „Wave 2"
-(2026-08-20, 4 unabhängige Reviewer) läuft: R3: WI-P5-7, WI-P5-8, WI-P4-1; R4:
-WI-P4-2, WI-P4-3, WI-P4-4; R5: WI-P4-5, WI-P4-6, WI-P4-7; R6: Re-Reviews WI-P5-2
-(Fix `e109400`) und WI-P5-6 (Fix `4e4cd38`).
+Endpoints). Der Übergang `execution-running → completed` wurde am 2026-08-20 nach dem
+22/22-`approved`-Gate ausgeführt (siehe Closeout oben).
 
 **Review-9-Fix (WI-P5-2 RateLimiter, Commit `e109400`):** Die Refill-Rate skaliert jetzt
 mit dem Limit (`limit/60` Tokens/s pro Bucket) — Sustained-Rate = konfiguriertes Limit
@@ -54,13 +69,15 @@ ohne End-zeilenumbruch (ruff-konform, W292 inaktiv, kein funktionaler Effekt). E
 partielle "Reparatur" würde Inkonsistenz erzeugen; ein repository-weiter 1-Byte-Diff
 wäre reiner Lärm ohne Mehrwert.
 
-**Offene Punkte (Entscheidung ausstehend):**
-1. Harness-Buchhaltung abschließen: 10 Reviews in „Wave 2" laufen (9 neue für
-   WI-P4-1…WI-P4-7 + WI-P5-7/8, 2 Re-Reviews für WI-P5-2/WI-P5-6); danach
-   `execution-running → completed` + finale Closeout-Notiz
-2. Nächstes Meilenstein-Epic — Kandidat laut README Abschnitt 8: „Die erste
-   produktive Ausbaustufe soll ausschließlich Shadow Trading durchführen"
-3. Push: `main` steht 59 Commits vor `origin/main` (nur mit expliziter Freigabe)
+**Nächste Schritte (2026-08-20, mit User freigegeben):**
+1. Nächstes Meilenstein-Epic laut README Abschnitt 8: „Die erste produktive
+   Ausbaustufe soll ausschließlich Shadow Trading durchführen" — Shadow-Trading-Epic
+   wird als nächster Harness-Run angestoßen (problem → spec → epic).
+2. Nicht blockierende Befunde aus `docs/security-review-phase5.md` (max_leverage-Drift
+   2.0 vs. 1.0x, fail-open API-Auth, unauthentizierte Legacy-Endpunkte) — Kandidaten
+   für das Shadow-Trading-Epic bzw. ein separates Security-Workitem.
+3. Push von `main` auf `origin/main` mit expliziter User-Freigabe beauftragt; erfolgt
+   direkt nach diesem Closeout-Commit.
 
 Phase 1 (Research Runtime) additions committed:
 - `TradingRun` model with full lifecycle state machine (`RunState`)
@@ -759,6 +776,7 @@ Inside OpenCode, run `/resume` to reconstruct context from Git and continue the 
 
 ## Last verification
 
+- `make check` (2026-08-20, WI-P4-4-Fix `f89a742`): 784 Tests grün, ruff clean, mypy clean (51 source files); `data/kill_switch.json` byte-identisch (sha256 `1389df52f9a2e125a05a2ee96b13263870a234236506d2487c12cbc06d2383a9`)
 - `make check` (2026-08-20, Review-9/13-Fixes `e109400`/`4e4cd38`): 772 Tests grün, ruff clean, mypy clean (50 source files); `data/kill_switch.json` byte-identisch (sha256 `1389df52f9a2e125a05a2ee96b13263870a234236506d2487c12cbc06d2383a9`)
 - `make check` (2026-08-20, WI-P5-12 Multi-Writer-Isolation): 754 Tests grün, ruff clean, mypy clean (50 source files)
 - `make check` (2026-08-20, WI-P5-11 Test-Isolation): 751 Tests grün, ruff clean, mypy clean (50 source files); `data/kill_switch.json` wird von der Suite nicht mehr erzeugt
