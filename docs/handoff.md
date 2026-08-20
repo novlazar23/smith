@@ -459,12 +459,69 @@ Nächste Schritte (in Reihenfolge):
       Volumes, Compose-Diff exakt die eine schreibbare Mount-Zeile); NITs
       (nicht blockierend): `kill_switch:true` beim ersten Health-Poll ist die
       korrekte Folge von `kill_switch_default=True` ohne State-Datei
-      (fail-safe); bestehende README-Doku-Drift beim Kill-Switch-Endpunkt
-      (11.2: `POST /execution/kill-switch` vs. Architektur-Sektion
-      `POST /kill-switch`) hier nicht verursacht — Auflösungskandidat für
-      ein späteres Doku-/Compose-Workitem
- 
- See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
+       (fail-safe); bestehende README-Doku-Drift beim Kill-Switch-Endpunkt
+       (11.2: `POST /execution/kill-switch` vs. Architektur-Sektion
+       `POST /kill-switch`) hier nicht verursacht — Auflösungskandidat für
+       ein späteres Doku-/Compose-Workitem
+
+ 9. **ExecutionLogStore db_path-Wiring (Audit-Log-Persistenz in `data/execution_log.json`) + conftest-Isolation-Erweiterung** — ✅ COMPLETE (WI-P5-15)
+     - Problem: `routes.py` erzeugte `ExecutionLogStore()` ohne `db_path`,
+       und beide `LiveExecutionService`-Instanzen (Paper + Crypto) wurden
+       ohne `log_store` verdrahtet — Audit-Log-Einträge (R5.3) wurden nie
+       in eine JSON-State-Datei geschrieben und gingen bei jedem
+       Prozess-Neustart verloren (offener Punkt aus WI-P5-10);
+       `_save_state` schrieb nicht-atomar via `open(..., "w")` (Crash
+       mid-write konnte die JSON korruptieren); die Test-Isolation
+       (WI-P5-11) deckte nur den Kill-Switch-Pfad ab
+     - Fix: `execution_log_store = ExecutionLogStore(
+       db_path=settings.execution_log_state_path)` (neue `Settings`-Option,
+       Default `data/execution_log.json`, via `.env` überschreibbar),
+       beide `LiveExecutionService`-Instanzen erhalten
+       `log_store=execution_log_store` (Pipeline-Reihenfolge und
+       Semantik unverändert, in-memory `get_logs()`-Semantik und die
+       `/execution/*`-Endpunkte unverändert); `_save_state` schreibt jetzt
+       `tempfile.mkstemp` + `os.fsync` + atomares `os.replace` (spiegelt
+       `KillSwitch._save_state`, WI-P5-12: eindeutige Tmp-Datei pro
+       Writer, Modus-Erhaltung, best-effort Tmp-Cleanup, kein FD-Leak);
+       neue öffentliche `db_path`-Property (spiegelt
+       `KillSwitch.db_path`); `_save_state` wird in `add()` unter dem
+       Lock aufgerufen (Snapshot-Konsistenz); neue `clear()`-Methode
+       (thread-safe, persistiert) für die Test-Isolation; conftest-Autouse-
+       Fixture umbindet zusätzlich pro Test
+       `routes.execution_log_store._db_path` auf einen tmp-Pfad und ruft
+       `clear()` auf (kein In-Memory-Log-State an Folgetests, symmetrisch
+       zum Kill-Switch-Teardown); Opt-out-Marker `real_execution_log_state`
+       (in `pyproject.toml` registriert)
+     - 3 neue Regressionstests (`TestExecutionLogStoreWiring`):
+       API-Wiring-Test (`db_path == execution_log_state_path`, mit Marker),
+       simulierter Prozess-Neustart (API-Order → neue
+       `ExecutionLogStore`-Instanz auf demselben tmp-Pfad lädt den Eintrag
+       zurück; TDD-Red: `assert 0 == 1`, die API schrieb ohne `log_store`-
+       Wiring nichts in den Store), Test-Isolation (API-Write erzeugt
+       kein `data/execution_log.json` im Repo-CWD — Guard-Test, der mit
+       dem neuen Write-Pfad relevant wird)
+     - Verifikation (2026-08-20): TDD-Red (2 failed:
+       `AttributeError: 'ExecutionLogStore' object has no attribute
+       'db_path'`; `assert 0 == 1`); danach grün; `make check` clean
+       (757 passed, 1 warning in 53.95s; ruff `All checks passed!`; mypy
+       `Success: no issues found in 50 source files`); Persistenz-Beweis:
+       tmp-Pfad-State geschrieben (exakte JSON in der Evidence-Datei), von
+       frischer Instanz geladen (count 1, gleicher Eintrag), keine
+       `*.tmp*`-Rückstände; `ls -la data/` vor und nach dem Testlauf:
+       keine `execution_log.json`, `kill_switch.json` byte-identisch
+       (sha256 `1389df52…`, `enabled: false`, `toggle_count: 2`)
+     - Abweichungen: (1) 1 Zeile in `pyproject.toml` (Marker-Registrierung
+       `real_execution_log_state`) — liegt außerhalb der Datei-Liste des
+       Workitems, ist aber für das symmetrische Pattern nötig (WI-P5-11
+       registriert `real_kill_switch_state` dort; ohne Registrierung würde
+       pytest `PytestUnknownMarkWarning` melden); (2) README Abschnitt 8:
+       Test-Zähler 754 → 757 (Doku-Aktualität desselben Abschnitts)
+     - Keine Sicherheitsgrenzen-/Verhaltensänderung: Live-Execution bleibt
+       deaktiviert, Kill-Switch-Semantik unverändert, keine
+       Risk-Policy-/Whitelist-/Limit-Änderung
+     - Review steht aus
+
+  See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
 Live-Execution bleibt standardmäßig deaktiviert — keine Änderungen an Sicherheitsgrenzen ohne explizite Freigabe.
 

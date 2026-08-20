@@ -758,14 +758,17 @@ Phase 5 Core Services implementiert:
   `ExecutionLogStore` persistiert jeden Trade-Versuch (R5.3); `verify_safety_gate()` +
   fail-closed `activate_live()` (Safety Gate); optionaler `ShadowModeLogger` protokolliert
   REJECTED/ERROR-Orders mit vollständigen Request-Parametern
-- `ExecutionLogStore` — JSON-Persistenz, in-memory Fallback
+- `ExecutionLogStore` — JSON-Persistenz (atomares mkstemp-Tmp + `os.replace`), in-memory
+  Fallback; die API-Instanz persistiert in `data/execution_log.json`
+  (`execution_log_state_path`), Audit-Log-Einträge (R5.3) überleben damit
+  Prozess-Neustarts (WI-P5-15)
 - `ShadowModeLogger` / `ShadowModeAdapter` — loggen Execution-Entscheidungen ohne Ausführen;
   REJECTED-Records über `log_rejection()` (kein Fill, 0 PnL)
 - API Routes: `/execution/orders` (Trade-Key), `/execution/status` + `/execution/logs`
   (Read-Key), `/kill-switch/{enabled}`, `/execution/shadow/{submit,summary,records}`,
   `/execution/crypto/{submit,status,cancel,price}`
 
-754 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
+757 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
 laufen standardmäßig simuliert.
 
 Das ist beabsichtigt.

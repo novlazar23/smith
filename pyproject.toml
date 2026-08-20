@@ -35,6 +35,7 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 markers = [
     "real_kill_switch_state: Test verifiziert das echte Kill-Switch-Wiring (keine tmp-Umbindung durch conftest-Fixture)",
+    "real_execution_log_state: Test verifiziert das echte ExecutionLogStore-Wiring (keine tmp-Umbindung durch conftest-Fixture)",
 ]
 
 [tool.ruff]

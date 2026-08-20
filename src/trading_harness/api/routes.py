@@ -599,7 +599,8 @@ from trading_harness.services.shadow_mode_logger import (
     ShadowModeLogger,
 )
 
-execution_log_store = ExecutionLogStore()
+# Persistenter Execution-Audit-Log: State überlebt Prozess-Neustarts (WI-P5-15)
+execution_log_store = ExecutionLogStore(db_path=settings.execution_log_state_path)
 # Persistenter Kill Switch: State (inkl. Auto-Trigger) überlebt Prozess-Neustarts
 execution_kill_switch = KillSwitch(db_path=settings.kill_switch_state_path)
 execution_config = ExecutionConfig(
@@ -628,6 +629,7 @@ live_execution_service = LiveExecutionService(
     network_policy=network_policy,
     credential_manager=credential_manager,
     config=execution_config,
+    log_store=execution_log_store,
 )
 
 # Shadow-Mode-Logger für Backtesting ohne echte Order-Ausführung.
@@ -648,6 +650,7 @@ crypto_execution_service = LiveExecutionService(
     network_policy=network_policy,
     credential_manager=credential_manager,
     config=execution_config,
+    log_store=execution_log_store,
 )
 
 

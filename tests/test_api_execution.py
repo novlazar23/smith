@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from trading_harness.main import app
+from trading_harness.services.execution_store import ExecutionLogStore
 from trading_harness.services.kill_switch import KillSwitch
 from trading_harness.services.live_execution_service import (
     ExecutionConfig,
@@ -436,3 +438,72 @@ class TestExecutionKillSwitchWiring:
         # Singleton wieder deaktivieren, damit andere Tests nicht betroffen sind
         response = client.post("/execution/kill-switch/False")
         assert response.status_code == 200
+
+
+class TestExecutionLogStoreWiring:
+    """ExecutionLogStore-Persistenz-Wiring im API-Modul (WI-P5-15).
+
+    Symmetrisch zu WI-P5-10 (KillSwitch): das API-Singleton
+    ``execution_log_store`` wurde ohne ``db_path`` erzeugt und beide
+    ``LiveExecutionService``-Instanzen ohne ``log_store`` verdrahtet —
+    Audit-Log-Einträge (R5.3) wurden nie in die JSON-State-Datei
+    geschrieben und gingen bei jedem Prozess-Neustart verloren.
+    """
+
+    @pytest.mark.real_execution_log_state
+    def test_execution_log_store_wired_with_state_path(self):
+        """Das API-Singleton persistiert in den konfigurierten State-Pfad."""
+        from trading_harness.api import routes
+
+        assert routes.execution_log_store.db_path == (
+            routes.settings.execution_log_state_path
+        )
+
+    def test_execution_log_state_survives_process_restart(self, tmp_path, monkeypatch):
+        """Persistierte Execution-Logs überleben einen (simulierten) Prozess-Neustart."""
+        from trading_harness.api import routes
+
+        state_file = tmp_path / "execution_log.json"
+        monkeypatch.setattr(routes.execution_log_store, "_db_path", str(state_file))
+
+        dec_id = f"dec-{uuid.uuid4().hex[:8]}"
+        response = client.post(
+            "/execution/orders",
+            json={
+                "decision_id": dec_id,
+                "run_id": "run-1",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 1.0,
+                "price": 50000.0,
+            },
+        )
+        assert response.status_code == 200
+
+        # Simulierter Neustart: neue Instanz lädt denselben State-File
+        reloaded = ExecutionLogStore(db_path=str(state_file))
+        assert reloaded.count == 1
+        entry = reloaded.get_all()[0]
+        assert entry["decision_id"] == dec_id
+        assert entry["status"] == "REJECTED"
+        assert entry["error"] == "LIVE_EXECUTION_DISABLED"
+
+    def test_api_writes_do_not_touch_real_execution_log_path(self):
+        """Test-Isolation: API-Log-Writes berühren das echte data/execution_log.json nicht."""
+        real_path = Path(__file__).resolve().parents[1] / "data" / "execution_log.json"
+        existed_before = real_path.exists()
+
+        response = client.post(
+            "/execution/orders",
+            json={
+                "decision_id": f"dec-{uuid.uuid4().hex[:8]}",
+                "run_id": "run-1",
+                "symbol": "BTCUSDT",
+                "side": "LONG",
+                "quantity": 1.0,
+                "price": 50000.0,
+            },
+        )
+        assert response.status_code == 200
+
+        assert real_path.exists() is existed_before
