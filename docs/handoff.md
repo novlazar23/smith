@@ -340,11 +340,28 @@ Nächste Schritte (in Reihenfolge):
        (latent, Single-Writer-Deployments sicher; Fix: `tempfile.mkstemp` +
        `os.unlink` im except), (c) Docker mountet `./data` nicht → Persistenz
        überlebt keine Container-Recreation (Fix: Bind-Mount/Volume + Vermerk)
+       — (a) wurde durch WI-P5-11 umgesetzt
      - Gebliebene offene Punkte (bewusst nicht ohne Freigabe geändert):
-      `kill_switch_default` (Settings) bleibt unverdrahtet — ein fail-closed First-Start-Default
-      wäre eine Verhaltensänderung der Sicherheitsgrenze; `ExecutionLogStore()` in
-      `routes.py` hat ebenfalls kein `db_path` (Audit-Log-Persistenz-Wiring, eigenes
-      Workitem)
+       `kill_switch_default` (Settings) bleibt unverdrahtet — ein fail-closed First-Start-Default
+       wäre eine Verhaltensänderung der Sicherheitsgrenze; `ExecutionLogStore()` in
+       `routes.py` hat ebenfalls kein `db_path` (Audit-Log-Persistenz-Wiring, eigenes
+       Workitem)
+
+6. **Test-Isolation: API-Tests schreiben nicht in den echten Kill-Switch-State (Review-MINOR-1 von WI-P5-10)** — ✅ COMPLETE (WI-P5-11)
+   - Defekt: Der keyless Backward-Compat-Toggle-Test (`test_api_security.py`)
+     aktivierte das echte API-Singleton → jeder `make check`-Lauf hinterließ
+     `enabled: true` in `data/kill_switch.json` → `make run` danach startete mit
+     aktivem Kill Switch (fail-closed-Richtung; Reproduzierbarkeits-Defekt)
+   - Fix: neue `tests/conftest.py` mit autouse-Fixture —
+     `routes.execution_kill_switch._db_path` wird pro Test auf einen tmp-Pfad
+     umgebunden, ein nach dem Test noch aktives Singleton wird deaktiviert;
+     Opt-out-Marker `real_kill_switch_state` (in `pyproject.toml` registriert)
+     für den Wiring-Test, der den echten konfigurierten Pfad verifiziert
+   - 1 neuer Regressionstest (`TestKillSwitchStateIsolation`): ein API-Toggle
+     lässt den konfigurierten echten State-Pfad byte-identisch unverändert
+     (TDD-Red: vor dem Fix wurde das File bei jedem Lauf umgeschrieben)
+   - Empirisch verifiziert: Rest-State-File gelöscht → `make check` (751 Tests)
+     erzeugt es NICHT neu — `data/` enthält danach nur `.gitkeep`
 
 See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
@@ -428,6 +445,7 @@ Inside OpenCode, run `/resume` to reconstruct context from Git and continue the 
 
 ## Last verification
 
+- `make check` (2026-08-20, WI-P5-11 Test-Isolation): 751 Tests grün, ruff clean, mypy clean (50 source files); `data/kill_switch.json` wird von der Suite nicht mehr erzeugt
 - `make check` (2026-08-19, WI-P5-10 Kill-Switch Persistenz-Wiring): 750 Tests grün, ruff clean, mypy clean (50 source files)
 - `make check` (2026-08-19, R5.6 Kill-Switch Auto-Trigger): 742 Tests grün, ruff clean, mypy clean (50 source files)
 - `make check` (2026-08-19, Safety Gate): 726 Tests grün, ruff clean, mypy clean (50 source files)

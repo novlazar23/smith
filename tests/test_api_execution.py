@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from trading_harness.main import app
@@ -409,6 +410,7 @@ class TestExecutionKillSwitchWiring:
     Prozess-Neustart verloren — fail-open. WI-P5-10 schließt diese Lücke.
     """
 
+    @pytest.mark.real_kill_switch_state
     def test_kill_switch_wired_with_state_path(self):
         """Das API-Singleton persistiert in den konfigurierten State-Pfad."""
         from trading_harness.api import routes

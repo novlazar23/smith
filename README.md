@@ -757,7 +757,7 @@ Phase 5 Core Services implementiert:
   (Read-Key), `/kill-switch/{enabled}`, `/execution/shadow/{submit,summary,records}`,
   `/execution/crypto/{submit,status,cancel,price}`
 
-750 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
+751 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
 laufen standardmäßig simuliert.
 
 Das ist beabsichtigt.

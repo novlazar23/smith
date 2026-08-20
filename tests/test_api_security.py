@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -317,3 +318,41 @@ class TestBackwardCompatibility:
         ):
             response = client.post("/execution/kill-switch/True")
             assert response.status_code == 200
+
+
+class TestKillSwitchStateIsolation:
+    """API-Tests dürfen den konfigurierten Kill-Switch-State-Pfad nicht verändern (WI-P5-11).
+
+    Regression aus dem WI-P5-10-Review (MINOR-1): Der keyless
+    Backward-Compat-Toggle hat ``enabled: true`` in das echte
+    ``data/kill_switch.json`` geschrieben → ``make run`` nach
+    ``make check`` startete mit einem durch die Test-Suite aktivierten
+    Kill Switch.
+    """
+
+    def test_kill_switch_toggle_via_api_leaves_real_state_file_untouched(self):
+        """Ein API-Toggle (auch keyless) darf das echte State-File nicht anfassen."""
+        from trading_harness.api import routes
+
+        mock_settings = type(
+            "MockSettings",
+            (),
+            {"read_api_key": "", "trade_api_key": ""},
+        )()
+        real_path = Path(routes.settings.kill_switch_state_path)
+        before = real_path.read_bytes() if real_path.exists() else None
+        with patch(
+            "trading_harness.api.security.get_settings",
+            return_value=mock_settings,
+        ):
+            try:
+                response = client.post("/execution/kill-switch/True")
+                assert response.status_code == 200
+            finally:
+                # Singleton nicht im aktiven Zustand für Folgetests hinterlassen
+                response = client.post("/execution/kill-switch/False")
+                assert response.status_code == 200
+        after = real_path.read_bytes() if real_path.exists() else None
+        assert after == before, (
+            f"API-Test hat den echten Kill-Switch-State-Pfad verändert: {real_path}"
+        )
