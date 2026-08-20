@@ -516,10 +516,20 @@ Nächste Schritte (in Reihenfolge):
        registriert `real_kill_switch_state` dort; ohne Registrierung würde
        pytest `PytestUnknownMarkWarning` melden); (2) README Abschnitt 8:
        Test-Zähler 754 → 757 (Doku-Aktualität desselben Abschnitts)
-     - Keine Sicherheitsgrenzen-/Verhaltensänderung: Live-Execution bleibt
-       deaktiviert, Kill-Switch-Semantik unverändert, keine
-       Risk-Policy-/Whitelist-/Limit-Änderung
-     - Review steht aus
+      - Keine Sicherheitsgrenzen-/Verhaltensänderung: Live-Execution bleibt
+        deaktiviert, Kill-Switch-Semantik unverändert, keine
+        Risk-Policy-/Whitelist-/Limit-Änderung
+      - Review (2026-08-20, `Sisyphus-Junior (independent review)`, Review-ID 6):
+        **approved** — I1–I6 alle PASS (Kill-Switch-Code/-Semantik unverändert,
+        Live-Execution deaktiviert, Pipeline nur additiv um `log_store=`
+        ergänzt, atomares mkstemp+fsync+`os.replace`-Writing mit
+        Modus-Erhaltung, keine Secrets/State-Dateien committet,
+        Risk-Policy-/Whitelist-/Limit-/Auth unverändert); eigenständiges
+        Gate-Replay (757 passed / ruff / mypy clean), `data/kill_switch.json`
+        byte-identisch vor/nach dem Lauf; NITs (nicht blockierend,
+        Auflösungskandidat für ein späteres Doku-/Hygiene-Workitem): fehlende
+        End-zeilenumbrüche in `execution_store.py`/`test_api_execution.py`
+        (ruff-konform, kosmetisch), Whitespace-Reflow im Item-8-Text
 
   See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
