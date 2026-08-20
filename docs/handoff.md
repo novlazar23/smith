@@ -610,8 +610,17 @@ Nächste Schritte (in Reihenfolge):
        Fail-Open-Fallback wird GEpinnt, nicht geändert (eine
        Fail-Closed-Semantik wäre eine Sicherheitsgrenzen-Änderung
        und erfordert explizite Freigabe); Live-Execution bleibt
-       deaktiviert; Kill-Switch-Semantik unverändert
-     - Review steht aus
+        deaktiviert; Kill-Switch-Semantik unverändert
+      - Review (2026-08-20, `Sisyphus-Junior (independent review)`, Review-ID 7):
+        **approved** — I1–I6 alle PASS (keine src/-Änderungen, Fail-Open-Fallback
+        gepinnt und nicht geändert, Live-Execution deaktiviert, keine
+        Secrets/State-Dateien committet, Conftest-Teardown-Guard mit korrekter
+        Richtung/Platzierung, keine Risk-Policy-/Whitelist-/Limit-/Auth-/
+        Pipeline-Änderung); eigenständiges Gate-Replay (760 passed / ruff /
+        mypy clean), `data/kill_switch.json` byte-identisch vor/nach dem Lauf,
+        0 finally-Asserts im tests/-Baum; NIT (nicht blockierend, in der
+        Evidence dokumentiert): fehlender End-zeilenumbruch in
+        `tests/test_kill_switch.py` (kosmetisch, ruff-konform)
 
    See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
