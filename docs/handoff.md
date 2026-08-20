@@ -360,10 +360,20 @@ Nächste Schritte (in Reihenfolge):
    - 1 neuer Regressionstest (`TestKillSwitchStateIsolation`): ein API-Toggle
      lässt den konfigurierten echten State-Pfad byte-identisch unverändert
      (TDD-Red: vor dem Fix wurde das File bei jedem Lauf umgeschrieben)
-   - Empirisch verifiziert: Rest-State-File gelöscht → `make check` (751 Tests)
-     erzeugt es NICHT neu — `data/` enthält danach nur `.gitkeep`
-
-See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
+    - Empirisch verifiziert: Rest-State-File gelöscht → `make check` (751 Tests)
+      erzeugt es NICHT neu — `data/` enthält danach nur `.gitkeep`
+    - Unabhängiges Review (verifiziert: 751 Tests/ruff/mypy reproduziert, Isolation
+      empirisch in beiden Szenarien — ohne State-File: wird nicht erzeugt, mit
+      `enabled:true`-File: byte-identisch (gleiche sha256); Marker-Counterfactual,
+      LIFO-Restore und Teardown-Ordnung empirisch belegt; Invarianten I1 keine
+      Sicherheitsgrenzen-Änderung, I2 Isolation hält für alle Tests, I3 Wiring-Test
+      nicht verwässert, I4 keine Test-Order-Abhängigkeit — alle PASS):
+      **approved** (review_id 3); 2 NITs (Marker-Opt-out überspringt den
+      Teardown-`deactivate()` — heute unkritisch, einziger Marker-Test rein lesend;
+      Assert im `finally` kann Originalexception maskieren — Cleanup ohne harten
+      Assert) als Folge-Workitem-Option
+ 
+ See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
 Live-Execution bleibt standardmäßig deaktiviert — keine Änderungen an Sicherheitsgrenzen ohne explizite Freigabe.
 
