@@ -451,7 +451,18 @@ Nächste Schritte (in Reihenfolge):
       wurden in der Fortsetzung desselben Runs tatsächlich ausgeführt — alle
       Verifikationsausgaben in der Evidence stammen aus dieser Fortsetzung
     - Keine Sicherheitsgrenzen-/Verhaltensänderung: Live-Execution bleibt
-      deaktiviert, Kill-Switch-Semantik unverändert; Review steht aus
+      deaktiviert, Kill-Switch-Semantik unverändert
+    - Review (2026-08-20, `Sisyphus-Junior (independent review)`, Review-ID 5):
+      **approved** — I1–I6 alle PASS (reine Config-/Doku-/Evidence-Änderung,
+      Live-Execution deaktiviert, Kill-Switch-Semantik unverändert, keine
+      Secrets/State-Dateien committet, Stack gestoppt mit erhaltenen Named
+      Volumes, Compose-Diff exakt die eine schreibbare Mount-Zeile); NITs
+      (nicht blockierend): `kill_switch:true` beim ersten Health-Poll ist die
+      korrekte Folge von `kill_switch_default=True` ohne State-Datei
+      (fail-safe); bestehende README-Doku-Drift beim Kill-Switch-Endpunkt
+      (11.2: `POST /execution/kill-switch` vs. Architektur-Sektion
+      `POST /kill-switch`) hier nicht verursacht — Auflösungskandidat für
+      ein späteres Doku-/Compose-Workitem
  
  See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
