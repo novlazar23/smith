@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -67,15 +68,36 @@ class KillSwitch:
             pass
 
     def _save_state(self) -> None:
-        """Aktuellen Zustand persistieren (atomar: tmp-Datei + os.replace)."""
+        """Aktuellen Zustand persistieren (atomar: unique mkstemp-Tmp + os.replace).
+
+        Die Tmp-Datei wird per `tempfile.mkstemp` im Zielverzeichnis
+        angelegt (gleiches Dateisystem → atomares `os.replace`). Jeder
+        Write erhält einen eindeutigen Tmp-Namen, daher können mehrere
+        Writer, die sich denselben State-Pfad teilen, keine gemeinsame
+        Tmp-Datei mehr truncate/überschreiben (Lost Updates /
+        State-Divergenz, WI-P5-12). `mkstemp` legt mit Modus 0600 an —
+        der Modus der State-Datei wird daher explizit übernommen
+        (Neuanlage: 0644).
+        """
         if self._db_path is None:
             return
+        cfg = self._persisted_config
+        tmp_name: str | None = None
+        tmp_fd: int | None = None
+        replaced = False
         try:
             path = Path(self._db_path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = path.with_name(path.name + ".tmp")
-            cfg = self._persisted_config
-            with open(tmp_path, "w") as f:
+            tmp_fd, tmp_name = tempfile.mkstemp(
+                dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
+            )
+            try:
+                mode = path.stat().st_mode & 0o777
+            except OSError:
+                mode = 0o644
+            os.chmod(tmp_name, mode)
+            with os.fdopen(tmp_fd, "w") as f:
+                tmp_fd = None  # fd wird jetzt vom File-Objekt geschlossen
                 json.dump(
                     {
                         "enabled": self._enabled,
@@ -91,12 +113,25 @@ class KillSwitch:
                 )
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp_path, path)
+            os.replace(tmp_name, path)
+            replaced = True
         except OSError:
             # Persistenzfehler nicht kritisch — Zustand bleibt im Speicher.
-            # Atomic-Write (tmp + os.replace) garantiert: nach einem Crash
-            # ist der vorherige File-Stand intakt (keine halbe JSON).
+            # Atomic-Write (unique Tmp + os.replace) garantiert: nach einem
+            # Crash ist der vorherige File-Stand intakt (keine halbe JSON).
             pass
+        finally:
+            if tmp_fd is not None:
+                try:
+                    os.close(tmp_fd)
+                except OSError:
+                    pass
+            if not replaced and tmp_name is not None:
+                # Fehlgeschlagene Tmp-Datei aufräumen (best effort).
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
 
     def activate(self) -> None:
         """Kill Switch aktivieren (thread-sicher, manuell)."""

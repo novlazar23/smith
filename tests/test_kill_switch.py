@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -314,3 +316,226 @@ class TestKillSwitchAtomicPersistence:
         ks.activate()
         ks.deactivate()
         assert not (tmp_path / "kill_switch.json.tmp").exists()
+
+
+class TestKillSwitchMultiWriterIsolation:
+    """WI-P5-12: Multi-Writer-Isolation (Review-MINOR-2 von WI-P5-10).
+
+    Zwei `KillSwitch`-Instanzen, die sich einen State-Pfad teilen, dürfen
+    nicht auf derselben Tmp-Datei kollidieren — sonst drohen Lost Updates
+    und State-Divergenz zwischen den In-Memory-Zuständen.
+    """
+
+    @staticmethod
+    def _snapshot_of(ks: KillSwitch) -> dict[str, object]:
+        """Vollständiges In-Memory-Snapshot eines Writers (JSON-Format)."""
+        cfg = ks.config
+        return {
+            "enabled": ks.is_active(),
+            "last_toggled_at": cfg.last_toggled_at,
+            "toggle_count": cfg.toggle_count,
+            "auto_trigger_enabled": cfg.auto_trigger_enabled,
+            "auto_trigger_threshold": cfg.auto_trigger_threshold,
+            "anomaly_streak": cfg.anomaly_streak,
+            "auto_triggered": cfg.auto_triggered,
+            "trigger_reason": cfg.trigger_reason,
+        }
+
+    def test_multi_writer_collision_no_lost_update(self, tmp_path: Path, monkeypatch):
+        """Deterministischer Multi-Writer-Kollisionstest (erzwungenes Interleaving).
+
+        Zwei Writer teilen EINEN State-Pfad. Das Interleaving ist per
+        Events erzwungen (kein Timing-Lottery):
+
+        1. Writer A (zuerst gestartet) hat sein vollständiges Snapshot
+           doc_a (per `activate()` → enabled=True) in die Tmp-Datei
+           geschrieben (alt: geteilte `kill_switch.json.tmp`; neu:
+           eigene mkstemp-Datei) und blockiert in `os.fsync`
+           (erster Aufruf), bis er freigegeben wird.
+        2. Erst danach startet Writer B: Er trunciert die Tmp-Datei
+           (alter Code) und schreibt sein Snapshot doc_b (per
+           `deactivate()` → enabled=False). B's `os.replace`
+           (erster Aufruf) gibt A frei und wartet auf A's Replace.
+        3. Writer A's `os.replace` (zweiter Aufruf) läuft sofort: Im
+           alten Code konsumiert er die geteilte Tmp-Datei, die zu
+           diesem Zeitpunkt doc_b enthält.
+
+        Invariante: nach beiden Writes enthält die Datei das
+        VOLLSTÄNDIGE Snapshot des Writers, dessen `os.replace` zuletzt
+        erfolgreich ausgeführt hat. Alt: Die Datei enthält B's doc_b,
+        obwohl A der zuletzt erfolgreiche Replacer war → A's doc_a ist
+        verloren (Lost Update / State-Divergenz) → Test rot. Neu: Jeder
+        Writer ersetzt seine eigene mkstemp-Datei; B's Replace ist
+        zuletzt → die Datei enthält doc_b → Test grün.
+        """
+        state_file = tmp_path / "kill_switch.json"
+        writer_a = KillSwitch(db_path=str(state_file))
+        writer_a.deactivate()  # Seed: toggle_count = 1
+        assert writer_a.config.toggle_count == 1
+        writer_b = KillSwitch(db_path=str(state_file))
+
+        first_fsync_reached = threading.Event()
+        release_fsync = threading.Event()
+        a_replace_done = threading.Event()
+        replace_log: list[tuple[int, bool]] = []  # (Thread-Id, ok), Abschlussreihenfolge
+        fsync_calls = 0
+        fsync_lock = threading.Lock()
+        replace_calls = 0
+        replace_lock = threading.Lock()
+        log_lock = threading.Lock()
+        real_fsync = os.fsync
+        real_replace = os.replace
+
+        def fsync_wrapper(fd: int) -> None:
+            nonlocal fsync_calls
+            with fsync_lock:
+                fsync_calls += 1
+                is_first = fsync_calls == 1
+            if is_first:
+                # Erster fsync (Writer A): doc_a liegt vollständig in
+                # der Datei — hier blockieren und Writer B komplett
+                # durchlaufen lassen.
+                first_fsync_reached.set()
+                if not release_fsync.wait(timeout=10):
+                    raise AssertionError("Deadlock: erster os.replace-Aufruf kam nicht")
+            real_fsync(fd)
+
+        def replace_wrapper(src: str, dst: str) -> None:
+            nonlocal replace_calls
+            with replace_lock:
+                replace_calls += 1
+                is_first = replace_calls == 1
+            if is_first:
+                # Erster Replace (Writer B): Writer A freigeben und auf
+                # A's Replace-Abschluss warten, bevor unser Replace
+                # läuft — erzwingt die Replace-Reihenfolge A → B.
+                release_fsync.set()
+                if not a_replace_done.wait(timeout=10):
+                    raise AssertionError("Deadlock: zweiter os.replace-Aufruf kam nicht")
+            exc: OSError | None = None
+            try:
+                real_replace(src, dst)
+            except OSError as e:
+                exc = e
+            finally:
+                with log_lock:
+                    replace_log.append((threading.get_ident(), exc is None))
+            if not is_first:
+                a_replace_done.set()
+            if exc is not None:
+                raise exc
+
+        monkeypatch.setattr("trading_harness.services.kill_switch.os.fsync", fsync_wrapper)
+        monkeypatch.setattr("trading_harness.services.kill_switch.os.replace", replace_wrapper)
+
+        errors: list[BaseException] = []
+        thread_ids: dict[str, int] = {}
+
+        def run_a() -> None:
+            thread_ids["a"] = threading.get_ident()
+            try:
+                writer_a.activate()  # enabled=True → unterscheidbares Snapshot
+            except BaseException as exc:  # noqa: BLE001 — Concurrent-Test: Thread-Fehler erfassen
+                errors.append(exc)
+
+        def run_b() -> None:
+            thread_ids["b"] = threading.get_ident()
+            try:
+                writer_b.deactivate()  # enabled=False → unterscheidbares Snapshot
+            except BaseException as exc:  # noqa: BLE001 — Concurrent-Test: Thread-Fehler erfassen
+                errors.append(exc)
+
+        thread_a = threading.Thread(target=run_a)
+        thread_a.start()
+        if not first_fsync_reached.wait(timeout=10):
+            raise AssertionError("Writer A ist nicht in der fsync-Phase angekommen")
+        thread_b = threading.Thread(target=run_b)
+        thread_b.start()
+        thread_a.join(timeout=15)
+        thread_b.join(timeout=15)
+        assert not thread_a.is_alive() and not thread_b.is_alive()
+        assert not errors, errors
+
+        data = json.loads(state_file.read_text())
+        assert set(data) == {
+            "enabled",
+            "last_toggled_at",
+            "toggle_count",
+            "auto_trigger_enabled",
+            "auto_trigger_threshold",
+            "anomaly_streak",
+            "auto_triggered",
+            "trigger_reason",
+        }
+        successful = [tid for tid, ok in replace_log if ok]
+        assert successful, "kein Writer hat erfolgreich ersetzt"
+        writers_by_thread = {thread_ids["a"]: writer_a, thread_ids["b"]: writer_b}
+        last_writer = writers_by_thread[successful[-1]]
+        # Kein Lost Update / kein gemischtes Dokument: die Datei muss exakt
+        # das vollständige Snapshot des zuletzt erfolgreich persistierenden
+        # Writers enthalten.
+        assert data == self._snapshot_of(last_writer)
+
+    def test_concurrent_writers_stress(self, tmp_path: Path):
+        """Stress: 2 Instanzen, 4 Threads × 25 Toggles auf einem State-Pfad.
+
+        Invarianten nach Abschluss:
+        - Datei ist valides JSON mit dem vollständigen Key-Set,
+        - toggle_count == 50 (jeder Writer hat 2 × 25 Toggles ausgeführt —
+          kein Partial-/Lost-Update),
+        - keine *.tmp*-Rückstände im Verzeichnis,
+        - frische Instanz lädt denselben Zustand (Reload-Konsistenz).
+        """
+        state_file = tmp_path / "kill_switch.json"
+        writer_a = KillSwitch(db_path=str(state_file))
+        writer_b = KillSwitch(db_path=str(state_file))
+        writers = (writer_a, writer_b)
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(4)
+
+        def worker(n: int) -> None:
+            try:
+                barrier.wait(timeout=10)
+                writer = writers[n % 2]
+                for _ in range(25):
+                    writer.deactivate()
+            except BaseException as exc:  # noqa: BLE001 — Concurrent-Test: Thread-Fehler erfassen
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=60)
+        assert not errors, errors
+        assert all(not t.is_alive() for t in threads)
+
+        data = json.loads(state_file.read_text())
+        assert set(data) == {
+            "enabled",
+            "last_toggled_at",
+            "toggle_count",
+            "auto_trigger_enabled",
+            "auto_trigger_threshold",
+            "anomaly_streak",
+            "auto_triggered",
+            "trigger_reason",
+        }
+        assert data["toggle_count"] == 50
+        assert not list(state_file.parent.glob("*.tmp*"))
+        reloaded = KillSwitch(db_path=str(state_file))
+        assert reloaded.is_active() is data["enabled"]
+        assert reloaded.config.toggle_count == data["toggle_count"]
+
+    def test_state_file_mode_0644_new_and_overwrite(self, tmp_path: Path):
+        """State-Datei behält 0644 über Neuanlage UND Überschreiben.
+
+        `tempfile.mkstemp` legt Tmp-Dateien per Default mit 0600 an — ohne
+        explizites `os.chmod` würde der Modus der State-Datei wechseln.
+        """
+        state_file = tmp_path / "kill_switch.json"
+        ks = KillSwitch(db_path=str(state_file))
+        ks.activate()  # Neuanlage
+        assert state_file.stat().st_mode & 0o777 == 0o644
+        ks.deactivate()  # Überschreiben
+        assert state_file.stat().st_mode & 0o777 == 0o644

@@ -372,6 +372,28 @@ Nächste Schritte (in Reihenfolge):
       Teardown-`deactivate()` — heute unkritisch, einziger Marker-Test rein lesend;
       Assert im `finally` kann Originalexception maskieren — Cleanup ohne harten
       Assert) als Folge-Workitem-Option
+
+7. **Kill-Switch Multi-Writer-Isolation (Review-MINOR-2 von WI-P5-10)** — ✅ COMPLETE (WI-P5-12)
+    - Defekt: `_save_state` nutzte einen deterministischen Tmp-Namen
+      (`kill_switch.json.tmp`) für alle Writes — zwei `KillSwitch`-Instanzen
+      mit geteiltem State-Pfad truncierten/überschrieben sich gegenseitig
+      die Tmp-Datei → Lost Updates, gemischte Dokumente, `FileNotFoundError`
+      beim `os.replace` (stillschweigend verschluckt) und State-Divergenz
+      zwischen In-Memory-Zustand und Datei
+    - Fix: `tempfile.mkstemp(dir=<State-Verzeichnis>, prefix=<Name>.", suffix=".tmp")`
+      — eindeutige Tmp-Datei pro Writer im selben Dateisystem (`os.replace`
+      bleibt atomar); Modus-Erhaltung (`mkstemp` legt 0600 an → `os.chmod`
+      auf den State-Datei-Modus bzw. 0644 bei Neuanlage); fehlgeschlagene
+      Tmp-Dateien werden best-effort entfernt (kein FD-Leak)
+    - 3 neue Tests (`TestKillSwitchMultiWriterIsolation`): deterministischer
+      Kollisionstest (erzwungenes Interleaving via `os.fsync`/`os.replace`-
+      Blocking; TDD-Red auf altem Code: Datei enthielt B's Dokument, obwohl
+      A der zuletzt erfolgreiche Replacer war), Stress (2 Instanzen,
+      4 Threads × 25 Toggles: valides JSON, `toggle_count == 50`, keine
+      `*.tmp*`-Rückstände, Reload-Konsistenz; 10× stabil), 0644-Modus
+      (Neuanlage + Überschreiben)
+    - Verifikation (2026-08-20): 754 Tests grün, ruff clean, mypy clean
+      (50 source files)
  
  See `docs/spec-phase5-live-execution.md` und `docs/phase5-epic.md` für den definierten Umfang.
 
@@ -455,6 +477,7 @@ Inside OpenCode, run `/resume` to reconstruct context from Git and continue the 
 
 ## Last verification
 
+- `make check` (2026-08-20, WI-P5-12 Multi-Writer-Isolation): 754 Tests grün, ruff clean, mypy clean (50 source files)
 - `make check` (2026-08-20, WI-P5-11 Test-Isolation): 751 Tests grün, ruff clean, mypy clean (50 source files); `data/kill_switch.json` wird von der Suite nicht mehr erzeugt
 - `make check` (2026-08-19, WI-P5-10 Kill-Switch Persistenz-Wiring): 750 Tests grün, ruff clean, mypy clean (50 source files)
 - `make check` (2026-08-19, R5.6 Kill-Switch Auto-Trigger): 742 Tests grün, ruff clean, mypy clean (50 source files)

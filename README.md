@@ -737,7 +737,7 @@ Exchange Adapter: 4 Crypto-Adapter + PaperExchangeAdapter + ShadowModeAdapter
 ```
 
 Phase 5 Core Services implementiert:
-- `KillSwitch` — thread-safe, atomar JSON-persistiert (tmp-Datei + `os.replace`); die
+- `KillSwitch` — thread-safe, atomar JSON-persistiert (unique mkstemp-Tmp-Datei + `os.replace`); die
   API-Instanz persistiert in `data/kill_switch.json` (`kill_switch_state_path`), der
   State (inkl. Auto-Trigger) überlebt Prozess-Neustarts (WI-P5-10); R5.6 Auto-Trigger:
   3 aufeinanderfolgende Exchange-Fehler ohne FILLED-Order aktivieren den Kill Switch
@@ -757,7 +757,7 @@ Phase 5 Core Services implementiert:
   (Read-Key), `/kill-switch/{enabled}`, `/execution/shadow/{submit,summary,records}`,
   `/execution/crypto/{submit,status,cancel,price}`
 
-751 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
+754 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
 laufen standardmäßig simuliert.
 
 Das ist beabsichtigt.
