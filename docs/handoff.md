@@ -7,6 +7,34 @@ environment, a frozen dependency lock, matching local/CI checks, and versioned O
 commands. The complete German OpenCode usage and cross-device workflow is documented in
 `docs/opencode-nutzung.md`.
 
+**Phase-5-Status (2026-08-20):** Alle 15 Arbeitspakete des Phase-5-Epics (WI-P5-1…WI-P5-15)
+sind `completed`. Unabhängige Reviews (Review-IDs 1–7) liegen für WI-P5-9…WI-P5-15 vor —
+alle `approved`. WI-P5-1…WI-P5-8 wurden am 2026-08-14 in einer früheren Session
+abgeschlossen (strukturierte Results vorhanden), ohne dass ein unabhängiges Review im
+Harness hinterlegt wurde.
+
+**Harness-Buchhaltung (Bestandschuld):** Der Übergang `execution-running → completed`
+ist erst möglich, wenn alle Arbeitspakete abgeschlossen UND unabhängig reviewed sind.
+Offen: 8 Reviews für WI-P5-1…WI-P5-8 (Arbeit umgesetzt und im Gate verifiziert) sowie
+7 offene Pakete des abgeschlossenen Phase-4-Epics (WI-P4-1…WI-P4-7) — die Phase-4-Arbeit
+ist umgesetzt und verifiziert (Commits 77f0d37, 93ca0b4, 65e4d17, 6a1f202; 99 Paper-Tests
+grün in `test_paper_exchange`/`test_position_manager`/`test_portfolio_tracker`), die
+Harness-Pakete wurden in der damaligen Session nicht geschlossen.
+
+**Offene NITs aus Review-ID 6/7 geschlossen (akzeptiert, won't-fix):** die fehlenden
+End-zeilenumbrüche in `execution_store.py`/`test_api_execution.py`/`test_kill_switch.py`
+sind ein Repository-weites Muster — 67 Dateien in `src/`, `tests/`, `docs/`, `config/`
+ohne End-zeilenumbruch (ruff-konform, W292 inaktiv, kein funktionaler Effekt). Eine
+partielle "Reparatur" würde Inkonsistenz erzeugen; ein repository-weiter 1-Byte-Diff
+wäre reiner Lärm ohne Mehrwert.
+
+**Offene Punkte (Entscheidung ausstehend):**
+1. Harness-Buchhaltung abschließen (15 Retro-Reviews für P4×7 + P5-1…8) oder als
+   akzeptierter Bestand dokumentieren
+2. Nächstes Meilenstein-Epic — Kandidat laut README Abschnitt 8: „Die erste
+   produktive Ausbaustufe soll ausschließlich Shadow Trading durchführen"
+3. Push: `main` steht 56 Commits vor `origin/main` (nur mit expliziter Freigabe)
+
 Phase 1 (Research Runtime) additions committed:
 - `TradingRun` model with full lifecycle state machine (`RunState`)
 - `PerformanceRecord` and `AuditEntry` models
