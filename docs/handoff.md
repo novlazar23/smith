@@ -8,18 +8,44 @@ commands. The complete German OpenCode usage and cross-device workflow is docume
 `docs/opencode-nutzung.md`.
 
 **Phase-5-Status (2026-08-20):** Alle 15 Arbeitspakete des Phase-5-Epics (WI-P5-1…WI-P5-15)
-sind `completed`. Unabhängige Reviews (Review-IDs 1–7) liegen für WI-P5-9…WI-P5-15 vor —
-alle `approved`. WI-P5-1…WI-P5-8 wurden am 2026-08-14 in einer früheren Session
-abgeschlossen (strukturierte Results vorhanden), ohne dass ein unabhängiges Review im
-Harness hinterlegt wurde.
+sind `completed`. Unabhängige Reviews liegen für alle 15 Pakete vor (Review-IDs 1–13):
+WI-P5-9…WI-P5-15 `approved`; WI-P5-1, WI-P5-3, WI-P5-4, WI-P5-5 `approved`
+(Retro-Reviews „Wave 1", 2026-08-20); WI-P5-2 und WI-P5-6 waren zunächst
+`changes-requested` (Review 9: RateLimiter erzwingt die dokumentierte N/min-Sustained-Rate
+nicht; Review 13: ExecutionLogStore — Testabdeckung, dokumentierte Persistenz-Entscheidung,
+Lock-Race bei der ID-Erzeugung). Beide Findings sind behoben (Commits `e109400`,
+`4e4cd38`); die Re-Reviews laufen in „Wave 2".
 
-**Harness-Buchhaltung (Bestandschuld):** Der Übergang `execution-running → completed`
-ist erst möglich, wenn alle Arbeitspakete abgeschlossen UND unabhängig reviewed sind.
-Offen: 8 Reviews für WI-P5-1…WI-P5-8 (Arbeit umgesetzt und im Gate verifiziert) sowie
-7 offene Pakete des abgeschlossenen Phase-4-Epics (WI-P4-1…WI-P4-7) — die Phase-4-Arbeit
-ist umgesetzt und verifiziert (Commits 77f0d37, 93ca0b4, 65e4d17, 6a1f202; 99 Paper-Tests
-grün in `test_paper_exchange`/`test_position_manager`/`test_portfolio_tracker`), die
-Harness-Pakete wurden in der damaligen Session nicht geschlossen.
+**Harness-Buchhaltung (Bestandschuld, 2026-08-20 in Bearbeitung):** Die 7 Phase-4-Pakete
+(WI-P4-1…WI-P4-7) wurden rückwirkend `completed` geschlossen, mit strukturierten,
+evidenzbasierten Results (Arbeit in der damaligen Session umgesetzt und verifiziert;
+Commits 77f0d37, 93ca0b4, 65e4d17, 6a1f202; dokumentierte Abweichungen: Pipeline-Wiring
+statt `paper_execution_service.py`, SQLite statt PostgreSQL, keine 12 dedizierten
+Endpoints; 201 Tests grün). Der Übergang `execution-running → completed` ist erst möglich,
+wenn alle 22 Arbeitspakete abgeschlossen UND unabhängig reviewed sind — „Wave 2"
+(2026-08-20, 4 unabhängige Reviewer) läuft: R3: WI-P5-7, WI-P5-8, WI-P4-1; R4:
+WI-P4-2, WI-P4-3, WI-P4-4; R5: WI-P4-5, WI-P4-6, WI-P4-7; R6: Re-Reviews WI-P5-2
+(Fix `e109400`) und WI-P5-6 (Fix `4e4cd38`).
+
+**Review-9-Fix (WI-P5-2 RateLimiter, Commit `e109400`):** Die Refill-Rate skaliert jetzt
+mit dem Limit (`limit/60` Tokens/s pro Bucket) — Sustained-Rate = konfiguriertes Limit
+(10/min global, 2/min pro Symbol), Burst-Kapazität = Limit unverändert;
+`LiveExecutionService` baut den RateLimiter aus
+`ExecutionConfig.global_rate_limit`/`symbol_rate_limit` (Defaults 10/2; war vorher
+hardcodiert und wirkte auch nicht über `routes.py`). +6 Tests in `test_rate_limiter.py`
+(14 gesamt), +2 Regressionstests in `test_live_execution_service.py`.
+
+**Review-13-Fix (WI-P5-6 ExecutionLogStore, Commit `4e4cd38`):** Entry-IDs werden jetzt
+vollständig im Lock erzeugt (Race beseitigt); +4 Tests in `test_execution_store.py`
+(11 gesamt: `clear()`, korrumpiertes State-File, atomare Write-Crash-Integrität,
+Concurrency); `docs/phase5-epic.md` (WI-P5-6) enthält die dokumentierte, datierte
+(2026-08-20) Architektur-Entscheidung: JSON-Datei-Persistenz statt `execution_log`-
+Tabelle in `db.py` (redundanter zweiter Persistenzmechanismus; JSON ist die genehmigte
+Architektur laut WI-P5-15/Review 6).
+
+**Verifikation (2026-08-20, Orchestrator, HEAD `e109400`):** `make check` — 772 Tests
+grün, ruff clean, mypy clean (50 source files); `data/kill_switch.json` byte-identisch
+(sha256 `1389df52f9a2e125a05a2ee96b13263870a234236506d2487c12cbc06d2383a9`).
 
 **Offene NITs aus Review-ID 6/7 geschlossen (akzeptiert, won't-fix):** die fehlenden
 End-zeilenumbrüche in `execution_store.py`/`test_api_execution.py`/`test_kill_switch.py`
@@ -29,11 +55,12 @@ partielle "Reparatur" würde Inkonsistenz erzeugen; ein repository-weiter 1-Byte
 wäre reiner Lärm ohne Mehrwert.
 
 **Offene Punkte (Entscheidung ausstehend):**
-1. Harness-Buchhaltung abschließen (15 Retro-Reviews für P4×7 + P5-1…8) oder als
-   akzeptierter Bestand dokumentieren
+1. Harness-Buchhaltung abschließen: 10 Reviews in „Wave 2" laufen (9 neue für
+   WI-P4-1…WI-P4-7 + WI-P5-7/8, 2 Re-Reviews für WI-P5-2/WI-P5-6); danach
+   `execution-running → completed` + finale Closeout-Notiz
 2. Nächstes Meilenstein-Epic — Kandidat laut README Abschnitt 8: „Die erste
    produktive Ausbaustufe soll ausschließlich Shadow Trading durchführen"
-3. Push: `main` steht 56 Commits vor `origin/main` (nur mit expliziter Freigabe)
+3. Push: `main` steht 59 Commits vor `origin/main` (nur mit expliziter Freigabe)
 
 Phase 1 (Research Runtime) additions committed:
 - `TradingRun` model with full lifecycle state machine (`RunState`)
@@ -732,6 +759,7 @@ Inside OpenCode, run `/resume` to reconstruct context from Git and continue the 
 
 ## Last verification
 
+- `make check` (2026-08-20, Review-9/13-Fixes `e109400`/`4e4cd38`): 772 Tests grün, ruff clean, mypy clean (50 source files); `data/kill_switch.json` byte-identisch (sha256 `1389df52f9a2e125a05a2ee96b13263870a234236506d2487c12cbc06d2383a9`)
 - `make check` (2026-08-20, WI-P5-12 Multi-Writer-Isolation): 754 Tests grün, ruff clean, mypy clean (50 source files)
 - `make check` (2026-08-20, WI-P5-11 Test-Isolation): 751 Tests grün, ruff clean, mypy clean (50 source files); `data/kill_switch.json` wird von der Suite nicht mehr erzeugt
 - `make check` (2026-08-19, WI-P5-10 Kill-Switch Persistenz-Wiring): 750 Tests grün, ruff clean, mypy clean (50 source files)
