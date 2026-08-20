@@ -130,6 +130,56 @@ class TestLiveExecutionServiceRateLimit:
         assert result["error"] == "RATE_LIMIT_EXCEEDED"
 
 
+class TestDefaultRateLimiterConfig:
+    """Review-9 B3: ExecutionConfig-Limits wirken im Default-Konstruktionspfad."""
+
+    def test_default_rate_limiter_uses_execution_config(self):
+        """Ohne injizierten Limiter gelten global_rate_limit/symbol_rate_limit."""
+        svc = LiveExecutionService(
+            config=ExecutionConfig(global_rate_limit=7, symbol_rate_limit=3)
+        )
+        assert svc._rate_limiter.global_limit == 7
+        assert svc._rate_limiter.symbol_limit == 3
+
+    def test_default_config_rate_limit_enforced(self):
+        """global_rate_limit=2 blockiert im Default-Pfad die 3. Order.
+
+        Verschiedene Symbole, damit das (in der Config weite) Pro-Symbol-Limit
+        nicht die globale Begrenzung simuliert.
+        """
+        svc = LiveExecutionService(
+            config=ExecutionConfig(
+                live_execution_enabled=True,
+                global_rate_limit=2,
+                symbol_rate_limit=100,
+            )
+        )
+        svc.activate_live()
+        for decision_id, symbol in (
+            ("dec-1", "BTCUSDT"),
+            ("dec-2", "ETHUSDT"),
+        ):
+            result = svc.submit_order(
+                decision_id=decision_id,
+                run_id="run-1",
+                symbol=symbol,
+                side="LONG",
+                quantity=0.01,
+                price=1.0,
+            )
+            assert result["error"] != "RATE_LIMIT_EXCEEDED"
+        result = svc.submit_order(
+            decision_id="dec-3",
+            run_id="run-1",
+            symbol="SOLUSDT",
+            side="LONG",
+            quantity=0.01,
+            price=1.0,
+        )
+        assert result["status"] == "REJECTED"
+        assert result["error"] == "RATE_LIMIT_EXCEEDED"
+
+
 class TestLiveExecutionServiceDedup:
     """Dedup-Integration."""
 

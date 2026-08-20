@@ -750,7 +750,8 @@ Phase 5 Core Services implementiert:
   State (inkl. Auto-Trigger) überlebt Prozess-Neustarts (WI-P5-10); R5.6 Auto-Trigger:
   3 aufeinanderfolgende Exchange-Fehler ohne FILLED-Order aktivieren den Kill Switch
   automatisch (persistiert `auto_triggered` + `trigger_reason`)
-- `RateLimiter` — Token Bucket, global + pro Symbol
+- `RateLimiter` — Token Bucket in N/min-Semantik (Burst = Limit, Refill = Limit/60
+  Tokens/s → Sustained-Rate = konfiguriertes Limit), global + pro Symbol
 - `OrderDeduplicator` — memory-bounded, periodischer Trim
 - `ExchangeAdapter` — abstrakte Schnittstelle, `StubExchangeAdapter` als Fallback
 - `LiveExecutionService` — Pipeline: KillSwitch→RateLimiter→Deduplicator→SymbolWhitelist→
@@ -768,7 +769,7 @@ Phase 5 Core Services implementiert:
   (Read-Key), `/kill-switch/{enabled}`, `/execution/shadow/{submit,summary,records}`,
   `/execution/crypto/{submit,status,cancel,price}`
 
-764 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
+772 Tests, 0 failures. Keine Live-Order-Integration aktiv — alle Crypto-Adapter
 laufen standardmäßig simuliert.
 
 Das ist beabsichtigt.

@@ -1,4 +1,9 @@
-"""RateLimiter — global + per-symbol Token Bucket."""
+"""RateLimiter — global + per-symbol Token Bucket.
+
+Semantik "N Orders/Minute" (Spec R5.10, Epic WI-P5-2): Kapazität = Limit
+(Burst), Refill-Rate = Limit/60 Tokens pro Sekunde, d.h. die
+Sustained-Rate entspricht exakt dem konfigurierten Limit.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +12,7 @@ import time
 
 
 class RateLimiter:
-    """Token-Bucket Rate Limiter mit globalen und pro-Symbol Limits.
+    """Token-Bucket Rate Limiter mit globalen und pro-Symbol Limits in N/min.
 
     Verhindert Überlastung durch zu viele Orders in einem Zeitraum.
     """
@@ -21,19 +26,24 @@ class RateLimiter:
         self._last_refill_time = time.monotonic()
 
     def _refill(self) -> None:
-        """Tokens auffüllen (basierend auf verstrichener Zeit)."""
+        """Tokens auffüllen (basierend auf verstrichener Zeit).
+
+        Refill-Rate skaliert mit dem Limit: global_limit/60 bzw.
+        symbol_limit/60 Tokens pro Sekunde (N/min-Semantik). Die
+        Kapazität bleibt der Limit-Wert (Burst unverändert).
+        """
         now = time.monotonic()
         elapsed = now - self._last_refill_time
-        # Refill 1 token pro Sekunde
-        refill_amount = elapsed
 
         with self._lock:
+            global_refill = elapsed * (self._global_limit / 60.0)
             self._global_tokens = min(
-                self._global_limit, self._global_tokens + refill_amount
+                self._global_limit, self._global_tokens + global_refill
             )
+            symbol_refill = elapsed * (self._symbol_limit / 60.0)
             for symbol in self._symbol_tokens:
                 self._symbol_tokens[symbol] = min(
-                    self._symbol_limit, self._symbol_tokens[symbol] + refill_amount
+                    self._symbol_limit, self._symbol_tokens[symbol] + symbol_refill
                 )
             self._last_refill_time = now
 

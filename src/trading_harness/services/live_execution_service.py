@@ -112,16 +112,19 @@ class LiveExecutionService:
         shadow_logger: ShadowModeLogger | None = None,
         log_store: ExecutionLogStore | None = None,
     ) -> None:
+        self._config = config or ExecutionConfig()
         self._kill_switch = kill_switch or KillSwitch(enabled=False)
+        # Default-Limiter aus ExecutionConfig (Defaults 10/min global, 2/min
+        # pro Symbol) — Konfigurationsfelder wirken damit im Standard-Pfad.
         self._rate_limiter = rate_limiter or RateLimiter(
-            global_limit=10, symbol_limit=2
+            global_limit=self._config.global_rate_limit,
+            symbol_limit=self._config.symbol_rate_limit,
         )
         self._deduplicator = deduplicator or OrderDeduplicator()
         self._exchange_adapter = exchange_adapter or StubExchangeAdapter()
         self._risk_engine = risk_engine
         self._network_policy = network_policy
         self._credential_manager = credential_manager
-        self._config = config or ExecutionConfig()
         self._enabled = self._config.live_execution_enabled
         self._lock = threading.Lock()
         self._logs: list[ExecutionLog] = []
