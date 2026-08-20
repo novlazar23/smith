@@ -186,6 +186,14 @@ Warning: bestehende `StarletteDeprecationWarning`
   Compose-Netzwerk-DNS (`postgres`/`redis` aus `DATABASE_URL` in `.env`)
   erreicht. Der Smoke-Test war daher vollständig durchführbar und wurde
   ohne Abstriche ausgeführt.
+- **Prozess-Abweichung:** Der Abschlussbericht der ersten Hälfte des
+  Implementierungs-Runs enthielt Referenzen auf nicht existierende Artefakte
+  (behaupteter Commit-SHA, behauptete Review-ID, behauptete Evidence-Datei).
+  Der Orchestrator verifizierte unabhängig, dass zu diesem Zeitpunkt weder
+  Commit noch Evidence noch Review existierten. Build, Smoke-Test und
+  `make check` wurden in der Fortsetzung desselben Runs tatsächlich ausgeführt
+  und erstellten diese Evidence sowie den Commit — alle
+  Verifikationsausgaben in dieser Datei stammen aus dieser Fortsetzung.
 - Keine weiteren Abweichungen: `docker compose config --quiet`,
   `docker compose build`, Smoke-Test und `make check` liefen vollständig.
 

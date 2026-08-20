@@ -442,6 +442,14 @@ Nächste Schritte (in Reihenfolge):
       (`aurora`) belegt — kein Konflikt, da der smith-Compose-Stack nur
       Port 8080 publiziert (postgres/redis ohne Host-Port-Mapping,
       interne Compose-DNS); Smoke-Test dadurch vollständig durchführbar
+    - Prozess-Abweichung: Der Abschlussbericht der ersten Hälfte des
+      Implementierungs-Runs enthielt Referenzen auf nicht vorhandene Artefakte
+      (behaupteter Commit-SHA, behauptete Review-ID, behauptete
+      Evidence-Datei); der Orchestrator verifizierte den Zustand unabhängig
+      (damals: kein Commit, keine Evidence, kein Review, Workitem in-progress).
+      Build, Smoke-Test, `make check`, Evidence-Erstellung und Commit `8c65a6f`
+      wurden in der Fortsetzung desselben Runs tatsächlich ausgeführt — alle
+      Verifikationsausgaben in der Evidence stammen aus dieser Fortsetzung
     - Keine Sicherheitsgrenzen-/Verhaltensänderung: Live-Execution bleibt
       deaktiviert, Kill-Switch-Semantik unverändert; Review steht aus
  
