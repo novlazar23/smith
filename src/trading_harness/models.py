@@ -443,3 +443,102 @@ class AgentPerformanceSummary(BaseModel):
     sharpe_ratio: float = 0.0
     max_drawdown: float = 0.0
     timestamp: datetime = Field(default_factory=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Shadow Trading — Loop-Modelle (Epic, Spec §6.1)
+# ---------------------------------------------------------------------------
+
+
+class ShadowLoopStatus(StrEnum):
+    """Lifecycle status of the shadow trading loop (ST.8)."""
+
+    RUNNING = "RUNNING"
+    STOPPING = "STOPPING"
+    STOPPED = "STOPPED"
+
+
+class ShadowTradingStatus(StrEnum):
+    """Status of a single shadow trading decision (ST.7)."""
+
+    NO_TRADE = "NO_TRADE"
+    REJECTED = "REJECTED"
+    FILLED = "FILLED"
+
+
+class ShadowSessionState(BaseModel):
+    """Persistent state of the shadow trading loop (ST.8, data/shadow_trading_state.json).
+
+    state_checksum: SHA-256 (hex) des kanonisierten JSONs dieses States, berechnet
+    OHNE das state_checksum-Feld selbst (F5). Mismatch beim Load => korrupt (Quarantäne).
+    Berechnung/Verifikation erfolgt in der ShadowTradingStateStore (WI-ST-02).
+    """
+
+    session_id: str = Field(default_factory=lambda: f"shadow-{uuid4()}")
+    status: ShadowLoopStatus = ShadowLoopStatus.STOPPED
+    symbols: list[str] = Field(default_factory=list)
+    interval_seconds: int = 900
+    started_at: datetime | None = None
+    stopped_at: datetime | None = None
+    last_iteration_at: datetime | None = None
+    iteration_count: int = 0
+    decisions_today: int = 0
+    budget_date: str = ""  # "YYYY-MM-DD" (UTC)
+    start_equity: float = 100000.0
+    current_equity: float = 100000.0
+    open_positions: int = 0
+    error_count: int = 0
+    last_error: str | None = None
+    restart_required: bool = False
+    state_checksum: str = ""  # SHA-256 (hex), siehe Class-Docstring (F5)
+
+
+class ShadowTradingRecord(BaseModel):
+    """One record per loop decision (ST.7); last audit-link for FILLED is trade_id (E8).
+
+    trade_id: Paper-Trade-ID, nur bei status=FILLED gesetzt, sonst None —
+    schließt die Audit-Kette snapshot_id -> run_id -> decision_id -> record_id -> trade_id.
+    Bewusst anders als ShadowModeLogger.ShadowTradeRecord (Phase 5, Spec-Z3).
+    """
+
+    id: str = Field(default_factory=lambda: f"shadow-rec-{uuid4()}")
+    timestamp: datetime = Field(default_factory=utcnow)
+    symbol: str
+    side: str  # "BUY" | "SELL" | "NONE"
+    direction: str  # "LONG" | "SHORT" | "NO_TRADE"
+    status: ShadowTradingStatus
+    decision_id: str
+    run_id: str
+    snapshot_id: str
+    trade_id: str | None = None  # Paper-Trade-ID (FILLED), E8-Audit-Kette
+    risk_reason: str = ""
+    agent_ids: list[str] = Field(default_factory=list)
+    quantity: float = 0.0
+    entry_price: float = 0.0
+    mark_price: float = 0.0
+    slippage: float = 0.0
+    commission: float = 0.0
+    pnl_estimate: float = 0.0
+    slippage_rate: float = 0.0
+    commission_rate: float = 0.0
+    config_version: str = ""  # sha256(risk-policy + settings)
+
+
+class SignalAggregation(BaseModel):
+    """Deterministic aggregation of agent signals for one symbol (ST.6)."""
+
+    direction: str  # "LONG" | "SHORT" | "NO_TRADE"
+    confidence: float
+    signal_count: int
+    no_trade_count: int
+    agent_ids: list[str] = Field(default_factory=list)
+
+
+class ShadowEvaluationSummary(BaseModel):
+    """Phase-2 metrics computed over accumulated ShadowTradingRecords (ST.12/O4)."""
+
+    brier_score: float
+    directional_accuracy: float
+    expectancy: float
+    max_drawdown: float
+    sample_size: int

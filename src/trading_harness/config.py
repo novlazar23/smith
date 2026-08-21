@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +33,17 @@ class Settings(BaseSettings):
 
     # Phase 5 — Credential Management (R5.18–R5.20)
     credential_source: str = "env"  # env | vault | aws_secrets_manager
+
+    # Shadow-Trading-Epic (Spec §6.2) — default-off, read-only gegenüber der Exchange
+    shadow_trading_enabled: bool = False
+    shadow_loop_interval_seconds: int = 900
+    shadow_max_decisions_per_day: int = 96
+    shadow_trading_symbols: list[str] = Field(default_factory=list)
+    shadow_min_confidence: float = 0.6
+    shadow_stop_loss_fraction: float = 0.02
+    shadow_min_risk_reward: float = 2.0
+    shadow_state_path: str = "data/shadow_trading_state.json"
+    shadow_start_equity: float = 100000.0
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
