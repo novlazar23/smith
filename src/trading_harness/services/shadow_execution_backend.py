@@ -62,14 +62,24 @@ class ShadowExecutionBackend:
     def __init__(self, stack: PaperExecutionStack) -> None:
         self._stack = stack
 
+    @property
+    def stack(self) -> PaperExecutionStack:
+        """Zugriff auf den verdrahteten Paper-Stack (WI-ST-05: M2M/Status)."""
+        return self._stack
+
     def execute(self, proposal: TradeProposal) -> ShadowExecutionResult:
-        """Führt das Proposal auf dem Paper-Stack aus und mappt das Ergebnis."""
+        """Führt das Proposal auf dem Paper-Stack aus und mappt das Ergebnis.
+
+        ``proposal.decision_id`` wird als deterministische Decision-ID an
+        den Paper-Adapter weitergereicht (WI-ST-05, Spec ST.14).
+        """
         try:
             response = self._stack.paper_adapter.submit_order(
                 symbol=proposal.symbol,
                 side=proposal.side,
                 quantity=proposal.requested_quantity,
                 price=proposal.entry_price,
+                decision_id=proposal.decision_id,
             )
         except Exception as exc:  # Shadow-Loop darf nicht crashen; Details im Log
             logger.exception(

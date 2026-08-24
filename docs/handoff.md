@@ -2,10 +2,53 @@
 
 ## Current state
 
-No implementation task is currently in progress. The repository provides a reproducible Python 3.12
-environment, a frozen dependency lock, matching local/CI checks, and versioned OpenCode rules and
-commands. The complete German OpenCode usage and cross-device workflow is documented in
-`docs/opencode-nutzung.md`.
+**Aktiv: Harness-Run „Shadow Trading Epic" (Phase `execution-running`).** Die ersten
+vier Arbeitspakete sind committet: WI-ST-01 Shadow-Trading-Settings/Domain-Modelle
+(`79cb5a0`), WI-ST-03 ShadowExecutionBackend auf Paper-Execution-Stack (`c95bfd6`),
+WI-ST-04 Signal-Aggregation/Trade-Proposal-Build (`d1ba6d5`), WI-ST-02 persistenter
+State-Store mit Checksum/Quarantäne/Memory-Limits (`d9141d3`, HEAD).
+
+**WI-ST-05 (ShadowTradingLoop + Test-Suite) implementiert und verifiziert:**
+
+- Neu: `src/trading_harness/services/shadow_trading_loop.py` — async `run_once()`:
+  Ticker → Snapshot → Run → Agenten-Analyse → Aggregation → deterministische Risk
+  Engine → ShadowExecutionBackend (Paper-Stack) → ShadowTradingRecord →
+  Mark-to-Market → Audit-Trail. Self-Stops: Kill Switch (ST.11, kein M2M mehr),
+  Flags-Verletzung (S2, `restart_required=True`), 10 aufeinanderfolgende
+  Iterationsfehler (F6); erschöpftes Tages-Budget bleibt RUNNING (ST.4) und wird per
+  Audit-Eintrag `SHADOW_LOOP_STOPPED_BUDGET_EXHAUSTED` angekündigt.
+- Neu: `tests/test_shadow_trading_loop.py` — 27 Tests: vollständige Entscheidungs-
+  kette, Live-Endpoint-Isolation (Spies auf allen Crypto-Adaptern +
+  `LiveExecutionService.submit_order/get_order_status/cancel_order` — nie gerufen),
+  Event-Loop-Blocking-Schutz (Heartbeat), Budget inkl. UTC-Rollover, NO_TRADE-/Risk-
+  Reject-Record-Semantik, Stop-Loss/Target-Closure innerhalb einer Iteration,
+  Kill-Switch-/Flags-Mid-Run-Stops, Phase-2-Metriken (Accuracy/Brier/Expectancy/
+  MaxDD über synthetische Records), strukturierte Logs + Audit-Kette, Determinismus
+  über zwei Umgebungen (ST.14), State-Größenbegrenzung, fail-closed
+  INCOMPLETE_FILL_DATA.
+- Additiv: `orchestrator.py` — öffentliche `audit()`-Methode mit strukturierten
+  Details (ST.13) und optionale `run_id` in `create()` (deterministische Runs,
+  ST.14); kleine Supporting-Anpassungen in `paper_exchange_adapter.py`,
+  `shadow_execution_backend.py` (+ deren Tests).
+- Verifikation (2026-08-24): `uv run pytest -q tests/test_shadow_trading_loop.py`
+  → 27 passed; `make check` → 884 passed, ruff clean, mypy clean (55 source files);
+  Evidence als Harness-Artefakt und unter `evidence/wi-st-05-loop-tests-verification.md`.
+- Aus der Verifikation entstandene Loop-Korrektur: der finale State-Write von
+  `run_once()` persistiert jetzt auch `symbols` (vorher nur `start()`) — Session-State
+  ist damit auch bei `run_once`-Nutzung selbsterklärend (ST.8).
+- Unabhängiges Oracle-Review (`local-critic`, 2026-08-24): **approved** — „no path from
+  shadow loop to live execution“ explizit bestätigt; Spec-Coverage ST.1–ST.14, F5/F6,
+  O1/O4, S2, Z2 je mit Testnamen verifiziert. Nicht blockierende Findings als
+  Folge-Workitem-Kandidaten dokumentiert: (MINOR) M2M holt Ticker auch für Positionen
+  außerhalb der konfigurierten Symbole; (NIT) Determinismus-Test könnte zusätzlichen
+  vollständigen Audit-Log-Vergleich führen.
+
+Danach: nächstes offenes Shadow-Trading-Arbeitspaket gemäß Harness-Zustand claimen.
+
+Der Repository-Grundstand bietet eine reproduzierbare Python 3.12-Umgebung, einen
+eingefrorenen Dependency-Lock, passende lokale/CI-Checks und versionierte
+OpenCode-Regeln und -Kommandos. Der vollständige deutsche OpenCode-Nutzungs- und
+Gerätewechsel-Workflow ist in `docs/opencode-nutzung.md` dokumentiert.
 
 **Harness-Run CLOSEOUT (2026-08-20):** Der Harness-Run `RUN-20260818-115553` ist
 `completed`. Alle 22 Arbeitspakete (WI-P4-1…WI-P4-7, WI-P5-1…WI-P5-15) sind `completed`

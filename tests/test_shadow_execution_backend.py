@@ -267,7 +267,13 @@ class TestShadowBackendDelegation:
         assert result.status == "FILLED"
         assert len(calls["submit_order"]) == 1
         args, kwargs = calls["submit_order"][0]
-        assert kwargs == {"symbol": "BTCUSDT", "side": "BUY", "quantity": 0.01, "price": 100.0}
+        assert kwargs == {
+            "symbol": "BTCUSDT",
+            "side": "BUY",
+            "quantity": 0.01,
+            "price": 100.0,
+            "decision_id": "decision-st-03",
+        }
         assert args == ()
         for name in ("cancel_order", "get_order_status", "get_balance"):
             assert calls[name] == []

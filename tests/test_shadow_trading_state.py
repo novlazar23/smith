@@ -18,11 +18,6 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from trading_harness.services.shadow_trading_state import (
-    MAX_RECORDS,
-    ShadowTradingStateStore,
-    compute_state_checksum,
-)
 
 from trading_harness.models import (
     PortfolioState,
@@ -30,6 +25,11 @@ from trading_harness.models import (
     ShadowSessionState,
     ShadowTradingRecord,
     ShadowTradingStatus,
+)
+from trading_harness.services.shadow_trading_state import (
+    MAX_RECORDS,
+    ShadowTradingStateStore,
+    compute_state_checksum,
 )
 
 STATE_PATH = "shadow_trading_state.json"

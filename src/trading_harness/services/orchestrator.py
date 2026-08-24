@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from threading import RLock
 from typing import Any
+from uuid import uuid4
 
 from trading_harness.models import (
     ALLOWED_TRANSITIONS,
@@ -25,8 +26,8 @@ class TradingRunService:
         self._audit_log: list[AuditEntry] = []
         self._lock = RLock()
 
-    def create(self, snapshot_id: str) -> TradingRun:
-        run = TradingRun(snapshot_id=snapshot_id)
+    def create(self, snapshot_id: str, run_id: str | None = None) -> TradingRun:
+        run = TradingRun(snapshot_id=snapshot_id, id=run_id or f"run-{uuid4()}")
         with self._lock:
             self._runs[run.id] = run
             self._log("create", "trading_run", run.id, new_state=run.state)
@@ -104,6 +105,35 @@ class TradingRunService:
                 new_state=new_state,
             )
         )
+
+    def audit(
+        self,
+        action: str,
+        entity_type: str,
+        entity_id: str,
+        *,
+        actor: str = "shadow-loop",
+        previous_state: str | None = None,
+        new_state: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> AuditEntry:
+        """Öffentlicher Audit-Eintrag mit optionalen Details (WI-ST-05, Spec ST.13).
+
+        Additiv: bestehende ``_log``-Aufrufe bleiben unverändert; der Shadow-Loop
+        nutzt diese Methode, weil ST.13 strukturierte ``details`` verlangt.
+        """
+        entry = AuditEntry(
+            actor=actor,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            previous_state=previous_state,
+            new_state=new_state,
+            details=dict(details) if details else {},
+        )
+        with self._lock:
+            self._audit_log.append(entry)
+        return entry
 
     def get_audit_log(self, entity_id: str | None = None) -> list[AuditEntry]:
         with self._lock:

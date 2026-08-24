@@ -59,11 +59,14 @@ class PaperExchangeAdapter(ExchangeAdapter):
         price: float,
         order_type: str = "MARKET",
         exchange_name: str | None = None,
+        decision_id: str | None = None,
     ) -> dict[str, Any]:
         """Erstellt ein TradeProposal aus den Adapter-Parametern und führt es
         via PaperExchange.execute_order() aus.
 
         order_type wird ignoriert (PaperExchange simuliert immer MARKET).
+        decision_id (optional, WI-ST-05): deterministische Decision-ID aus
+        dem Shadow-Loop; ohne Wert bleibt das bestehende UUID-Verhalten.
         """
         if price <= 0:
             return {
@@ -95,7 +98,7 @@ class PaperExchangeAdapter(ExchangeAdapter):
             normalized_side = "SHORT"
 
         proposal = TradeProposal(
-            decision_id=f"paper-{uuid.uuid4()}",
+            decision_id=decision_id or f"paper-{uuid.uuid4()}",
             symbol=symbol,
             side=normalized_side,
             equity=100000.0,  # Standard-Startkapital für Paper Trading
