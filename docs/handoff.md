@@ -2,6 +2,13 @@
 
 ## Current state
 
+**Phase 1 abgeschlossen: Quantitative Trading Data Platform — InfluxDB + OHLCV Ingestion (2026-08-25).**
+980 Tests (899 bestehende + 81 neue Quant-Tests), ruff clean. Neue Module: `quant/influxdb_client.py`
+(InfluxDBStore), `quant/schema.py` (Measurement-Konstanten), `quant/ohlcv_ingestion.py` (OHLCV-Ingestion
++ Downsampling), `quant/observability.py` (Metriken + Health-Check), `api/quant_routes.py` (3 Endpunkte).
+Shadow-Loop-Hook (P1-7): optionale OHLCV-Ingestion in `shadow_trading_loop.py` (1 Parameter, ~15 Zeilen).
+InfluxDB 2.7 OSS (ADR-001), Docker-Service, `[quant]`-Abhängigkeiten, 5 neue Config-Felder.
+
 **Abgeschlossen: Harness-Run „Shadow Trading Epic" (Phase `completed`, 2026-08-25).**
 Alle acht Arbeitspakete sind committet: WI-ST-01 Shadow-Trading-Settings/
 Domain-Modelle (`79cb5a0`), WI-ST-03 ShadowExecutionBackend auf Paper-Execution-Stack

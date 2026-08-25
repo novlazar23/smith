@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     shadow_state_path: str = "data/shadow_trading_state.json"
     shadow_start_equity: float = 100000.0
 
+    # Quant Platform — InfluxDB (Phase 1)
+    influxdb_url: str = "http://localhost:8086"
+    influxdb_token: str = ""
+    influxdb_org: str = "smith"
+    influxdb_bucket: str = "market_data"
+    influxdb_enabled: bool = False
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

@@ -26,6 +26,10 @@ dev = [
   "mypy>=1.17,<2",
   "types-PyYAML>=6.0,<7",
 ]
+quant = [
+  "influxdb-client>=1.40,<2",
+  "numpy>=2.0,<3",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

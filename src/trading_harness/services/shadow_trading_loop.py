@@ -47,6 +47,7 @@ from trading_harness.models import (
     ShadowTradingStatus,
     utcnow,
 )
+from trading_harness.quant.ohlcv_ingestion import OHLCVIngestion
 from trading_harness.services.agent_genome_store import AgentGenomeStore
 from trading_harness.services.agent_runtime import AgentRuntime
 from trading_harness.services.evaluation import _compute_classification_metrics
@@ -170,6 +171,7 @@ class ShadowTradingLoop:
         settings: Settings,
         state_store: ShadowTradingStateStore,
         clock: Callable[[], datetime] = utcnow,
+        ohlcv_ingestion: OHLCVIngestion | None = None,  # Quant Platform (P1-7), optional
     ) -> None:
         self._market_data = market_data
         self._backend = backend
@@ -182,6 +184,7 @@ class ShadowTradingLoop:
         self._settings = settings
         self._state_store = state_store
         self._clock = clock
+        self._ohlcv_ingestion = ohlcv_ingestion
 
         # Direktzugriff auf den Paper-Stack für M2M/Stop-Checks (ST.10).
         stack = backend.stack
@@ -610,6 +613,28 @@ class ShadowTradingLoop:
         snapshot_id = _snapshot_id(symbol, now, data)
         snapshot = MarketSnapshot(id=snapshot_id, symbol=symbol, timestamp=now, data=data)
         self._snapshot_store.add(snapshot)
+
+        # Quant Platform (P1-7): optionale OHLCV-Ingestion (best-effort, nie kritisch)
+        if self._ohlcv_ingestion is not None:
+            try:
+                ohlcv_data = data.get("ohlcv")
+                if isinstance(ohlcv_data, dict):
+                    candle = {
+                        "time": now.isoformat(),
+                        "open": float(ohlcv_data.get("open", last)),
+                        "high": float(ohlcv_data.get("high", last)),
+                        "low": float(ohlcv_data.get("low", last)),
+                        "close": float(ohlcv_data.get("close", last)),
+                        "volume": float(ohlcv_data.get("volume", 0.0)),
+                    }
+                    await self._ohlcv_ingestion.ingest_candles(
+                        symbols=[symbol],
+                        timeframe="1m",
+                        candles=[candle],
+                    )
+            except Exception:  # noqa: BLE001 — P1-7: Ingestion-Fehler müssen die Iteration nie unterbrechen
+                logger.debug("OHLCV ingestion failed for %s (non-critical)", symbol)
+
         run_id = f"shadow-run-{snapshot.id}"
         decision_id = f"shadow-dec-{snapshot.id}-{symbol}"
         run_id_holder[0] = run_id
