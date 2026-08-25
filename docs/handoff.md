@@ -111,9 +111,10 @@ Prozess-Hinweis: WI-ST-07 wurde vom ausführenden Schreib-Agenten selbst als com
 gemeldet; die Freigabe erfolgte dennoch erst durch das unabhängige Review ID 36 nach
 Implementierung.
 
-Nicht blockierende Folge-Workitem-Kandidaten aus den Reviews: Concurrent-Start-Test
-über Event-Loops hinweg (WI-ST-06-Review), M2M-Ticker-Einschränkung auf konfigurierte
-Symbole (WI-ST-05-Review).
+Abgeschlossene Folge-Härtung (Commit `0456f6e`, 2026-08-25):
+- Concurrent-Start-Test über Event-Loops hinweg (WI-ST-06-Review): `test_concurrent_start_single_winner` — `asyncio.gather` auf zwei parallelen `start()`-Aufrufen, verifiziert atomare Guard-Semantik auf demselben Event-Loop (kein Bug, reine Abdeckungserweiterung).
+- M2M-Ticker-Einschränkung auf konfigurierte Symbole (WI-ST-05-Review): Guard in `_mark_to_market()` überspringt Positions-Symbole außerhalb von `shadow_trading_symbols` mit `SHADOW_M2M_SYMBOL_OUT_OF_SCOPE`-Warning; `test_mark_to_market_skips_out_of_scope_symbol` als Regressionstest.
+- Beide Folge-Items damit geschlossen; `make check` 899 passed, ruff clean, mypy clean.
 
 Danach: nächstes Epic/Problem gemäß empfohlener Entwicklungsreihenfolge im README
 wählen; es sind keine offenen Arbeitspakete mehr vorhanden.
