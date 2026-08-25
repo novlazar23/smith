@@ -3,10 +3,11 @@
 ## Current state
 
 **Aktiv: Harness-Run „Shadow Trading Epic" (Phase `execution-running`).** Die ersten
-vier Arbeitspakete sind committet: WI-ST-01 Shadow-Trading-Settings/Domain-Modelle
+fünf Arbeitspakete sind committet: WI-ST-01 Shadow-Trading-Settings/Domain-Modelle
 (`79cb5a0`), WI-ST-03 ShadowExecutionBackend auf Paper-Execution-Stack (`c95bfd6`),
 WI-ST-04 Signal-Aggregation/Trade-Proposal-Build (`d1ba6d5`), WI-ST-02 persistenter
-State-Store mit Checksum/Quarantäne/Memory-Limits (`d9141d3`, HEAD).
+State-Store mit Checksum/Quarantäne/Memory-Limits (`d9141d3`), WI-ST-05
+ShadowTradingLoop mit Budget-/Stop-/Audit-Semantik und Test-Suite (`d4ce79a`, HEAD).
 
 **WI-ST-05 (ShadowTradingLoop + Test-Suite) implementiert und verifiziert:**
 
@@ -42,6 +43,48 @@ State-Store mit Checksum/Quarantäne/Memory-Limits (`d9141d3`, HEAD).
   Folge-Workitem-Kandidaten dokumentiert: (MINOR) M2M holt Ticker auch für Positionen
   außerhalb der konfigurierten Symbole; (NIT) Determinismus-Test könnte zusätzlichen
   vollständigen Audit-Log-Vergleich führen.
+
+**WI-ST-06 (Shadow-Trading-API & Wiring) implementiert und verifiziert:**
+
+- Neu: `src/trading_harness/services/shadow_trading_service.py` — `ShadowTradingService`-
+  Fassade: assembliert den Loop aus den verdrahteten Singletons (Paper-Stack-Backend,
+  CryptoMarketDataProvider über den echten Crypto-Router, Runs/Snapshots/RiskEngine/
+  KillSwitch/Genomes/Runtime, StateStore unter `settings.shadow_state_path`). Kein
+  Autostart (Z2): `shutdown()` stoppt ausschließlich einen RUNNING-Loop. Dokumentierte
+  Scope-Abweichung: eigene Service-Datei statt Logik in Routen (AGENTS.md: keine
+  Business-Logik in HTTP-Schicht).
+- `routes.py`: Singleton + 6 Endpunkte — POST `/shadow-trading/{start,stop,run-once}`
+  (Trade-Key; Guards→403 mit maschinenlesbarem `detail.code`, ALREADY_RUNNING→409),
+  GET `/shadow-trading/{status,records,portfolio}` (Read-Key; Filter symbol/status,
+  limit = neueste N, `ge=1` sonst 422). Handler-Namen `shadow_trading_*` (Kollision
+  mit bestehenden `/execution/shadow/*`-Handlern vermieden).
+- `main.py`: FastAPI-Lifespan — kein Autostart beim App-Start; beim Shutdown graceful
+  Stop eines laufenden Loops (`await routes.shadow_trading_service.shutdown()`).
+- Typ-Erweiterung: `snapshot_store: SnapshotStore | PersistedSnapshotStore` in Loop und
+  Fassade (identische `add()`-Signaturen, entspricht der bestehenden Union-Typisierung
+  in `routes.py`; kein Cast).
+- Neu: `tests/test_shadow_trading_api.py` — 13 Tests: Guards (403×3 inkl. Codes),
+  Doppelstart 409, idempotenter Stop mit `restart_required=True`, Frischzustand,
+  Run-Once-Vollkette (Top-Level `snapshot_id`/`run_id`/`decision=="TRADE"`,
+  `symbols[0].execution_result == "FILLED"`, decisions_today, FILLED-BUY-Record),
+  Record-Filter (symbol/status/Limit inkl. 422 bei limit<1), Portfolio über zwei
+  Iterationen (M2M läuft am Iterationsstart), Lifespan-Shutdown stoppt RUNNING-Loop,
+  kein Autostart, Strukturtest aller sechs Pfade inkl. Auth-Dependencies (via
+  `router.routes` — FastAPI inkludiert Router lazy als `_IncludedRouter`).
+- Verifikation (2026-08-24): TDD-Rotlauf zuerst; `uv run pytest
+  tests/test_shadow_trading_api.py -q` → 13 passed; `make check` → **897 passed**,
+  ruff clean, mypy clean (56 source files); Evidence als Harness-Artefakt und unter
+  `evidence/wi-st-06-api-wiring-verification.md`.
+- Unabhängiges Oracle-Review (`local-critic`, 2026-08-25, Review-ID 34): **approved**
+  — keine BLOCKING-/MINOR-/NIT-Findings. Explizit bestätigt: kein Pfad von den
+  `/shadow-trading/*`-Endpunkten oder der Lifespan zur Live-Ausführung (Backend
+  ausschließlich über `build_paper_execution_stack`; Shutdown stoppt nur den Loop);
+  Fassade ohne versteckte Business-Logik (reine Assemblierung + Lese-Filterung,
+  idempotenter Stop); HTTP-Semantik stimmig (403-Guards inkl. Codes,
+  ALREADY_RUNNING→409, Limit-Validierung→422, Trade-/Read-Key-Trennung);
+  Union-Widening akzeptiert (identische `add()`-Signaturen, kein Cast). Nicht
+  blockierender Folge-Workitem-Kandidat: Test für gleichzeitige Start-Requests
+  (ALREADY_RUNNING-Guard über Event-Loops hinweg).
 
 Danach: nächstes offenes Shadow-Trading-Arbeitspaket gemäß Harness-Zustand claimen.
 

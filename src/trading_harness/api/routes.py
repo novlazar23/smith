@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from trading_harness.api.security import require_read_key, require_trade_key
 from trading_harness.config import get_settings
@@ -839,3 +841,78 @@ def crypto_status() -> dict:
         "credential_states": credential_states,
         "shadow_mode_active": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# Shadow-Trading — Loop-Fassade und Endpunkte (Spec ST.1/ST.2/ST.7/ST.8)
+# ---------------------------------------------------------------------------
+
+from trading_harness.services.shadow_execution_backend import ShadowExecutionBackend
+from trading_harness.services.shadow_trading_loop import ShadowTradingStartError
+from trading_harness.services.shadow_trading_service import (
+    ShadowPortfolioReport,
+    ShadowTradingService,
+)
+
+shadow_trading_service = ShadowTradingService(
+    settings,
+    backend=ShadowExecutionBackend(stack=paper_execution_stack),
+    crypto_router=_crypto_router,
+    trading_run_service=trading_run_service,
+    snapshot_store=snapshot_store_inst,
+    risk_engine=risk_engine,
+    kill_switch=execution_kill_switch,
+    agent_source=evolution_genome_store,
+    agent_runtime=agent_runtime,
+)
+
+
+@router.post("/shadow-trading/start", dependencies=[Depends(require_trade_key)])
+async def shadow_trading_start() -> dict[str, Any]:
+    """Startet den Shadow-Loop; Guards werden zu HTTP-Codes gemappt (ST.2)."""
+    try:
+        state = await shadow_trading_service.start()
+    except ShadowTradingStartError as exc:
+        raise HTTPException(
+            status_code=409 if exc.code == "ALREADY_RUNNING" else 403,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return state.model_dump(mode="json")
+
+
+@router.post("/shadow-trading/stop", dependencies=[Depends(require_trade_key)])
+async def shadow_trading_stop() -> dict[str, Any]:
+    """Stoppt den Shadow-Loop graceful und idempotent (ST.2)."""
+    state = await shadow_trading_service.stop()
+    return state.model_dump(mode="json")
+
+
+@router.post("/shadow-trading/run-once", dependencies=[Depends(require_trade_key)])
+async def shadow_trading_run_once() -> dict[str, Any]:
+    """Führt genau eine Iteration aus (ST.1), unabhängig vom Loop-Zustand."""
+    return await shadow_trading_service.run_once()
+
+
+@router.get("/shadow-trading/status", dependencies=[Depends(require_read_key)])
+def shadow_trading_status() -> dict[str, Any]:
+    """Persistenter Session-State (ST.8)."""
+    return shadow_trading_service.status().model_dump(mode="json")
+
+
+@router.get("/shadow-trading/records", dependencies=[Depends(require_read_key)])
+def shadow_trading_records(
+    symbol: str | None = None,
+    status: str | None = None,
+    limit: int | None = Query(default=None, ge=1),
+) -> list[dict[str, Any]]:
+    """Entscheidungs-Records (ST.7); Filter symbol/status, limit = neueste N."""
+    records = shadow_trading_service.records(symbol=symbol, status=status, limit=limit)
+    return [record.model_dump(mode="json") for record in records]
+
+
+@router.get("/shadow-trading/portfolio", dependencies=[Depends(require_read_key)])
+def shadow_trading_portfolio(
+    limit: int | None = Query(default=None, ge=1),
+) -> ShadowPortfolioReport:
+    """Equity-Report inklusive M2M-Historie."""
+    return shadow_trading_service.portfolio(limit=limit)

@@ -52,6 +52,7 @@ from trading_harness.services.agent_runtime import AgentRuntime
 from trading_harness.services.evaluation import _compute_classification_metrics
 from trading_harness.services.kill_switch import KillSwitch
 from trading_harness.services.orchestrator import TradingRunService
+from trading_harness.services.persisted_snapshot_store import PersistedSnapshotStore
 from trading_harness.services.risk_engine import RiskEngine
 from trading_harness.services.shadow_decision import (
     aggregate_signals,
@@ -162,7 +163,7 @@ class ShadowTradingLoop:
         backend: ShadowExecutionBackend,
         agent_runtime: AgentRuntime,
         trading_run_service: TradingRunService,
-        snapshot_store: SnapshotStore,
+        snapshot_store: SnapshotStore | PersistedSnapshotStore,
         risk_engine: RiskEngine,
         kill_switch: KillSwitch,
         agent_source: AgentGenomeStore,
