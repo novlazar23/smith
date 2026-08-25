@@ -2,14 +2,15 @@
 
 ## Current state
 
-**Aktiv: Harness-Run „Shadow Trading Epic" (Phase `execution-running`).** Die ersten
-sechs Arbeitspakete sind committet: WI-ST-01 Shadow-Trading-Settings/Domain-Modelle
-(`79cb5a0`), WI-ST-03 ShadowExecutionBackend auf Paper-Execution-Stack (`c95bfd6`),
-WI-ST-04 Signal-Aggregation/Trade-Proposal-Build (`d1ba6d5`), WI-ST-02 persistenter
-State-Store mit Checksum/Quarantäne/Memory-Limits (`d9141d3`), WI-ST-05
-ShadowTradingLoop mit Budget-/Stop-/Audit-Semantik und Test-Suite (`d4ce79a`),
-WI-ST-06 Shadow-Trading-API & Wiring mit Fassade, Lifespan-Shutdown und Test-Suite
-(`65c39bb`, HEAD). Shadow Trading ist die erste produktive Ausbaustufe des Systems
+**Abgeschlossen: Harness-Run „Shadow Trading Epic" (Phase `completed`, 2026-08-25).**
+Alle acht Arbeitspakete sind committet: WI-ST-01 Shadow-Trading-Settings/
+Domain-Modelle (`79cb5a0`), WI-ST-03 ShadowExecutionBackend auf Paper-Execution-Stack
+(`c95bfd6`), WI-ST-04 Signal-Aggregation/Trade-Proposal-Build (`d1ba6d5`), WI-ST-02
+persistenter State-Store mit Checksum/Quarantäne/Memory-Limits (`d9141d3`), WI-ST-05
+ShadowTradingLoop mit Budget-/Stop-/Audit-Semantik und Test-Suite (`d4ce79a`), WI-ST-06
+Shadow-Trading-API & Wiring mit Fassade, Lifespan-Shutdown und Test-Suite (`65c39bb`),
+WI-ST-08 Final Gate & Evidence (`a96bb90`), WI-ST-07 Dokumentation B6 (`17c667d`,
+HEAD). Shadow Trading ist die erste produktive Ausbaustufe des Systems
 (Erfolgskriterium E7); `live_execution_enabled` bleibt `false`.
 
 **WI-ST-05 (ShadowTradingLoop + Test-Suite) implementiert und verifiziert:**
@@ -89,13 +90,33 @@ WI-ST-06 Shadow-Trading-API & Wiring mit Fassade, Lifespan-Shutdown und Test-Sui
   blockierender Folge-Workitem-Kandidat: Test für gleichzeitige Start-Requests
   (ALREADY_RUNNING-Guard über Event-Loops hinweg).
 
-Danach: WI-ST-07 (Dokumentation: README §8/§11.2/neuer §11.8, `docs/handoff.md`,
-ADR-Hinweis in `docs/architecture.md`) und WI-ST-08 (Final Gate & Evidence: `make check`,
-Isolation-/Determinismus-/Stabilitäts-Berichte, Live-Execution-unchanged-Verifikation)
-sind die aktiven Abschlusspakete der Gruppe E und können parallel laufen. Nach
-Reviews/Evidence: Epic-Abschluss (Phase `completed`). Mögliche Folge-Workitem-Kandidaten
-aus den Reviews: Concurrent-Start-Test über Event-Loops hinweg (WI-ST-06-Review),
-M2M-Ticker-Einschränkung auf konfigurierte Symbole (WI-ST-05-Review).
+**Epic-Closeout (2026-08-25):** Der Harness-Run ist `completed`; alle 8 Arbeitspakete
+(WI-ST-01…WI-ST-08) sind `completed` und unabhängig reviewed — letzte Reviews:
+WI-ST-06 Review-ID 34, WI-ST-08 Review-ID 35, WI-ST-07 Review-ID 36 (jeweils
+local-critic, approved, ohne CRITICAL-Findings). Definition of Done erfüllt:
+
+- `make check` grün (2026-08-25 @ `e1a072a`: 897 passed, ruff clean, mypy clean,
+  56 source files); danach nur noch Docs/Evidence-Commits.
+- B6-Dokumentation vollständig (`17c667d`): README §8-Status, §11.2-Endpunkte,
+  §11.8 „Shadow Trading" (abgegrenzt vom Shadow Mode), Isolation-ADR in
+  `docs/architecture.md`.
+- Evidence abgelegt: `evidence/wi-st-08-final-gate-verification.md` (+ Harness-
+  Artefakt, sha256 `9c881fb5…`) — Isolation-Spy (0 Live-Write-Calls), Determinismus
+  (ST.14), Stabilität/Memory (ST.15, Grenzen 10000 Records/2000 Portfolio-Entries,
+  State-Datei ≤ 1 MiB), Sicherheitsgrenzen unverändert.
+- `live_execution_enabled` bleibt `false`; Kill Switch byte-identisch zum Phase-4-Stand
+  (sha256 `1389df52…`); Symbol-Allowlist unverändert; Feature standardmäßig deaktiviert.
+
+Prozess-Hinweis: WI-ST-07 wurde vom ausführenden Schreib-Agenten selbst als completed
+gemeldet; die Freigabe erfolgte dennoch erst durch das unabhängige Review ID 36 nach
+Implementierung.
+
+Nicht blockierende Folge-Workitem-Kandidaten aus den Reviews: Concurrent-Start-Test
+über Event-Loops hinweg (WI-ST-06-Review), M2M-Ticker-Einschränkung auf konfigurierte
+Symbole (WI-ST-05-Review).
+
+Danach: nächstes Epic/Problem gemäß empfohlener Entwicklungsreihenfolge im README
+wählen; es sind keine offenen Arbeitspakete mehr vorhanden.
 
 Der Repository-Grundstand bietet eine reproduzierbare Python 3.12-Umgebung, einen
 eingefrorenen Dependency-Lock, passende lokale/CI-Checks und versionierte
