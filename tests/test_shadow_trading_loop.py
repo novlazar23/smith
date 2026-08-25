@@ -36,6 +36,7 @@ from trading_harness.models import (
     AgentGenome,
     AgentSignal,
     AgentStatus,
+    PaperPosition,
     PaperPositionStatus,
     PortfolioState,
     RunOutcome,
@@ -446,6 +447,37 @@ async def test_start_rejected_when_already_running(env) -> None:
             await asyncio.gather(task, return_exceptions=True)
 
 
+async def test_concurrent_start_single_winner(env) -> None:
+    """ST.2: zwei parallele start()-Aufrufe (ein Event Loop) -> genau ein Winner.
+
+    Der Guard ist auf einem Event Loop atomar (kein await zwischen Check und
+    Set), daher muss der zweite Aufruf ALREADY_RUNNING erhalten — es darf
+    keinen Double-Start geben (ein Task, ein SHADOW_LOOP_STARTED-Audit).
+    """
+    outcomes = await asyncio.gather(
+        env.loop.start(),
+        env.loop.start(),
+        return_exceptions=True,
+    )
+    try:
+        errors = [o for o in outcomes if isinstance(o, ShadowTradingStartError)]
+        assert len(errors) == 1
+        assert errors[0].code == "ALREADY_RUNNING"
+        assert sum(1 for o in outcomes if not isinstance(o, BaseException)) == 1
+        assert env.loop.status().status is ShadowLoopStatus.RUNNING
+        assert env.loop._task is not None
+        assert not env.loop._task.done()
+        started = [
+            a for a in env.runs.get_audit_log() if a.action == "SHADOW_LOOP_STARTED"
+        ]
+        assert len(started) == 1
+    finally:
+        with contextlib.suppress(asyncio.CancelledError):
+            if env.loop._task is not None:
+                env.loop._task.cancel()
+                await asyncio.gather(env.loop._task, return_exceptions=True)
+
+
 async def test_start_cancels_stale_task(env) -> None:
     """ST.2: Stale Task nach Self-Stop wird vor dem Neustart kontrolliert beendet."""
     env.state_store.update_state({"status": "STOPPED", "restart_required": True})
@@ -593,6 +625,37 @@ async def test_mark_to_market_continues_when_budget_exhausted(env) -> None:
     assert result["symbols"][0]["decision"] == "SKIPPED_BUDGET"
     assert len(env.state_store.portfolio_history()) == 2
     assert env.loop.status().status is ShadowLoopStatus.RUNNING
+
+
+async def test_mark_to_market_skips_out_of_scope_symbol(env, caplog) -> None:
+    """ST.10-Härten: Out-of-Scope-Positionen (Symbol außer Konfig-Set) lösen
+    keine Ticker-Abfrage aus; es wird nur gewarnt, die Position bleibt offen.
+    """
+    env.settings.shadow_trading_symbols = ["BTCUSDT"]
+    # Offene Position für ein Symbol, das das konfigurierte Set verlassen hat.
+    pos = PaperPosition(
+        trade_id="shadow-dec-legacy-ETHUSDT",
+        run_id="shadow-run-legacy",
+        symbol="ETHUSDT",
+        side="LONG",
+        entry_price=2000.0,
+        quantity=10.0,
+    )
+    env.stack.position_store.add(pos)
+    caplog.set_level(
+        logging.WARNING, logger="trading_harness.services.shadow_trading_loop"
+    )
+
+    with patch.object(env.provider, "get_ticker", wraps=env.provider.get_ticker) as spy:
+        await env.loop._mark_to_market({})
+
+    spy.assert_not_called()
+    assert "SHADOW_M2M_SYMBOL_OUT_OF_SCOPE symbol=ETHUSDT" in caplog.text
+    assert f"pos_id={pos.id}" in caplog.text
+    # Kein Crash: die Position bleibt offen und M2M hat den State aktualisiert.
+    assert env.stack.position_store.all()[0].status is PaperPositionStatus.OPEN
+    assert len(env.state_store.portfolio_history()) == 1
+    assert env.loop.status().open_positions == 1
 
 
 # --- CHUNK3 ---

@@ -887,6 +887,15 @@ class ShadowTradingLoop:
         for pos in open_positions:
             if pos.symbol in prices:
                 continue
+            if pos.symbol not in self._settings.shadow_trading_symbols:
+                # ST.10-Härtung: Positions-Symbole außerhalb des konfigurierten
+                # Sets veralten — keine Ticker-Abfrage, kein Stop-/Target-Check.
+                logger.warning(
+                    "SHADOW_M2M_SYMBOL_OUT_OF_SCOPE symbol=%s pos_id=%s",
+                    pos.symbol,
+                    pos.id,
+                )
+                continue
             try:
                 data = await asyncio.to_thread(self._market_data.get_ticker, pos.symbol)
                 candidate = data.get("last") if isinstance(data, dict) else None
