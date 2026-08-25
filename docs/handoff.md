@@ -2,6 +2,12 @@
 
 ## Current state
 
+**Phase 2 abgeschlossen: Quantitative Trading Data Platform — Feature Engineering (2026-08-25).**
+1020 Tests (980+40 neue Phase-2-Tests), ruff clean, mypy clean (64 source files).
+Neue Module: `quant/features.py` (FeatureEngine: RSI, MACD, Bollinger, ATR, Volatilität, VWAP),
+`quant/feature_store.py` (FeatureStore: compute+store+query in InfluxDB), erweiterte
+`api/quant_routes.py` (2 neue Endpunkte: /quant/features/compute, /quant/features/{symbol}).
+
 **Phase 1 abgeschlossen: Quantitative Trading Data Platform — InfluxDB + OHLCV Ingestion (2026-08-25).**
 980 Tests (899 bestehende + 81 neue Quant-Tests), ruff clean. Neue Module: `quant/influxdb_client.py`
 (InfluxDBStore), `quant/schema.py` (Measurement-Konstanten), `quant/ohlcv_ingestion.py` (OHLCV-Ingestion

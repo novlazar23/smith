@@ -1,30 +1,43 @@
-"""Quant-Plattform API-Endpunkte (Phase 1, P1-8).
+"""Quant-Plattform API-Endpunkte (Phase 1, P1-8; Phase 2, P2-3).
 
-Stellt die InfluxDB-basierte OHLCV-Ingestion unter ``/quant/*`` als eigenen
-``APIRouter`` bereit. Die Einhängung in die Haupt-App erfolgt erst in Phase 9
-(siehe ``docs/quant-platform-phase01-plan.md``, P1-8) — deshalb
-trägt der Router selbst seinen Prefix und ``main.py`` bleibt unangetastet.
+Stellt die InfluxDB-basierte OHLCV-Ingestion und die Feature-Endpunkte
+unter ``/quant/*`` als eigenen ``APIRouter`` bereit. Die Einhängung in die
+Haupt-App erfolgt erst in Phase 9 (siehe ``docs/quant-platform-phase01-plan.md``,
+P1-8) — deshalb trägt der Router selbst seinen Prefix und ``main.py`` bleibt
+unangetastet.
 
 Auth-Trennung nach dem bestehenden Read/Trade-Muster (R5.21):
 
-- ``POST /quant/ingest/ohlcv`` → Trade-Key
-- ``GET  /quant/status``       → Read-Key
-- ``GET  /quant/schema``       → Read-Key
+- ``POST /quant/ingest/ohlcv``        → Trade-Key
+- ``GET  /quant/status``              → Read-Key
+- ``GET  /quant/schema``              → Read-Key
+- ``POST /quant/features/compute``    → Trade-Key (Schreiboperation)
+- ``GET  /quant/features/{symbol}``   → Read-Key
 
-Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``) werden über die
-modul-scope-Getter ``get_settings`` (re-export aus ``config``) und
-``get_influx_store`` aufgelöst — Unit-Tests binden beide per Monkeypatch auf
-Mocks, es wird nie eine echte InfluxDB-Verbindung aufgebaut.
+Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``, ``FeatureStore``)
+werden über die modul-scope-Getter ``get_settings`` (re-export aus ``config``),
+``get_influx_store`` und ``get_feature_store`` aufgelöst — Unit-Tests binden
+alle per Monkeypatch auf Mocks, es wird nie eine echte InfluxDB-Verbindung
+aufgebaut.
 
 Die Candle-Validierung (OHLC-Konsistenz) und die Point-Konvertierung sind die
 eigentliche Endpunkt-Logik; die Ticker-basierte Ingestion aus dem
 Shadow-Loop (``quant/ohlcv_ingestion.py``, P1-6) ist bewusst keine
 Abhängigkeit dieses Moduls.
+
+Feature-Endpunkte (P2-3): ``POST /quant/features/compute`` berechnet mit dem
+deterministischen ``FeatureEngine`` und persistiert über ``FeatureStore``
+(falls verfügbar); ``GET /quant/features/{symbol}`` liefert gespeicherte
+Features. ``quant/feature_store.py`` entsteht parallel (P2-2) — der Getter
+liefert daher ``None``, bis das Modul vorhanden ist, und die Endpunkte
+bleiben ohne Persistenz funktional (``stored=false`` / leere Feature-Listen).
 """
 
 from __future__ import annotations
 
+import importlib
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -32,6 +45,7 @@ from pydantic import BaseModel, Field, field_validator
 from trading_harness.api.security import require_read_key, require_trade_key
 from trading_harness.config import get_settings
 from trading_harness.quant import schema as quant_schema
+from trading_harness.quant.features import FeatureEngine
 from trading_harness.quant.influxdb_client import InfluxDBStore
 
 # Exchange-Tag für manuell per API ingestete Daten (keine konkrete Exchange).
@@ -73,6 +87,33 @@ def get_influx_store() -> InfluxDBStore:
             bucket=settings.influxdb_bucket,
         )
     return _influx_store
+
+
+_feature_store: Any | None = None
+
+
+def get_feature_store() -> Any | None:
+    """Liefert den geteilten ``FeatureStore`` (lazy) — oder ``None``.
+
+    ``quant/feature_store.py`` entsteht parallel (P2-2) und wird deshalb
+    lazy per ``importlib`` geladen: solange das Modul fehlt (oder der
+    Konstruktor noch nicht kompatibel ist), liefert der Getter ``None``
+    und die Feature-Endpoints bleiben funktional ohne Persistenz.
+    """
+    global _feature_store
+    if _feature_store is None:
+        try:
+            module = importlib.import_module("trading_harness.quant.feature_store")
+        except ImportError:
+            return None
+        feature_store_cls = getattr(module, "FeatureStore", None)
+        if feature_store_cls is None:
+            return None
+        try:
+            _feature_store = feature_store_cls(store=get_influx_store())
+        except (TypeError, ValueError):
+            return None
+    return _feature_store
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +188,49 @@ class QuantSchemaResponse(BaseModel):
     fields_by_measurement: dict[str, list[str]]
 
 
+class FeatureComputeRequest(BaseModel):
+    """Compute-Anfrage: Kerzenreihe eines Symbols → Features berechnen + speichern."""
+
+    symbol: str = Field(min_length=1)
+    timeframe: str
+    exchange: str = Field(min_length=1)
+    candles: list[OHLCVCandle] = Field(min_length=1)
+
+    @field_validator("timeframe")
+    @classmethod
+    def _check_timeframe(cls, value: str) -> str:
+        if value not in quant_schema.SUPPORTED_TIMEFRAMES:
+            raise ValueError(
+                f"unsupported timeframe '{value}', "
+                f"expected one of: {', '.join(quant_schema.SUPPORTED_TIMEFRAMES)}"
+            )
+        return value
+
+    @field_validator("symbol")
+    @classmethod
+    def _check_symbol(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("symbol must be non-empty")
+        return value
+
+
+class FeatureComputeResponse(BaseModel):
+    """Ergebnis eines Compute-Laufs: verfügbare Features + Persistenz-Status."""
+
+    status: str = "ok"
+    symbol: str
+    feature_count: int = Field(ge=0)
+    stored: bool
+
+
+class FeatureQueryResponse(BaseModel):
+    """Gespeicherte Features für ein Symbol (leere Liste, falls keine vorhanden)."""
+
+    symbol: str
+    features: list[dict[str, Any]]
+    count: int = Field(ge=0)
+
+
 # ---------------------------------------------------------------------------
 # Hilfsfunktionen (deterministische Ingest-Logik)
 # ---------------------------------------------------------------------------
@@ -190,6 +274,21 @@ def _require_quant_enabled() -> None:
                 "message": "Quant feature is disabled (influxdb_enabled=false)",
             },
         )
+
+
+def _candles_to_engine_input(candles: list[OHLCVCandle]) -> list[dict[str, Any]]:
+    """API-Kerzen → FeatureEngine-Kerzen (numerische OHLCV-Fields + time)."""
+    return [
+        {
+            "time": candle.time,
+            "open": candle.open,
+            "high": candle.high,
+            "low": candle.low,
+            "close": candle.close,
+            "volume": candle.volume,
+        }
+        for candle in candles
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -273,3 +372,78 @@ def quant_schema_doc() -> QuantSchemaResponse:
         fields=list(QUANT_OHLCV_FIELDS),
         fields_by_measurement=fields_by_measurement,
     )
+
+
+@router.post(
+    "/features/compute",
+    response_model=FeatureComputeResponse,
+    dependencies=[Depends(require_trade_key)],
+)
+async def compute_features(payload: FeatureComputeRequest) -> FeatureComputeResponse:
+    """Berechnet Features mit dem ``FeatureEngine`` und persistiert sie.
+
+    ``feature_count`` zählt die verfügbaren Indikatoren (FeatureEngine-
+    Semantik: ``None`` bei unzureichender Historie zählt nicht). ``stored``
+    ist True, wenn ein ``FeatureStore`` die Ergebnisse übernommen hat;
+    ohne Store bleibt der Endpunkt funktional (``stored=false``).
+    """
+    _require_quant_enabled()
+    engine = FeatureEngine()
+    candle_dicts = _candles_to_engine_input(payload.candles)
+    result = engine.compute(candle_dicts)
+    feature_count = int(result["feature_count"])
+
+    store = get_feature_store()
+    stored = False
+    if store is not None:
+        await store.compute_and_store(
+            payload.symbol,
+            payload.timeframe,
+            candle_dicts,
+            exchange=payload.exchange,
+        )
+        stored = True
+    return FeatureComputeResponse(
+        status="ok",
+        symbol=payload.symbol,
+        feature_count=feature_count,
+        stored=stored,
+    )
+
+
+@router.get(
+    "/features/{symbol}",
+    response_model=FeatureQueryResponse,
+    dependencies=[Depends(require_read_key)],
+)
+async def get_features(
+    symbol: str,
+    timeframe: str = "1m",
+    start: datetime | None = None,
+    end: datetime | None = None,
+    features: str | None = None,
+) -> FeatureQueryResponse:
+    """Liefert gespeicherte Features für ein Symbol.
+
+    ``features`` ist eine Komma-getrennte Feature-Namensliste; ohne Angabe
+    werden alle gespeicherten Features zurückgegeben. Unbekannte Symbole
+    liefern eine leere Liste (kein Fehler).
+    """
+    _require_quant_enabled()
+    if timeframe not in quant_schema.SUPPORTED_TIMEFRAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported timeframe '{timeframe}'",
+        )
+    if features:
+        feature_names = [name.strip() for name in features.split(",") if name.strip()]
+    else:
+        feature_names = []
+    # FeatureStore erwartet UTC-ISO-Strings (naive API-Zeiten sind UTC).
+    start_iso = start.isoformat() if start is not None else None
+    end_iso = end.isoformat() if end is not None else None
+    store = get_feature_store()
+    rows: list[dict[str, Any]] = []
+    if store is not None:
+        rows = await store.get_features(symbol, timeframe, feature_names, start_iso, end_iso)
+    return FeatureQueryResponse(symbol=symbol, features=rows, count=len(rows))
