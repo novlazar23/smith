@@ -735,6 +735,7 @@ Crypto Adapters: Bybit (V5), Bitget (V3), Binance (V4), Coinbase (Pro) — Read/
                  Pydantic-Response-Validierung, Retry mit exponentiellem Backoff; simulated=True
 Shadow Mode: ✅ COMPLETE (ShadowModeLogger, ShadowModeAdapter, LiveExecutionService-Wiring,
               /execution/shadow/* Endpunkte)
+Shadow Trading: ✅ implementiert, standardmäßig deaktiviert (shadow_trading_enabled=false)
 Risk Engine: vorhanden
 Evolution Policy: vorhanden
 Agent Registry: In-Memory MVP (+ PostgreSQL-Store mit Fallback)
@@ -744,6 +745,8 @@ Exchange Adapter: 4 Crypto-Adapter + PaperExchangeAdapter (PaperExecutionStack: 
                  Stores + PositionManager + PortfolioTracker/PnL, WI-P4-4) + ShadowModeAdapter
                  + StubExchangeAdapter (NOT_IMPLEMENTED-Fallback, nur ohne Adapter-Injection)
 ```
+
+`live_execution_enabled` bleibt weiterhin `false`; das Shadow-Trading-Feature ändert daran nichts.
 
 Phase 5 Core Services implementiert:
 - `KillSwitch` — thread-safe, atomar JSON-persistiert (unique mkstemp-Tmp-Datei + `os.replace`); die
@@ -926,6 +929,16 @@ Das System durchläuft zyklisch vier Phasen:
 | POST | `/evaluations` | Evaluation starten |
 | GET | `/evaluations/{id}` | Evaluations-Ergebnis |
 
+### Shadow Trading (standardmäßig deaktiviert)
+| Methode | Pfad | Beschreibung |
+|---|---|---|
+| POST | `/shadow-trading/start` | Startet den Shadow-Trading-Loop (Trade-Key); Guards antworten 403 mit maschinenlesbarem Code (`SHADOW_TRADING_DISABLED`, `LIVE_EXECUTION_MUST_BE_DISABLED`, `NO_SYMBOLS_CONFIGURED`), bereits laufend → 409 `ALREADY_RUNNING` |
+| POST | `/shadow-trading/stop` | Stoppt den Loop idempotent (Trade-Key); antwortet mit `restart_required=true`, wenn kein Loop lief (kein Fehlerfall) |
+| POST | `/shadow-trading/run-once` | Führt genau eine Iteration der Kette aus (Ticker → Analyse → Risiko → Paper-Ausführung → Record), auch ohne gestarteten Loop (Trade-Key) |
+| GET | `/shadow-trading/status` | Session-State (Read-Key): Flags, Running/Uptime, Budget (`decisions_today`/`budget_max`), Equity, offene Positionen, Kill-Switch-Status, Symbole, `restart_required` u.a. |
+| GET | `/shadow-trading/records` | Shadow-Trading-Records mit Filtern `symbol`/`status` und `limit` (neueste N; `limit < 1` → 422) (Read-Key) |
+| GET | `/shadow-trading/portfolio` | Portfolio-/PnL-Historie des Shadow-Loops (Read-Key) |
+
 ## 11.3 Shadow Mode
 
 Shadow Mode loggt Execution-Entscheidungen ohne sie tatsächlich auszuführen.
@@ -997,6 +1010,46 @@ Das System erkennt folgende Marktphasen:
 - `recovery` — Erholung nach Crash
 
 Agenten können regimespezifisch spezialisiert sein.
+
+## 11.8 Shadow Trading
+
+Shadow Trading (Shadow-Trading-Epic, WI-ST-01 bis WI-ST-06) ist der kontinuierliche
+Simulations-Loop unter `/shadow-trading/*`. Jede Iteration folgt der Kette
+Ticker → Snapshot → Agenten-Analyse → Aggregation → deterministische Risk Engine →
+Paper-Ausführung → Record; dabei entstehen `ShadowTradingRecord`s sowie Einträge in
+der Portfolio-Simulation des Paper-Stacks (inkl. PnL) und im Audit-Trail.
+
+**Begriffsabgrenzung zu „Shadow Mode" (Abschnitt 11.3):**
+
+- „Shadow Mode" (Phase 5) = pro-Order-Protokoll unter `/execution/shadow/*`; es loggt
+  Execution-Entscheidungen, ohne sie auszuführen.
+- „Shadow Trading" (neu) = kontinuierlicher Simulations-Loop unter `/shadow-trading/*`
+  mit eigenem State (`data/shadow_trading_state.json`), eigener Portfolio-Simulation
+  und eigener Audit-Kette.
+- Die beiden Features sind unabhängig voneinander.
+
+Shadow Trading ist standardmäßig deaktiviert (`shadow_trading_enabled=false`). Die
+Ausführung erfolgt ausschließlich über den Paper-Execution-Stack, es gibt keinen Pfad
+zu Exchange- oder Live-Adaptern, und `live_execution_enabled` bleibt `false`. Pro
+Prozess läuft maximal ein Loop; nach einem Neustart läuft der Loop nicht automatisch
+weiter (kein Auto-Resume).
+
+Voraussetzungen für den Start: `shadow_trading_enabled=true` und mindestens ein Symbol
+in `shadow_trading_symbols`; andernfalls antwortet `/shadow-trading/start` mit 403 und
+dem maschinenlesbaren Code `SHADOW_TRADING_DISABLED` bzw. `NO_SYMBOLS_CONFIGURED`. Der
+Start wird zusätzlich mit 403 `LIVE_EXECUTION_MUST_BE_DISABLED` abgelehnt, solange
+`live_execution_enabled` nicht `false` ist, und mit 409 `ALREADY_RUNNING`, wenn bereits
+ein Loop läuft.
+
+Start/Stop-Beispiel (Platzhalter-Keys, niemals echte Secrets im Repo):
+
+```bash
+curl -X POST http://localhost:8080/shadow-trading/start -H "X-Trade-API-Key: $TRADING_API_KEY"
+
+curl http://localhost:8080/shadow-trading/status -H "X-Read-API-Key: $READ_API_KEY"
+
+curl -X POST http://localhost:8080/shadow-trading/stop -H "X-Trade-API-Key: $TRADING_API_KEY"
+```
 
 ---
 

@@ -9,7 +9,8 @@ WI-ST-04 Signal-Aggregation/Trade-Proposal-Build (`d1ba6d5`), WI-ST-02 persisten
 State-Store mit Checksum/Quarantäne/Memory-Limits (`d9141d3`), WI-ST-05
 ShadowTradingLoop mit Budget-/Stop-/Audit-Semantik und Test-Suite (`d4ce79a`),
 WI-ST-06 Shadow-Trading-API & Wiring mit Fassade, Lifespan-Shutdown und Test-Suite
-(`65c39bb`, HEAD).
+(`65c39bb`, HEAD). Shadow Trading ist die erste produktive Ausbaustufe des Systems
+(Erfolgskriterium E7); `live_execution_enabled` bleibt `false`.
 
 **WI-ST-05 (ShadowTradingLoop + Test-Suite) implementiert und verifiziert:**
 
@@ -88,7 +89,13 @@ WI-ST-06 Shadow-Trading-API & Wiring mit Fassade, Lifespan-Shutdown und Test-Sui
   blockierender Folge-Workitem-Kandidat: Test für gleichzeitige Start-Requests
   (ALREADY_RUNNING-Guard über Event-Loops hinweg).
 
-Danach: nächstes offenes Shadow-Trading-Arbeitspaket gemäß Harness-Zustand claimen.
+Danach: WI-ST-07 (Dokumentation: README §8/§11.2/neuer §11.8, `docs/handoff.md`,
+ADR-Hinweis in `docs/architecture.md`) und WI-ST-08 (Final Gate & Evidence: `make check`,
+Isolation-/Determinismus-/Stabilitäts-Berichte, Live-Execution-unchanged-Verifikation)
+sind die aktiven Abschlusspakete der Gruppe E und können parallel laufen. Nach
+Reviews/Evidence: Epic-Abschluss (Phase `completed`). Mögliche Folge-Workitem-Kandidaten
+aus den Reviews: Concurrent-Start-Test über Event-Loops hinweg (WI-ST-06-Review),
+M2M-Ticker-Einschränkung auf konfigurierte Symbole (WI-ST-05-Review).
 
 Der Repository-Grundstand bietet eine reproduzierbare Python 3.12-Umgebung, einen
 eingefrorenen Dependency-Lock, passende lokale/CI-Checks und versionierte
