@@ -3,11 +3,13 @@
 ## Current state
 
 **Aktiv: Harness-Run „Shadow Trading Epic" (Phase `execution-running`).** Die ersten
-fünf Arbeitspakete sind committet: WI-ST-01 Shadow-Trading-Settings/Domain-Modelle
+sechs Arbeitspakete sind committet: WI-ST-01 Shadow-Trading-Settings/Domain-Modelle
 (`79cb5a0`), WI-ST-03 ShadowExecutionBackend auf Paper-Execution-Stack (`c95bfd6`),
 WI-ST-04 Signal-Aggregation/Trade-Proposal-Build (`d1ba6d5`), WI-ST-02 persistenter
 State-Store mit Checksum/Quarantäne/Memory-Limits (`d9141d3`), WI-ST-05
-ShadowTradingLoop mit Budget-/Stop-/Audit-Semantik und Test-Suite (`d4ce79a`, HEAD).
+ShadowTradingLoop mit Budget-/Stop-/Audit-Semantik und Test-Suite (`d4ce79a`),
+WI-ST-06 Shadow-Trading-API & Wiring mit Fassade, Lifespan-Shutdown und Test-Suite
+(`65c39bb`, HEAD).
 
 **WI-ST-05 (ShadowTradingLoop + Test-Suite) implementiert und verifiziert:**
 
