@@ -46,6 +46,10 @@ nur Import-Aufräumarbeit, keine Verhaltensänderung). `SimilarityStore` (P5-2) 
 die P5-4-Integrationstests werden parallel bearbeitet; die Endpunkte von P5-3
 hängen bewusst nicht davon ab (keine Persistenz-Semantik im MVP-Vertrag).
 
+**Phase 12 abgeschlossen: Quantitative Trading Data Platform — Documentation (2026-08-25).**
+Dokumentation: `docs/quant-platform.md` (Architektur, Module, API, Konfiguration, Beispiele),
+`docs/quant-integration.md` (Shadow-Loop-Integration, Performance, Fehlerbehandlung).
+
 **Phase 11 abgeschlossen: Quantitative Trading Data Platform — Hardening (2026-08-25).**
 1365 Tests (1327+38 neue Phase-11-Tests), ruff clean, mypy clean (80 source files).
 Neue Module: `quant/validation.py` (Validator: Candle, Feature, Symbol, Timeframe, Batch),
