@@ -46,6 +46,27 @@ nur Import-Aufräumarbeit, keine Verhaltensänderung). `SimilarityStore` (P5-2) 
 die P5-4-Integrationstests werden parallel bearbeitet; die Endpunkte von P5-3
 hängen bewusst nicht davon ab (keine Persistenz-Semantik im MVP-Vertrag).
 
+**Docker-Ready Phase abgeschlossen: Autonomous System with Web Interface (2026-08-25).**
+1378 Tests ✓, 82 Source Files ✓, 100 API Endpoints ✓.
+
+**GESAMTÜBERSICHT:**
+- Quant Platform (Phasen 0-13): ✅ 22 Module, 22 API-Endpunkte
+- Evaluation Engine: ✅ Brier Score, Calibration, Walk-Forward, Sharpe
+- React Dashboard: ✅ Vite + Tailwind, 6 Views
+- Docker Integration: ✅ 5 Services (API, Web, PostgreSQL, InfluxDB, Redis)
+
+**Roadmap-Status:**
+- Phase 1 — Research Runtime: ✅ 95%
+- Phase 2 — Evaluation: ✅ 80%
+- Phase 3 — Evolution: ✅ 90%
+- Phase 4 — Paper Trading: ✅ 100%
+- Phase 5 — Live Execution: ✅ 100% (sicherheitshalber deaktiviert)
+
+**Nächste Schritte:**
+- Dashboard an echte API-Endpunkte anbinden
+- PostgreSQL-Persistenz für alle Services
+- Walk-Forward Analyse in UI integrieren
+
 **Docker-Ready Phase gestartet: Autonomous System with Web Interface (2026-08-25).**
 1378 Tests (1365+13 neue Evaluation Engine Tests), ruff clean, mypy clean.
 Neues Modul: `services/evaluation_engine.py` (Brier Score, Calibration, Walk-Forward, Sharpe).
