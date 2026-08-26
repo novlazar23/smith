@@ -1,5 +1,5 @@
 """Quant-Plattform API-Endpunkte (Phase 1, P1-8; Phase 2, P2-3; Phase 3, P3-3;
-Phase 4, P4-3; Phase 5, P5-3).
+Phase 4, P4-3; Phase 5, P5-3; Phase 6, P6-3).
 
 Stellt die InfluxDB-basierte OHLCV-Ingestion, die Feature-Endpunkte, die
 Anomaly-Endpunkte und die Similarity-Endpunkte unter ``/quant/*`` als eigenen
@@ -20,12 +20,16 @@ Auth-Trennung nach dem bestehenden Read/Trade-Muster (R5.21):
 - ``GET  /quant/regime/{symbol}``     → Read-Key
 - ``POST /quant/similarity/find``     → Trade-Key (Schreiboperation)
 - ``GET  /quant/similarity/{symbol}`` → Read-Key
+- ``POST /quant/outcomes/compute``    → Trade-Key (Schreiboperation)
+- ``GET  /quant/outcomes/{symbol}``   → Read-Key
 
-Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``, ``FeatureStore``,
-``AnomalyStore``) werden über die modul-scope-Getter ``get_settings``
-(re-export aus ``config``), ``get_influx_store``, ``get_feature_store`` und
-``get_anomaly_store`` aufgelöst — Unit-Tests binden alle per Monkeypatch auf
-Mocks, es wird nie eine echte InfluxDB-Verbindung aufgebaut.
+ Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``, ``FeatureStore``,
+``AnomalyStore``, ``RegimeStore``, ``ForwardOutcomeStore``) werden über die
+modul-scope-Getter ``get_settings`` (re-export aus ``config``),
+``get_influx_store``, ``get_feature_store``, ``get_anomaly_store``,
+``get_regime_store`` und ``get_outcome_store`` aufgelöst — Unit-Tests binden
+alle per Monkeypatch auf Mocks, es wird nie eine echte InfluxDB-Verbindung
+aufgebaut.
 
 Die Candle-Validierung (OHLC-Konsistenz) und die Point-Konvertierung sind die
 eigentliche Endpunkt-Logik; die Ticker-basierte Ingestion aus dem
@@ -62,9 +66,20 @@ persistiert sie über ``RegimeStore`` (falls verfügbar);
  top_k ähnlichsten historischen Fenster für eine Query-Kerzenreihe — reine
  In-Memory-Berechnung ohne Persistenz (``best_distance``/``best_correlation``
  sind ``None``, wenn zu wenig Historie vorhanden ist).
- ``GET /quant/similarity/{symbol}`` liefert Similitäts-Infos:
- ``available`` spiegelt die InfluxDB-Verfügbarkeit (Datenquelle für
- Historie) und ``window_size`` die Standard-Fenstergröße der Engine.
+  ``GET /quant/similarity/{symbol}`` liefert Similitäts-Infos:
+  ``available`` spiegelt die InfluxDB-Verfügbarkeit (Datenquelle für
+  Historie) und ``window_size`` die Standard-Fenstergröße der Engine.
+
+  Forward-Outcome-Endpunkte (P6-3): ``POST /quant/outcomes/compute``
+  berechnet mit dem deterministischen ``ForwardOutcomeEngine``
+  (``quant/forward_outcomes.py``, P6-1) die Forward-Return-Statistik
+  (Mean/Median, Hit Rate, Profit Factor, Expectancy, Std) für die
+  angefragten Horizonte und persistiert über ``ForwardOutcomeStore``
+  (falls verfügbar); ``GET /quant/outcomes/{symbol}`` liefert gespeicherte
+  Outcomes. ``quant/forward_outcomes_store.py`` entsteht parallel (P6-2) —
+  der Getter ``get_outcome_store`` liefert daher ``None``, bis das Modul
+  vorhanden ist, und die Endpunkte bleiben ohne Persistenz funktional
+  (``stored=false`` / leere Outcome-Listen).
 """
 
 from __future__ import annotations
@@ -81,6 +96,7 @@ from trading_harness.config import get_settings
 from trading_harness.quant import schema as quant_schema
 from trading_harness.quant.anomaly_detection import Anomaly, AnomalyDetector
 from trading_harness.quant.features import FeatureEngine
+from trading_harness.quant.forward_outcomes import ForwardOutcomeEngine
 from trading_harness.quant.influxdb_client import InfluxDBStore
 from trading_harness.quant.regime_detection import REGIME_NAMES, RegimeDetector, RegimeResult
 from trading_harness.quant.similarity import SimilarityEngine
@@ -211,6 +227,36 @@ def get_regime_store() -> Any | None:
         except (TypeError, ValueError):
             return None
     return _regime_store
+
+
+_outcome_store: Any | None = None
+
+
+def get_outcome_store() -> Any | None:
+    """Liefert den geteilten ``ForwardOutcomeStore`` (lazy) — oder ``None``.
+
+    ``quant/forward_outcomes_store.py`` entsteht parallel (P6-2) und wird
+    deshalb lazy per ``importlib`` geladen: solange das Modul fehlt (oder
+    der Konstruktor noch nicht kompatibel ist), liefert der Getter ``None``
+    und die Outcome-Endpoints bleiben funktional ohne Persistenz.
+    Endpunkt-Vertrag: ``compute_and_store(symbol, timeframe, candles,
+    pattern_length=..., exchange=...)`` → Ergebnis mit ``stored`` und
+    ``get_outcomes(symbol, timeframe, start, end)``.
+    """
+    global _outcome_store
+    if _outcome_store is None:
+        try:
+            module = importlib.import_module("trading_harness.quant.forward_outcomes_store")
+        except ImportError:
+            return None
+        outcome_store_cls = getattr(module, "ForwardOutcomeStore", None)
+        if outcome_store_cls is None:
+            return None
+        try:
+            _outcome_store = outcome_store_cls(store=get_influx_store())
+        except (TypeError, ValueError):
+            return None
+    return _outcome_store
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +533,82 @@ class SimilarityInfoResponse(BaseModel):
     window_size: int = Field(ge=1)
 
 
+class OutcomeComputeRequest(BaseModel):
+    """Compute-Anfrage: Kerzenreihe eines Symbols → Forward Outcomes berechnen.
+
+    ``pattern_length`` ist die Referenzmuster-Länge in Kerzen; ``horizons``
+    die Forward-Rücklauf-Horizonte in Kerzen (jeder ≥ 1).
+    """
+
+    symbol: str = Field(min_length=1)
+    timeframe: str
+    exchange: str = Field(min_length=1)
+    candles: list[OHLCVCandle] = Field(min_length=1)
+    pattern_length: int = Field(default=10, ge=1, le=1000)
+    horizons: list[int] = Field(default_factory=lambda: [5, 10, 20], min_length=1)
+
+    @field_validator("timeframe")
+    @classmethod
+    def _check_timeframe(cls, value: str) -> str:
+        if value not in quant_schema.SUPPORTED_TIMEFRAMES:
+            raise ValueError(
+                f"unsupported timeframe '{value}', "
+                f"expected one of: {', '.join(quant_schema.SUPPORTED_TIMEFRAMES)}"
+            )
+        return value
+
+    @field_validator("symbol")
+    @classmethod
+    def _check_symbol(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("symbol must be non-empty")
+        return value
+
+    @field_validator("horizons")
+    @classmethod
+    def _check_horizons(cls, value: list[int]) -> list[int]:
+        if any(horizon < 1 for horizon in value):
+            raise ValueError("horizons must be positive integers")
+        return value
+
+
+class OutcomeStatsModel(BaseModel):
+    """Forward-Outcome-Statistik für einen einzelnen Horizont (Kerzen)."""
+
+    horizon: int = Field(ge=1)
+    mean_return: float
+    median_return: float
+    hit_rate: float = Field(ge=0.0, le=1.0)
+    profit_factor: float = Field(ge=0.0)
+    expectancy: float
+    std_return: float = Field(ge=0.0)
+    sample_size: int = Field(ge=0)
+    max_gain: float
+    max_loss: float
+
+
+class OutcomeComputeResponse(BaseModel):
+    """Ergebnis eines Compute-Laufs: Outcomes pro Horizont + Persistenz-Status.
+
+    ``outcomes`` ist eine Map ``str(horizon)`` → Statistik. ``stored`` ist
+    True, wenn ein ``ForwardOutcomeStore`` die Ergebnisse übernommen hat;
+    ohne Store bleibt der Endpunkt funktional (``stored=false``).
+    """
+
+    status: str = "ok"
+    symbol: str
+    outcomes: dict[str, OutcomeStatsModel]
+    stored: bool
+
+
+class OutcomeQueryResponse(BaseModel):
+    """Gespeicherte Outcomes für ein Symbol (leere Liste, falls keine vorhanden)."""
+
+    symbol: str
+    outcomes: list[dict[str, Any]]
+    count: int = Field(ge=0)
+
+
 # ---------------------------------------------------------------------------
 # Hilfsfunktionen (deterministische Ingest-Logik)
 # ---------------------------------------------------------------------------
@@ -594,6 +716,41 @@ def _candles_to_similarity_input(candles: list[OHLCVCandle]) -> list[dict[str, A
         }
         for candle in candles
     ]
+
+
+def _candles_to_outcome_input(candles: list[OHLCVCandle]) -> list[dict[str, Any]]:
+    """API-Kerzen → ForwardOutcomeEngine-Kerzen (ISO-Zeitstempel + Fields).
+
+    Die Engine nutzt ausschließlich das ``close``-Field für die
+    Forward-Return-Berechnung; die übrigen Fields bleiben zur Vollständigkeit.
+    """
+    return [
+        {
+            "time": candle.time.isoformat(),
+            "open": candle.open,
+            "high": candle.high,
+            "low": candle.low,
+            "close": candle.close,
+            "volume": candle.volume,
+        }
+        for candle in candles
+    ]
+
+
+def _outcome_stats_to_model(stats: Any) -> OutcomeStatsModel:
+    """Engine-``ForwardOutcome`` → API-Modell (defensive Typisierung)."""
+    return OutcomeStatsModel(
+        horizon=int(stats.horizon),
+        mean_return=float(stats.mean_return),
+        median_return=float(stats.median_return),
+        hit_rate=float(stats.hit_rate),
+        profit_factor=float(stats.profit_factor),
+        expectancy=float(stats.expectancy),
+        std_return=float(stats.std_return),
+        sample_size=int(stats.sample_size),
+        max_gain=float(stats.max_gain),
+        max_loss=float(stats.max_loss),
+    )
 
 
 def _regime_result_from_store(result: Any) -> tuple[str, float, bool]:
@@ -975,3 +1132,94 @@ async def get_similarity_info(symbol: str, timeframe: str = "1m") -> SimilarityI
         available=available,
         window_size=SIMILARITY_DEFAULT_WINDOW_SIZE,
     )
+
+
+# ---------------------------------------------------------------------------
+# Forward-Outcome-Endpunkte (P6-3)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/outcomes/compute",
+    response_model=OutcomeComputeResponse,
+    dependencies=[Depends(require_trade_key)],
+)
+async def compute_outcomes(payload: OutcomeComputeRequest) -> OutcomeComputeResponse:
+    """Berechnet Forward Outcomes mit dem ``ForwardOutcomeEngine``.
+
+    Die Forward-Return-Statistik (Mean/Median, Hit Rate, Profit Factor,
+    Expectancy, Std, Max-Gain/Loss) wird pro angefragtem Horizont mit dem
+    deterministischen Engine (``quant/forward_outcomes.py``) berechnet.
+    ``outcomes`` ist eine Map ``str(horizon)`` → Statistik. ``stored`` ist
+    True, wenn ein verfügbarer ``ForwardOutcomeStore`` die Ergebnisse
+    übernommen hat; ohne Store bleibt der Endpunkt funktional
+    (``stored=false``).
+    """
+    _require_quant_enabled()
+    engine = ForwardOutcomeEngine(horizons=payload.horizons)
+    candle_dicts = _candles_to_outcome_input(payload.candles)
+    result = engine.compute(
+        candle_dicts,
+        pattern_length=payload.pattern_length,
+        symbol=payload.symbol,
+        timeframe=payload.timeframe,
+    )
+
+    store = get_outcome_store()
+    stored = False
+    if store is not None:
+        # Der Store nutzt seine eigenen (Default-)Horizonte für die
+        # Persistenz; die API-Antwort spiegelt die angefragten Horizonte.
+        store_result = await store.compute_and_store(
+            payload.symbol,
+            payload.timeframe,
+            candle_dicts,
+            pattern_length=payload.pattern_length,
+            exchange=payload.exchange,
+        )
+        stored = bool(store_result.stored)
+
+    outcomes = {
+        str(horizon): _outcome_stats_to_model(stats)
+        for horizon, stats in result.outcomes.items()
+    }
+    return OutcomeComputeResponse(
+        status="ok",
+        symbol=payload.symbol,
+        outcomes=outcomes,
+        stored=stored,
+    )
+
+
+@router.get(
+    "/outcomes/{symbol}",
+    response_model=OutcomeQueryResponse,
+    dependencies=[Depends(require_read_key)],
+)
+async def get_outcomes(
+    symbol: str,
+    timeframe: str = "1m",
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> OutcomeQueryResponse:
+    """Liefert gespeicherte Outcomes für ein Symbol.
+
+    ``timeframe`` wird gegen die unterstützten Werte validiert;
+    ``start``/``end`` sind optionale UTC-Zeitgrenzen. Unbekannte Symbole
+    liefern eine leere Liste (kein Fehler). Ohne ``ForwardOutcomeStore``
+    (P6-2) ist die Liste immer leer.
+    """
+    _require_quant_enabled()
+    if timeframe not in quant_schema.SUPPORTED_TIMEFRAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported timeframe '{timeframe}'",
+        )
+    # ForwardOutcomeStore erwartet UTC-ISO-Strings (naive API-Zeiten sind UTC).
+    start_iso = start.isoformat() if start is not None else None
+    end_iso = end.isoformat() if end is not None else None
+    store = get_outcome_store()
+    rows: list[dict[str, Any]] = []
+    if store is not None:
+        rows = await store.get_outcomes(symbol, timeframe, start_iso, end_iso)
+    return OutcomeQueryResponse(symbol=symbol, outcomes=rows, count=len(rows))

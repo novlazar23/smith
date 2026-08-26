@@ -16,6 +16,13 @@ nur Import-Aufräumarbeit, keine Verhaltensänderung). `SimilarityStore` (P5-2) 
 die P5-4-Integrationstests werden parallel bearbeitet; die Endpunkte von P5-3
 hängen bewusst nicht davon ab (keine Persistenz-Semantik im MVP-Vertrag).
 
+**Phase 6 abgeschlossen: Quantitative Trading Data Platform — Forward Outcomes (2026-08-25).**
+1173 Tests (1136+37 neue Phase-6-Tests), ruff clean, mypy clean (71 source files).
+Neue Module: `quant/forward_outcomes.py` (ForwardOutcomeEngine: Forward Returns, Hit Rate,
+Profit Factor, Expectancy, konfigurierbare Horizonte), `quant/forward_outcomes_store.py`
+(ForwardOutcomeStore: compute_and_store, get_outcomes),
+erweiterte `api/quant_routes.py` (2 neue Endpunkte: /quant/outcomes/compute, /quant/outcomes/{symbol}).
+
 **Phase 5 abgeschlossen: Quantitative Trading Data Platform — Similarity Engine (2026-08-25).**
 1136 Tests (1092+44 neue Phase-5-Tests), ruff clean, mypy clean (70 source files).
 Neue Module: `quant/similarity.py` (SimilarityEngine: Euclidean Distance, Pearson Correlation,

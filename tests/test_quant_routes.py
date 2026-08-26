@@ -35,6 +35,8 @@ REGIME_DETECT_URL = "/quant/regime/detect"
 REGIME_URL = "/quant/regime/{symbol}"
 SIMILARITY_FIND_URL = "/quant/similarity/find"
 SIMILARITY_URL = "/quant/similarity/{symbol}"
+OUTCOMES_COMPUTE_URL = "/quant/outcomes/compute"
+OUTCOMES_URL = "/quant/outcomes/{symbol}"
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -121,6 +123,20 @@ def regime_client(
     regime_store.get_regime = AsyncMock(return_value=[])
     monkeypatch.setattr(quant_routes, "get_regime_store", lambda: regime_store)
     return client, store, settings, regime_store
+
+
+@pytest.fixture
+def outcome_client(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, MagicMock, Settings, MagicMock]:
+    """Quant-Test-App mit zusätzlichem ForwardOutcomeStore-Mock (P6-2-Interface)."""
+    client, store, settings = quant_client
+    outcome_store = MagicMock()
+    outcome_store.compute_and_store = AsyncMock(return_value=MagicMock(stored=True))
+    outcome_store.get_outcomes = AsyncMock(return_value=[])
+    monkeypatch.setattr(quant_routes, "get_outcome_store", lambda: outcome_store)
+    return client, store, settings, outcome_store
 
 
 def make_candle(**overrides: Any) -> dict[str, Any]:
@@ -296,6 +312,38 @@ def make_similarity_payload(**overrides: Any) -> dict[str, Any]:
         "query": make_similarity_candles([100.0, 110.0, 105.0, 115.0, 108.0]),
         "history": make_similarity_history(),
         "top_k": 5,
+    }
+    base.update(overrides)
+    return base
+
+
+def make_outcome_candles(count: int = 30) -> list[dict[str, Any]]:
+    """Deterministische stetige Uptrend-Reihe (close = 100 + i).
+
+    Alle Forward Returns sind positiv (hit_rate=1.0) und exakt bestimmbar:
+    Return nach ``h`` Kerzen ab Index ``i`` = ``h / (100 + i)``.
+    """
+    return [
+        {
+            "time": (CANDLE_TIME + timedelta(minutes=i)).isoformat(),
+            "open": 99.0 + i,
+            "high": 102.0 + i,
+            "low": 98.0 + i,
+            "close": 100.0 + i,
+            "volume": 10.0,
+        }
+        for i in range(count)
+    ]
+
+
+def make_outcome_payload(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "exchange": "binance",
+        "candles": make_outcome_candles(),
+        "pattern_length": 10,
+        "horizons": [5, 10],
     }
     base.update(overrides)
     return base
@@ -1427,3 +1475,274 @@ def test_get_similarity_info_disabled_returns_403(
     assert resp.status_code == 403
     assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
     store.health_check.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# POST /quant/outcomes/compute (P6-3)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_outcomes_success(
+    outcome_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Uptrend-Kerzen → 200, Outcomes pro Horizont, Store-Aufruf mit Parametern."""
+    client, _, _, outcome_store = outcome_client
+    resp = client.post(OUTCOMES_COMPUTE_URL, json=make_outcome_payload())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["symbol"] == "BTCUSDT"
+    assert data["stored"] is True
+    assert set(data["outcomes"].keys()) == {"5", "10"}
+
+    # 30 Kerzen, max_horizon=10 → 20 Startpunkte pro Horizont, alle positiv.
+    outcome_5 = data["outcomes"]["5"]
+    assert outcome_5["horizon"] == 5
+    assert outcome_5["sample_size"] == 20
+    assert outcome_5["hit_rate"] == 1.0
+    assert outcome_5["mean_return"] > 0.0
+    assert outcome_5["max_gain"] == pytest.approx(0.05)  # 5/(100+0)
+    assert outcome_5["max_loss"] > 0.0  # kleinster positiver Return (Uptrend)
+    assert outcome_5["std_return"] > 0.0
+    assert data["outcomes"]["10"]["max_gain"] == pytest.approx(0.1)  # 10/(100+0)
+
+    outcome_store.compute_and_store.assert_awaited_once()
+    args = outcome_store.compute_and_store.call_args.args
+    kwargs = outcome_store.compute_and_store.call_args.kwargs
+    assert args[0] == "BTCUSDT"
+    assert args[1] == "1m"
+    assert len(args[2]) == 30
+    assert kwargs == {"pattern_length": 10, "exchange": "binance"}
+
+
+def test_compute_outcomes_without_store(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Store nicht verfügbar (None) → echter Engine läuft, stored=false, Stats voll."""
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_outcome_store", lambda: None)
+    resp = client.post(OUTCOMES_COMPUTE_URL, json=make_outcome_payload())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["stored"] is False
+    assert data["outcomes"]["5"]["sample_size"] == 20
+    assert data["outcomes"]["5"]["hit_rate"] == 1.0
+    assert data["outcomes"]["5"]["mean_return"] > 0.0
+    assert data["outcomes"]["10"]["sample_size"] == 20
+
+
+def test_compute_outcomes_insufficient_history(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """10 Kerzen mit pattern_length=10 (< pattern_length+2) → 200, nullgefüllte Outcomes."""
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_outcome_store", lambda: None)
+    resp = client.post(
+        OUTCOMES_COMPUTE_URL,
+        json=make_outcome_payload(candles=make_outcome_candles(10)),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["stored"] is False
+    for horizon in ("5", "10"):
+        assert data["outcomes"][horizon]["sample_size"] == 0
+        assert data["outcomes"][horizon]["mean_return"] == 0.0
+        assert data["outcomes"][horizon]["hit_rate"] == 0.0
+
+
+def test_compute_outcomes_invalid_data_422(
+    outcome_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Negativer Preis, leere Kerzen, 2m, leerer Symbol, pattern_length=0,
+    horizons=[0] → 422, kein Store-Write."""
+    client, _, _, outcome_store = outcome_client
+
+    bad_candles = make_outcome_candles()
+    bad_candles[0] = {**bad_candles[0], "open": -5.0}
+    assert (
+        client.post(OUTCOMES_COMPUTE_URL, json=make_outcome_payload(candles=bad_candles))
+        .status_code
+        == 422
+    )
+    assert client.post(OUTCOMES_COMPUTE_URL, json=make_outcome_payload(candles=[])).status_code == 422
+    assert (
+        client.post(OUTCOMES_COMPUTE_URL, json=make_outcome_payload(timeframe="2m")).status_code
+        == 422
+    )
+    assert client.post(OUTCOMES_COMPUTE_URL, json=make_outcome_payload(symbol="")).status_code == 422
+    assert (
+        client.post(OUTCOMES_COMPUTE_URL, json=make_outcome_payload(pattern_length=0)).status_code
+        == 422
+    )
+    assert (
+        client.post(OUTCOMES_COMPUTE_URL, json=make_outcome_payload(horizons=[0])).status_code
+        == 422
+    )
+    outcome_store.compute_and_store.assert_not_awaited()
+
+
+def test_compute_outcomes_requires_trade_key(
+    outcome_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Mit gesetztem Trade-Key: fehlender Key → 401, falscher Key → 403, richtiger → 200."""
+    client, _, settings, _ = outcome_client
+    settings.trade_api_key = "secret-trade"
+
+    assert client.post(OUTCOMES_COMPUTE_URL, json=make_outcome_payload()).status_code == 401
+    assert (
+        client.post(
+            OUTCOMES_COMPUTE_URL,
+            json=make_outcome_payload(),
+            headers={"X-Trade-API-Key": "wrong"},
+        ).status_code
+        == 403
+    )
+    resp = client.post(
+        OUTCOMES_COMPUTE_URL,
+        json=make_outcome_payload(),
+        headers={"X-Trade-API-Key": "secret-trade"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+def test_compute_outcomes_disabled_returns_403(
+    outcome_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """influxdb_enabled=False → 403 QUANT_DISABLED, kein Compute/Write."""
+    client, _, settings, outcome_store = outcome_client
+    settings.influxdb_enabled = False
+    resp = client.post(OUTCOMES_COMPUTE_URL, json=make_outcome_payload())
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
+    outcome_store.compute_and_store.assert_not_awaited()
+
+
+def test_compute_outcomes_real_store_wiring(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Echter ForwardOutcomeStore (P6-2) auf mocktem InfluxDBStore: Getter + Write-Pipeline.
+
+    Verifiziert die Integration der lazy ``get_outcome_store``-Konstruktion
+    (``ForwardOutcomeStore(store=...)``) und des ``compute_and_store``-Aufrufs
+    gegen das echte P6-2-Modul — nur der InfluxDB-Zugriff bleibt gemockt.
+    """
+    if importlib.util.find_spec("trading_harness.quant.forward_outcomes_store") is None:
+        pytest.skip("quant/forward_outcomes_store.py nicht vorhanden (P6-2 parallel)")
+    client, store, _ = quant_client
+    # Globalen Cache leeren, damit der Getter in diesem Test neu konstruiert.
+    monkeypatch.setattr(quant_routes, "_outcome_store", None)
+    # 60 Kerzen: der Store nutzt Default-Horizonte (max 50) → alle vier
+    # Horizonte liefern sample_size>0 → ein write_points-Aufruf pro Horizont.
+    resp = client.post(
+        OUTCOMES_COMPUTE_URL,
+        json=make_outcome_payload(candles=make_outcome_candles(60)),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["symbol"] == "BTCUSDT"
+    assert data["stored"] is True
+    assert data["outcomes"]["5"]["sample_size"] == 50  # 60 Kerzen - max_horizon 10
+    assert store.write_points.await_count == 4
+    assert store.write_points.call_args.kwargs["measurement"] == "forward_outcomes"
+
+
+# ---------------------------------------------------------------------------
+# GET /quant/outcomes/{symbol} (P6-3)
+# ---------------------------------------------------------------------------
+
+
+def test_get_outcomes_returns_outcomes(
+    outcome_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Gespeicherte Outcomes → 200 mit symbol, outcomes und count; Filter weitergereicht."""
+    client, _, _, outcome_store = outcome_client
+    outcome_store.get_outcomes = AsyncMock(
+        return_value=[
+            {"time": "2026-08-25T12:00:00Z", "horizon": 5, "mean_return": 0.01, "hit_rate": 0.6},
+            {"time": "2026-08-25T12:05:00Z", "horizon": 10, "mean_return": 0.02, "hit_rate": 0.7},
+            {"time": "2026-08-25T12:10:00Z", "horizon": 20, "mean_return": 0.03, "hit_rate": 0.8},
+        ]
+    )
+    resp = client.get(
+        OUTCOMES_URL.format(symbol="BTCUSDT"),
+        params={
+            "timeframe": "1m",
+            "start": "2026-08-25T12:00:00Z",
+            "end": "2026-08-25T12:05:00Z",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["symbol"] == "BTCUSDT"
+    assert data["count"] == 3
+    assert data["outcomes"][0]["horizon"] == 5
+
+    # start/end als UTC-ISO-Strings an den OutcomeStore weitergegeben.
+    outcome_store.get_outcomes.assert_awaited_once_with(
+        "BTCUSDT",
+        "1m",
+        "2026-08-25T12:00:00+00:00",
+        "2026-08-25T12:05:00+00:00",
+    )
+
+
+def test_get_outcomes_without_store_empty(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Store nicht verfügbar (None) → 200 mit leerer Outcome-Liste."""
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_outcome_store", lambda: None)
+    resp = client.get(OUTCOMES_URL.format(symbol="BTCUSDT"))
+    assert resp.status_code == 200
+    assert resp.json() == {"symbol": "BTCUSDT", "outcomes": [], "count": 0}
+
+
+def test_get_outcomes_unknown_symbol_empty(
+    outcome_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Unbekanntes Symbol ohne gespeicherte Outcomes → 200 mit leerer Liste (kein 404)."""
+    client, _, _, _ = outcome_client
+    resp = client.get(OUTCOMES_URL.format(symbol="NOPE"))
+    assert resp.status_code == 200
+    assert resp.json() == {"symbol": "NOPE", "outcomes": [], "count": 0}
+
+
+def test_get_outcomes_requires_read_key(
+    outcome_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Mit gesetztem Read-Key: fehlender Key → 401, richtiger Key → 200."""
+    client, _, settings, _ = outcome_client
+    settings.read_api_key = "secret-read"
+    assert client.get(OUTCOMES_URL.format(symbol="BTCUSDT")).status_code == 401
+    resp = client.get(
+        OUTCOMES_URL.format(symbol="BTCUSDT"),
+        headers={"X-Read-API-Key": "secret-read"},
+    )
+    assert resp.status_code == 200
+
+
+def test_get_outcomes_invalid_timeframe_422(
+    outcome_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Unbekannter Timeframe → 422, keine Store-Abfrage."""
+    client, _, _, outcome_store = outcome_client
+    resp = client.get(OUTCOMES_URL.format(symbol="BTCUSDT"), params={"timeframe": "2m"})
+    assert resp.status_code == 422
+    outcome_store.get_outcomes.assert_not_awaited()
+
+
+def test_get_outcomes_disabled_returns_403(
+    outcome_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """influxdb_enabled=False → 403 QUANT_DISABLED, keine Store-Abfrage."""
+    client, _, settings, outcome_store = outcome_client
+    settings.influxdb_enabled = False
+    resp = client.get(OUTCOMES_URL.format(symbol="BTCUSDT"))
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
+    outcome_store.get_outcomes.assert_not_awaited()
