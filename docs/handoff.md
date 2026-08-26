@@ -30,6 +30,12 @@ nur Import-Aufräumarbeit, keine Verhaltensänderung). `SimilarityStore` (P5-2) 
 die P5-4-Integrationstests werden parallel bearbeitet; die Endpunkte von P5-3
 hängen bewusst nicht davon ab (keine Persistenz-Semantik im MVP-Vertrag).
 
+**Phase 8 abgeschlossen: Quantitative Trading Data Platform — Backtesting Engine (2026-08-25).**
+1263 Tests (1213+50 neue Phase-8-Tests), ruff clean, mypy clean (75 source files).
+Neue Module: `quant/backtesting.py` (BacktestEngine: SMA/RSI-Strategien, PnL, Drawdown, Sharpe),
+`quant/backtest_store.py` (BacktestStore: run_and_store, get_results),
+erweiterte `api/quant_routes.py` (2 neue Endpunkte: /quant/backtest/run, /quant/backtest/{symbol}).
+
 **Phase 7 abgeschlossen: Quantitative Trading Data Platform — ML Features (2026-08-25).**
 1213 Tests (1173+40 neue Phase-7-Tests), ruff clean, mypy clean (73 source files).
 Neue Module: `quant/ml_features.py` (MLFeatureBuilder: Feature-Vektoren, Normalisierung,

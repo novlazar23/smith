@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from trading_harness.api import quant_routes, security
 from trading_harness.config import Settings
 from trading_harness.quant import schema as quant_schema
+from trading_harness.quant.backtesting import BacktestResult
 from trading_harness.quant.regime_detection import REGIME_NAMES
 
 # Naiv (bewusst ohne tzinfo): die Route interpretiert naive Zeiten als UTC.
@@ -39,6 +40,8 @@ OUTCOMES_COMPUTE_URL = "/quant/outcomes/compute"
 OUTCOMES_URL = "/quant/outcomes/{symbol}"
 ML_FEATURES_URL = "/quant/ml/features"
 ML_IMPORTANCE_URL = "/quant/ml/importance"
+BACKTEST_RUN_URL = "/quant/backtest/run"
+BACKTEST_URL = "/quant/backtest/{symbol}"
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -139,6 +142,20 @@ def outcome_client(
     outcome_store.get_outcomes = AsyncMock(return_value=[])
     monkeypatch.setattr(quant_routes, "get_outcome_store", lambda: outcome_store)
     return client, store, settings, outcome_store
+
+
+@pytest.fixture
+def backtest_client(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, MagicMock, Settings, MagicMock]:
+    """Quant-Test-App mit zusätzlichem BacktestStore-Mock (P8-2-Interface)."""
+    client, store, settings = quant_client
+    backtest_store = MagicMock()
+    backtest_store.run_and_store = AsyncMock(return_value=MagicMock(stored=True))
+    backtest_store.get_backtests = AsyncMock(return_value=[])
+    monkeypatch.setattr(quant_routes, "get_backtest_store", lambda: backtest_store)
+    return client, store, settings, backtest_store
 
 
 def make_candle(**overrides: Any) -> dict[str, Any]:
@@ -369,6 +386,59 @@ def make_ml_importance_payload(**overrides: Any) -> dict[str, Any]:
         "features": {"rsi": [1.0, 2.0, 3.0, 4.0], "macd": [4.0, 3.0, 2.0, 1.0]},
         "target": [1.0, 2.0, 3.0, 4.0],
         "threshold": 0.1,
+    }
+    base.update(overrides)
+    return base
+
+
+def make_backtest_candles(closes: list[float]) -> list[dict[str, Any]]:
+    """OHLC-konsistente Kerzenreihe aus einer Close-Preisliste."""
+    candles: list[dict[str, Any]] = []
+    prev_close = closes[0]
+    for i, close in enumerate(closes):
+        open_price = closes[0] if i == 0 else prev_close
+        candles.append(
+            {
+                "time": (CANDLE_TIME + timedelta(minutes=i)).isoformat(),
+                "open": open_price,
+                "high": max(open_price, close) + 1.0,
+                "low": min(open_price, close) - 1.0,
+                "close": close,
+                "volume": 10.0,
+            }
+        )
+        prev_close = close
+    return candles
+
+
+def make_sma_backtest_closes() -> list[float]:
+    """25 flache Kerzen + Anstieg (Long-Entry) + TP-Sprung → deterministisch 1 Trade.
+
+    SMA(fast=5, slow=10): flach → HOLD; Kerze 25 (close=102) → fast 100.4 >
+    slow 100.2 → LONG-Entry bei 102; Kerze 26 (close=106.2 ≥ 102·1.04=106.08)
+    → Take-Profit-Exit, PnL = 4.2·size mit size = 10000·0.02/0.02 = 10000.
+    """
+    return [100.0] * 25 + [102.0, 106.2]
+
+
+def make_rsi_backtest_closes() -> list[float]:
+    """Zig-Zag-Baseline (RSI 40/60 → HOLD) + Absturz (RSI≈16.7 < 30) + Erholung.
+
+    RSI(period=5): Index 12 → RSI<30 → LONG-Entry bei 97; Index 14
+    (close=101 ≥ 97·1.04=100.88) → Take-Profit-Exit, PnL = 4·10000 = 40000.
+    """
+    base = [100.0 + (1.0 if i % 2 == 1 else 0.0) for i in range(10)]
+    return base + [99.0, 98.0, 97.0, 96.0, 101.0]
+
+
+def make_backtest_payload(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "exchange": "binance",
+        "candles": make_backtest_candles(make_sma_backtest_closes()),
+        "strategy": "sma",
+        "params": {"fast_period": 5, "slow_period": 10},
     }
     base.update(overrides)
     return base
@@ -1998,3 +2068,320 @@ def test_compute_ml_importance_disabled_returns_403(
     resp = client.post(ML_IMPORTANCE_URL, json=make_ml_importance_payload())
     assert resp.status_code == 403
     assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
+
+
+# ---------------------------------------------------------------------------
+# POST /quant/backtest/run (P8-3)
+# ---------------------------------------------------------------------------
+
+
+def test_run_backtest_success(
+    backtest_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """SMA-Reihe (27 Kerzen) → 200, exakte Engine-Statistiken, Store-Aufruf erfolgt.
+
+    Erwartet: 1 Trade (LONG bei 102, TP-Exit bei 106.2), PnL = 42000.0
+    (size = initial_capital·risk/stop = 10000·0.02/0.02).
+    """
+    client, _, _, backtest_store = backtest_client
+    resp = client.post(BACKTEST_RUN_URL, json=make_backtest_payload())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["symbol"] == "BTCUSDT"
+    assert data["stored"] is True
+    result = data["result"]
+    assert result["strategy"] == "sma"
+    assert result["timeframe"] == "1m"
+    assert result["candle_count"] == 27
+    assert result["total_trades"] == 1
+    assert result["winning_trades"] == 1
+    assert result["losing_trades"] == 0
+    assert result["win_rate"] == 1.0
+    assert result["total_pnl"] == pytest.approx(42000.0)
+    assert result["total_pnl_pct"] == pytest.approx(4.2)
+    assert result["max_drawdown"] == 0.0
+    assert result["avg_trade_pnl"] == pytest.approx(42000.0)
+    assert result["profit_factor"] == 10.0
+
+    # Echter BacktestResult (P8-1) wird an den Store übergeben.
+    backtest_store.run_and_store.assert_awaited_once()
+    args = backtest_store.run_and_store.call_args.args
+    kwargs = backtest_store.run_and_store.call_args.kwargs
+    assert args[0] == "BTCUSDT"
+    assert args[1] == "1m"
+    assert isinstance(args[2], BacktestResult)
+    assert args[2].total_trades == 1
+    assert args[2].total_pnl == pytest.approx(42000.0)
+    assert kwargs == {"exchange": "binance"}
+
+
+def test_run_backtest_without_store(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BacktestStore nicht verfügbar (None) → echter Engine läuft, stored=false."""
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_backtest_store", lambda: None)
+    resp = client.post(BACKTEST_RUN_URL, json=make_backtest_payload())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["stored"] is False
+    result = data["result"]
+    assert result["total_trades"] == 1
+    assert result["win_rate"] == 1.0
+    assert result["total_pnl"] == pytest.approx(42000.0)
+
+
+def test_run_backtest_rsi_strategy(
+    backtest_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """RSI-Reihe (15 Kerzen) → 200, RSI-Long mit TP-Exit, PnL = 40000.0."""
+    client, _, _, _ = backtest_client
+    resp = client.post(
+        BACKTEST_RUN_URL,
+        json=make_backtest_payload(
+            candles=make_backtest_candles(make_rsi_backtest_closes()),
+            strategy="rsi",
+            params={"period": 5, "oversold": 30.0, "overbought": 70.0},
+        ),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    result = data["result"]
+    assert result["strategy"] == "rsi"
+    assert result["candle_count"] == 15
+    assert result["total_trades"] == 1
+    assert result["winning_trades"] == 1
+    assert result["win_rate"] == 1.0
+    assert result["total_pnl"] == pytest.approx(40000.0)
+    assert result["total_pnl_pct"] == pytest.approx(4.0)
+    assert result["profit_factor"] == 10.0
+
+
+def test_run_backtest_insufficient_candles(
+    backtest_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Nur 3 Kerzen → 200 mit leerem Ergebnis (total_trades=0, kein Fehler)."""
+    client, _, _, _ = backtest_client
+    resp = client.post(
+        BACKTEST_RUN_URL,
+        json=make_backtest_payload(candles=make_backtest_candles([100.0, 101.0, 102.0])),
+    )
+    assert resp.status_code == 200
+    result = resp.json()["result"]
+    assert result["candle_count"] == 3
+    assert result["total_trades"] == 0
+    assert result["win_rate"] == 0.0
+    assert result["total_pnl"] == 0.0
+    assert result["total_pnl_pct"] == 0.0
+    assert result["max_drawdown"] == 0.0
+    assert result["sharpe_ratio"] == 0.0
+    assert result["profit_factor"] == 0.0
+
+
+def test_run_backtest_invalid_data_422(
+    backtest_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Unbekannte Strategie, unbekannte/ungültige Parameter, leere Kerzen,
+    ungültiger Timeframe, leerer Symbol, negativer Preis, risk>1 → 422."""
+    client, _, _, backtest_store = backtest_client
+
+    assert (
+        client.post(BACKTEST_RUN_URL, json=make_backtest_payload(strategy="momentum"))
+        .status_code
+        == 422
+    )
+    assert (
+        client.post(
+            BACKTEST_RUN_URL,
+            json=make_backtest_payload(params={"fast_period": 5.0, "bogus": 1.0}),
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            BACKTEST_RUN_URL,
+            json=make_backtest_payload(params={"fast_period": 2.5, "slow_period": 10.0}),
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            BACKTEST_RUN_URL,
+            json=make_backtest_payload(params={"fast_period": 0.0, "slow_period": 10.0}),
+        ).status_code
+        == 422
+    )
+    assert client.post(BACKTEST_RUN_URL, json=make_backtest_payload(candles=[])).status_code == 422
+    assert (
+        client.post(BACKTEST_RUN_URL, json=make_backtest_payload(timeframe="2m")).status_code
+        == 422
+    )
+    assert client.post(BACKTEST_RUN_URL, json=make_backtest_payload(symbol="")).status_code == 422
+
+    bad_candles = make_backtest_candles(make_sma_backtest_closes())
+    bad_candles[0] = {**bad_candles[0], "open": -5.0}
+    assert (
+        client.post(BACKTEST_RUN_URL, json=make_backtest_payload(candles=bad_candles)).status_code
+        == 422
+    )
+    assert (
+        client.post(BACKTEST_RUN_URL, json=make_backtest_payload(risk_per_trade=1.5)).status_code
+        == 422
+    )
+    backtest_store.run_and_store.assert_not_awaited()
+
+
+def test_run_backtest_requires_trade_key(
+    backtest_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Mit gesetztem Trade-Key: fehlender Key → 401, falscher Key → 403, richtiger → 200."""
+    client, _, settings, _ = backtest_client
+    settings.trade_api_key = "secret-trade"
+
+    assert client.post(BACKTEST_RUN_URL, json=make_backtest_payload()).status_code == 401
+    assert (
+        client.post(
+            BACKTEST_RUN_URL,
+            json=make_backtest_payload(),
+            headers={"X-Trade-API-Key": "wrong"},
+        ).status_code
+        == 403
+    )
+    resp = client.post(
+        BACKTEST_RUN_URL,
+        json=make_backtest_payload(),
+        headers={"X-Trade-API-Key": "secret-trade"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+def test_run_backtest_disabled_returns_403(
+    backtest_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """influxdb_enabled=False → 403 QUANT_DISABLED, kein Engine-Run/Store-Aufruf."""
+    client, _, settings, backtest_store = backtest_client
+    settings.influxdb_enabled = False
+    resp = client.post(BACKTEST_RUN_URL, json=make_backtest_payload())
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
+    backtest_store.run_and_store.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# GET /quant/backtest/{symbol} (P8-3)
+# ---------------------------------------------------------------------------
+
+
+def test_get_backtests_returns_results(
+    backtest_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Gespeicherte Backtests → 200 mit symbol, results und count; Filter weitergereicht."""
+    client, _, _, backtest_store = backtest_client
+    backtest_store.get_backtests = AsyncMock(
+        return_value=[
+            {
+                "time": "2026-08-25T12:00:00Z",
+                "strategy": "sma",
+                "total_trades": 5,
+                "win_rate": 0.6,
+                "total_pnl": 150.0,
+            },
+            {
+                "time": "2026-08-25T12:05:00Z",
+                "strategy": "sma",
+                "total_trades": 3,
+                "win_rate": 0.333,
+                "total_pnl": -40.0,
+            },
+            {
+                "time": "2026-08-25T12:10:00Z",
+                "strategy": "rsi",
+                "total_trades": 7,
+                "win_rate": 0.714,
+                "total_pnl": 300.0,
+            },
+        ]
+    )
+    resp = client.get(
+        BACKTEST_URL.format(symbol="BTCUSDT"),
+        params={
+            "timeframe": "1m",
+            "start": "2026-08-25T12:00:00Z",
+            "end": "2026-08-25T12:05:00Z",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["symbol"] == "BTCUSDT"
+    assert data["count"] == 3
+    assert data["results"][0]["total_trades"] == 5
+    assert data["results"][2]["strategy"] == "rsi"
+
+    # start/end als UTC-ISO-Strings an den BacktestStore weitergegeben.
+    backtest_store.get_backtests.assert_awaited_once_with(
+        "BTCUSDT",
+        "1m",
+        "2026-08-25T12:00:00+00:00",
+        "2026-08-25T12:05:00+00:00",
+    )
+
+
+def test_get_backtests_without_store_empty(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BacktestStore nicht verfügbar → 200 mit leerer Ergebnis-Liste."""
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_backtest_store", lambda: None)
+    resp = client.get(BACKTEST_URL.format(symbol="BTCUSDT"))
+    assert resp.status_code == 200
+    assert resp.json() == {"symbol": "BTCUSDT", "results": [], "count": 0}
+
+
+def test_get_backtests_unknown_symbol_empty(
+    backtest_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Unbekanntes Symbol ohne gespeicherte Backtests → 200 mit leerer Liste (kein 404)."""
+    client, _, _, _ = backtest_client
+    resp = client.get(BACKTEST_URL.format(symbol="NOPE"))
+    assert resp.status_code == 200
+    assert resp.json() == {"symbol": "NOPE", "results": [], "count": 0}
+
+
+def test_get_backtests_requires_read_key(
+    backtest_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Mit gesetztem Read-Key: fehlender Key → 401, richtiger Key → 200."""
+    client, _, settings, _ = backtest_client
+    settings.read_api_key = "secret-read"
+    assert client.get(BACKTEST_URL.format(symbol="BTCUSDT")).status_code == 401
+    resp = client.get(
+        BACKTEST_URL.format(symbol="BTCUSDT"),
+        headers={"X-Read-API-Key": "secret-read"},
+    )
+    assert resp.status_code == 200
+
+
+def test_get_backtests_invalid_timeframe_422(
+    backtest_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Unbekannter Timeframe → 422, keine Store-Abfrage."""
+    client, _, _, backtest_store = backtest_client
+    resp = client.get(BACKTEST_URL.format(symbol="BTCUSDT"), params={"timeframe": "2m"})
+    assert resp.status_code == 422
+    backtest_store.get_backtests.assert_not_awaited()
+
+
+def test_get_backtests_disabled_returns_403(
+    backtest_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """influxdb_enabled=False → 403 QUANT_DISABLED, keine Store-Abfrage."""
+    client, _, settings, backtest_store = backtest_client
+    settings.influxdb_enabled = False
+    resp = client.get(BACKTEST_URL.format(symbol="BTCUSDT"))
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
+    backtest_store.get_backtests.assert_not_awaited()

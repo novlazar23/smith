@@ -1,5 +1,5 @@
 """Quant-Plattform API-Endpunkte (Phase 1, P1-8; Phase 2, P2-3; Phase 3, P3-3;
-Phase 4, P4-3; Phase 5, P5-3; Phase 6, P6-3; Phase 7, P7-3).
+Phase 4, P4-3; Phase 5, P5-3; Phase 6, P6-3; Phase 7, P7-3; Phase 8, P8-3).
 
 Stellt die InfluxDB-basierte OHLCV-Ingestion, die Feature-Endpunkte, die
 Anomaly-Endpunkte und die Similarity-Endpunkte unter ``/quant/*`` als eigenen
@@ -24,14 +24,16 @@ Auth-Trennung nach dem bestehenden Read/Trade-Muster (R5.21):
 - ``GET  /quant/outcomes/{symbol}``   → Read-Key
 - ``POST /quant/ml/features``         → Trade-Key (reine Berechnung)
 - ``POST /quant/ml/importance``       → Trade-Key (reine Berechnung)
+- ``POST /quant/backtest/run``        → Trade-Key (reine Berechnung)
+- ``GET  /quant/backtest/{symbol}``   → Read-Key
 
  Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``, ``FeatureStore``,
-``AnomalyStore``, ``RegimeStore``, ``ForwardOutcomeStore``) werden über die
-modul-scope-Getter ``get_settings`` (re-export aus ``config``),
+``AnomalyStore``, ``RegimeStore``, ``ForwardOutcomeStore``, ``BacktestStore``)
+werden über die modul-scope-Getter ``get_settings`` (re-export aus ``config``),
 ``get_influx_store``, ``get_feature_store``, ``get_anomaly_store``,
-``get_regime_store`` und ``get_outcome_store`` aufgelöst — Unit-Tests binden
-alle per Monkeypatch auf Mocks, es wird nie eine echte InfluxDB-Verbindung
-aufgebaut.
+``get_regime_store``, ``get_outcome_store`` und ``get_backtest_store``
+aufgelöst — Unit-Tests binden alle per Monkeypatch auf Mocks, es wird nie eine
+echte InfluxDB-Verbindung aufgebaut.
 
 Die Candle-Validierung (OHLC-Konsistenz) und die Point-Konvertierung sind die
 eigentliche Endpunkt-Logik; die Ticker-basierte Ingestion aus dem
@@ -89,14 +91,28 @@ persistiert sie über ``RegimeStore`` (falls verfügbar);
    Normalisierung (optional) und NaN-/Inf-Sanitisierung, reine
    In-Memory-Berechnung ohne Persistenz. ``POST /quant/ml/importance``
    berechnet mit der deterministischen ``FeatureImportanceEngine``
-   (``quant/feature_importance.py``, P7-2) die Feature-Importance
-   (Pearson-Korrelation gegen ein Ziel, Ranking, Threshold-Filter und
-   Feature-Gruppen-Aggregation) — ebenfalls reine In-Memory-Berechnung.
+    (``quant/feature_importance.py``, P7-2) die Feature-Importance
+    (Pearson-Korrelation gegen ein Ziel, Ranking, Threshold-Filter und
+    Feature-Gruppen-Aggregation) — ebenfalls reine In-Memory-Berechnung.
+
+    Backtest-Endpunkte (P8-3): ``POST /quant/backtest/run`` führt mit dem
+    deterministischen ``BacktestEngine`` (``quant/backtesting.py``, P8-1)
+    einen Backtest für die übergebene Kerzenreihe aus — die Strategie
+    (``sma`` = SMA-Crossover, ``rsi`` = RSI-Overbought/Oversold) und ihre
+    Parameter werden über ``strategy``/``params`` übergeben; PnL, Win Rate,
+    Drawdown, Sharpe Ratio und Profit Factor werden pro Lauf berechnet.
+    Persistenz erfolgt über ``BacktestStore`` (falls verfügbar);
+    ``GET /quant/backtest/{symbol}`` liefert gespeicherte Backtest-Ergebnisse.
+    ``quant/backtest_store.py`` entsteht parallel (P8-2) — der Getter
+    ``get_backtest_store`` liefert daher ``None``, bis das Modul vorhanden
+    ist, und die Endpunkte bleiben ohne Persistenz funktional
+    (``stored=false`` / leere Ergebnis-Listen).
 """
 
 from __future__ import annotations
 
 import importlib
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -107,6 +123,7 @@ from trading_harness.api.security import require_read_key, require_trade_key
 from trading_harness.config import get_settings
 from trading_harness.quant import schema as quant_schema
 from trading_harness.quant.anomaly_detection import Anomaly, AnomalyDetector
+from trading_harness.quant.backtesting import BacktestEngine, BacktestResult, Signal
 from trading_harness.quant.feature_importance import FeatureImportanceEngine
 from trading_harness.quant.features import FeatureEngine
 from trading_harness.quant.forward_outcomes import ForwardOutcomeEngine
@@ -271,6 +288,36 @@ def get_outcome_store() -> Any | None:
         except (TypeError, ValueError):
             return None
     return _outcome_store
+
+
+_backtest_store: Any | None = None
+
+
+def get_backtest_store() -> Any | None:
+    """Liefert den geteilten ``BacktestStore`` (lazy) — oder ``None``.
+
+    ``quant/backtest_store.py`` entsteht parallel (P8-2) und wird deshalb
+    lazy per ``importlib`` geladen: solange das Modul fehlt (oder der
+    Konstruktor noch nicht kompatibel ist), liefert der Getter ``None``
+    und die Backtest-Endpoints bleiben funktional ohne Persistenz.
+    Endpunkt-Vertrag: ``run_and_store(symbol, timeframe, result,
+    exchange=...)`` → Ergebnis mit ``stored`` und
+    ``get_backtests(symbol, timeframe, start, end)``.
+    """
+    global _backtest_store
+    if _backtest_store is None:
+        try:
+            module = importlib.import_module("trading_harness.quant.backtest_store")
+        except ImportError:
+            return None
+        backtest_store_cls = getattr(module, "BacktestStore", None)
+        if backtest_store_cls is None:
+            return None
+        try:
+            _backtest_store = backtest_store_cls(store=get_influx_store())
+        except (TypeError, ValueError):
+            return None
+    return _backtest_store
 
 
 # ---------------------------------------------------------------------------
@@ -704,6 +751,108 @@ class MLImportanceResponse(BaseModel):
     feature_groups: dict[str, float]
 
 
+# Erlaubte Strategien (P8-1-Factory) und deren zulässige Parameter-Keys.
+BACKTEST_STRATEGY_PARAMS: dict[str, tuple[str, ...]] = {
+    "sma": ("fast_period", "slow_period"),
+    "rsi": ("period", "oversold", "overbought"),
+}
+
+
+class BacktestRunRequest(BaseModel):
+    """Run-Anfrage: Kerzenreihe eines Symbols → Backtest ausführen (P8-3).
+
+    ``strategy`` ist der Strategie-Name (``sma``/``rsi``), ``params`` deren
+    Parameter (Default-Werte = ``BacktestEngine``-Standards). Die
+    Engine-Parameter (Kapital, Risiko, Stop-Loss, Take-Profit) sind optional
+    und übernehmen sonst die Engine-Defaults.
+    """
+
+    symbol: str = Field(min_length=1)
+    timeframe: str
+    exchange: str = Field(min_length=1)
+    candles: list[OHLCVCandle] = Field(min_length=1)
+    strategy: str
+    params: dict[str, float] = Field(default_factory=dict)
+    initial_capital: float = Field(default=10000.0, gt=0)
+    risk_per_trade: float = Field(default=0.02, gt=0.0, le=1.0)
+    stop_loss_pct: float = Field(default=0.02, gt=0.0, le=1.0)
+    take_profit_pct: float = Field(default=0.04, gt=0.0, le=1.0)
+
+    @field_validator("timeframe")
+    @classmethod
+    def _check_timeframe(cls, value: str) -> str:
+        if value not in quant_schema.SUPPORTED_TIMEFRAMES:
+            raise ValueError(
+                f"unsupported timeframe '{value}', "
+                f"expected one of: {', '.join(quant_schema.SUPPORTED_TIMEFRAMES)}"
+            )
+        return value
+
+    @field_validator("symbol")
+    @classmethod
+    def _check_symbol(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("symbol must be non-empty")
+        return value
+
+    @model_validator(mode="after")
+    def _check_strategy_params(self) -> BacktestRunRequest:
+        allowed = BACKTEST_STRATEGY_PARAMS.get(self.strategy)
+        if allowed is None:
+            raise ValueError(
+                f"unknown strategy '{self.strategy}', "
+                f"expected one of: {', '.join(sorted(BACKTEST_STRATEGY_PARAMS))}"
+            )
+        unknown = sorted(set(self.params) - set(allowed))
+        if unknown:
+            raise ValueError(
+                f"unknown params for strategy '{self.strategy}': {', '.join(unknown)}"
+            )
+        for key, value in self.params.items():
+            if key.endswith("_period") and (value < 1 or not float(value).is_integer()):
+                raise ValueError(f"param '{key}' must be a positive integer")
+        return self
+
+
+class BacktestResultModel(BaseModel):
+    """Statistiken eines Backtests (API-Darstellung von ``BacktestResult``)."""
+
+    strategy: str
+    timeframe: str
+    candle_count: int = Field(ge=0)
+    total_trades: int = Field(ge=0)
+    winning_trades: int = Field(ge=0)
+    losing_trades: int = Field(ge=0)
+    win_rate: float = Field(ge=0.0, le=1.0)
+    total_pnl: float
+    total_pnl_pct: float
+    max_drawdown: float = Field(ge=0.0)
+    sharpe_ratio: float
+    avg_trade_pnl: float
+    profit_factor: float = Field(ge=0.0)
+
+
+class BacktestRunResponse(BaseModel):
+    """Ergebnis eines Backtest-Laufs: Statistiken + Persistenz-Status.
+
+    ``stored`` ist True, wenn ein ``BacktestStore`` das Ergebnis übernommen
+    hat; ohne Store bleibt der Endpunkt funktional (``stored=false``).
+    """
+
+    status: str = "ok"
+    symbol: str
+    result: BacktestResultModel
+    stored: bool
+
+
+class BacktestQueryResponse(BaseModel):
+    """Gespeicherte Backtests für ein Symbol (leere Liste, falls keine vorhanden)."""
+
+    symbol: str
+    results: list[dict[str, Any]]
+    count: int = Field(ge=0)
+
+
 # ---------------------------------------------------------------------------
 # Hilfsfunktionen (deterministische Ingest-Logik)
 # ---------------------------------------------------------------------------
@@ -851,6 +1000,66 @@ def _outcome_stats_to_model(stats: Any) -> OutcomeStatsModel:
 def _regime_result_from_store(result: Any) -> tuple[str, float, bool]:
     """Store-Ergebnis → (regime, confidence, stored) mit defensiver Typisierung."""
     return str(result.regime), float(result.confidence), bool(result.stored)
+
+
+def _candles_to_backtest_input(candles: list[OHLCVCandle]) -> list[dict[str, Any]]:
+    """API-Kerzen → BacktestEngine-Kerzen (ISO-Zeitstempel + numerische Fields).
+
+    Die Engine nutzt ausschließlich das ``close``-Field für die Trade-
+    Simulation; die übrigen Fields bleiben zur Vollständigkeit.
+    """
+    return [
+        {
+            "time": candle.time.isoformat(),
+            "open": candle.open,
+            "high": candle.high,
+            "low": candle.low,
+            "close": candle.close,
+            "volume": candle.volume,
+        }
+        for candle in candles
+    ]
+
+
+def _build_backtest_strategy(
+    engine: BacktestEngine, strategy: str, params: dict[str, float]
+) -> Callable[[list[dict[str, Any]], int], Signal]:
+    """Strategie-Factory: Name + Parameter → Engine-Strategie-Callable.
+
+    Perioden-Parameter werden als Ganzzahlen übergeben (Slicing der Engine);
+    fehlende Parameter übernehmen die Engine-Standardwerte.
+    """
+    if strategy == "sma":
+        return engine.simple_moving_average_strategy(
+            fast_period=int(params.get("fast_period", 10)),
+            slow_period=int(params.get("slow_period", 30)),
+        )
+    return engine.rsi_strategy(
+        period=int(params.get("period", 14)),
+        oversold=float(params.get("oversold", 30.0)),
+        overbought=float(params.get("overbought", 70.0)),
+    )
+
+
+def _backtest_result_to_model(
+    result: BacktestResult, strategy: str, candle_count: int
+) -> BacktestResultModel:
+    """Engine-``BacktestResult`` → API-Modell (defensive Typisierung)."""
+    return BacktestResultModel(
+        strategy=strategy,
+        timeframe=str(result.timeframe),
+        candle_count=candle_count,
+        total_trades=int(result.total_trades),
+        winning_trades=int(result.winning_trades),
+        losing_trades=int(result.losing_trades),
+        win_rate=float(result.win_rate),
+        total_pnl=float(result.total_pnl),
+        total_pnl_pct=float(result.total_pnl_pct),
+        max_drawdown=float(result.max_drawdown),
+        sharpe_ratio=float(result.sharpe_ratio),
+        avg_trade_pnl=float(result.avg_trade_pnl),
+        profit_factor=float(result.profit_factor),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1379,3 +1588,92 @@ async def compute_ml_importance(payload: MLImportanceRequest) -> MLImportanceRes
         top_features=result.top_features,
         feature_groups=result.feature_groups,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backtest-Endpunkte (P8-3)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/backtest/run",
+    response_model=BacktestRunResponse,
+    dependencies=[Depends(require_trade_key)],
+)
+async def run_backtest(payload: BacktestRunRequest) -> BacktestRunResponse:
+    """Führt einen Backtest mit dem ``BacktestEngine`` aus und persistiert ihn.
+
+    Die Strategie (``sma``/``rsi``) wird mit den übergebenen ``params``
+    aus der Engine-Factory erzeugt; PnL, Win Rate, Drawdown, Sharpe Ratio
+    und Profit Factor kommen aus dem deterministischen ``BacktestResult``.
+    ``stored`` ist True, wenn ein verfügbarer ``BacktestStore`` (P8-2) das
+    Ergebnis übernommen hat; ohne Store bleibt der Endpunkt funktional
+    (``stored=false``).
+    """
+    _require_quant_enabled()
+    engine = BacktestEngine(
+        initial_capital=payload.initial_capital,
+        risk_per_trade=payload.risk_per_trade,
+        stop_loss_pct=payload.stop_loss_pct,
+        take_profit_pct=payload.take_profit_pct,
+    )
+    strategy = _build_backtest_strategy(engine, payload.strategy, payload.params)
+    candle_dicts = _candles_to_backtest_input(payload.candles)
+    result = engine.run(
+        candle_dicts,
+        strategy,
+        symbol=payload.symbol,
+        timeframe=payload.timeframe,
+    )
+
+    store = get_backtest_store()
+    stored = False
+    if store is not None:
+        store_result = await store.run_and_store(
+            payload.symbol,
+            payload.timeframe,
+            result,
+            exchange=payload.exchange,
+        )
+        stored = bool(store_result.stored)
+
+    return BacktestRunResponse(
+        status="ok",
+        symbol=payload.symbol,
+        result=_backtest_result_to_model(result, payload.strategy, len(payload.candles)),
+        stored=stored,
+    )
+
+
+@router.get(
+    "/backtest/{symbol}",
+    response_model=BacktestQueryResponse,
+    dependencies=[Depends(require_read_key)],
+)
+async def get_backtests(
+    symbol: str,
+    timeframe: str = "1m",
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> BacktestQueryResponse:
+    """Liefert gespeicherte Backtests für ein Symbol.
+
+    ``timeframe`` wird gegen die unterstützten Werte validiert;
+    ``start``/``end`` sind optionale UTC-Zeitgrenzen. Unbekannte Symbole
+    liefern eine leere Liste (kein Fehler). Ohne ``BacktestStore`` (P8-2)
+    ist die Liste immer leer.
+    """
+    _require_quant_enabled()
+    if timeframe not in quant_schema.SUPPORTED_TIMEFRAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported timeframe '{timeframe}'",
+        )
+    # BacktestStore erwartet UTC-ISO-Strings (naive API-Zeiten sind UTC).
+    start_iso = start.isoformat() if start is not None else None
+    end_iso = end.isoformat() if end is not None else None
+    store = get_backtest_store()
+    rows: list[dict[str, Any]] = []
+    if store is not None:
+        rows = await store.get_backtests(symbol, timeframe, start_iso, end_iso)
+    return BacktestQueryResponse(symbol=symbol, results=rows, count=len(rows))
