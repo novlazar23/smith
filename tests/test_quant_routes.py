@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from trading_harness.api import quant_routes, security
 from trading_harness.config import Settings
 from trading_harness.quant import schema as quant_schema
+from trading_harness.quant.regime_detection import REGIME_NAMES
 
 # Naiv (bewusst ohne tzinfo): die Route interpretiert naive Zeiten als UTC.
 CANDLE_TIME = datetime.fromisoformat("2026-08-25T12:00:00")
@@ -30,6 +31,8 @@ FEATURES_COMPUTE_URL = "/quant/features/compute"
 FEATURES_URL = "/quant/features/{symbol}"
 ANOMALIES_DETECT_URL = "/quant/anomalies/detect"
 ANOMALIES_URL = "/quant/anomalies/{symbol}"
+REGIME_DETECT_URL = "/quant/regime/detect"
+REGIME_URL = "/quant/regime/{symbol}"
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -100,6 +103,22 @@ def anomaly_client(
     anomaly_store.get_anomalies = AsyncMock(return_value=[])
     monkeypatch.setattr(quant_routes, "get_anomaly_store", lambda: anomaly_store)
     return client, store, settings, anomaly_store
+
+
+@pytest.fixture
+def regime_client(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, MagicMock, Settings, MagicMock]:
+    """Quant-Test-App mit zusätzlichem RegimeStore-Mock (P4-2-Interface)."""
+    client, store, settings = quant_client
+    regime_store = MagicMock()
+    regime_store.detect_and_store = AsyncMock(
+        return_value=MagicMock(regime="strong_bull", confidence=0.85, stored=True)
+    )
+    regime_store.get_regime = AsyncMock(return_value=[])
+    monkeypatch.setattr(quant_routes, "get_regime_store", lambda: regime_store)
+    return client, store, settings, regime_store
 
 
 def make_candle(**overrides: Any) -> dict[str, Any]:
@@ -207,6 +226,41 @@ def make_detect_payload(**overrides: Any) -> dict[str, Any]:
         "timeframe": "1m",
         "exchange": "binance",
         "candles": make_anomaly_candles(),
+    }
+    base.update(overrides)
+    return base
+
+
+def make_regime_candles(count: int = 60) -> list[dict[str, Any]]:
+    """Deterministische stetige Uptrend-Reihe (60 Kerzen ≥ 51 Minimum).
+
+    Lineare Trendfolge (close = 50000 + 100·i) macht das ``RegimeDetector``-
+    Ergebnis vollständig deterministisch: SMA fast > SMA slow und ADX≈100 →
+    ``strong_bull`` mit confidence 1.0.
+    """
+    candles: list[dict[str, Any]] = []
+    for i in range(count):
+        open_price = 50000.0 + i * 100.0 - 50.0
+        close_price = 50000.0 + i * 100.0
+        candles.append(
+            {
+                "time": (CANDLE_TIME + timedelta(minutes=i)).isoformat(),
+                "open": open_price,
+                "high": close_price + 10.0,
+                "low": open_price - 10.0,
+                "close": close_price,
+                "volume": 10.0,
+            }
+        )
+    return candles
+
+
+def make_regime_payload(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "exchange": "binance",
+        "candles": make_regime_candles(),
     }
     base.update(overrides)
     return base
@@ -911,3 +965,241 @@ def test_get_anomalies_disabled_returns_403(
     assert resp.status_code == 403
     assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
     anomaly_store.get_anomalies.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# POST /quant/regime/detect (P4-3)
+# ---------------------------------------------------------------------------
+
+
+def test_detect_regime_success(
+    regime_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Uptrend-Kerzen → 200, Store-Ergebnis (regime/confidence/stored) weitergereicht."""
+    client, _, _, regime_store = regime_client
+    resp = client.post(REGIME_DETECT_URL, json=make_regime_payload())
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "symbol": "BTCUSDT",
+        "regime": "strong_bull",
+        "confidence": 0.85,
+        "stored": True,
+    }
+
+    regime_store.detect_and_store.assert_awaited_once()
+    args = regime_store.detect_and_store.call_args.args
+    kwargs = regime_store.detect_and_store.call_args.kwargs
+    assert args[0] == "BTCUSDT"
+    assert args[1] == "1m"
+    assert len(args[2]) == 60
+    assert args[2][-1]["close"] == 55900.0  # letzte Kerze des Uptrends
+    assert kwargs == {"exchange": "binance"}
+
+
+def test_detect_regime_without_store(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RegimeStore nicht verfügbar (None) → echter RegimeDetector läuft, stored=false.
+
+    Die 60er-Uptrendreihe (≥ Minimum 51) liefert deterministisch
+    ``strong_bull`` mit confidence 1.0 (ADX≈100 → min(ADX/50, 1.0)).
+    """
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_regime_store", lambda: None)
+    resp = client.post(REGIME_DETECT_URL, json=make_regime_payload())
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "symbol": "BTCUSDT",
+        "regime": "strong_bull",
+        "confidence": 1.0,
+        "stored": False,
+    }
+
+
+def test_detect_regime_insufficient_history(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nur 10 Kerzen (< 51 Minimum) → 200, regime=range, confidence=0.5 (kein Fehler)."""
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_regime_store", lambda: None)
+    resp = client.post(
+        REGIME_DETECT_URL, json=make_regime_payload(candles=make_regime_candles(10))
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "symbol": "BTCUSDT",
+        "regime": "range",
+        "confidence": 0.5,
+        "stored": False,
+    }
+
+
+def test_detect_regime_invalid_data_422(
+    regime_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Negativer Preis, leere Candle-Liste, ungültiger Timeframe, leerer Symbol → 422."""
+    client, _, _, regime_store = regime_client
+
+    bad_candles = make_regime_candles()
+    bad_candles[0] = {**bad_candles[0], "open": -5.0}
+    resp = client.post(REGIME_DETECT_URL, json=make_regime_payload(candles=bad_candles))
+    assert resp.status_code == 422
+
+    assert client.post(REGIME_DETECT_URL, json=make_regime_payload(candles=[])).status_code == 422
+    assert (
+        client.post(REGIME_DETECT_URL, json=make_regime_payload(timeframe="2m")).status_code == 422
+    )
+    assert client.post(REGIME_DETECT_URL, json=make_regime_payload(symbol="")).status_code == 422
+    regime_store.detect_and_store.assert_not_awaited()
+
+
+def test_detect_regime_requires_trade_key(
+    regime_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Mit gesetztem Trade-Key: fehlender Key → 401, falscher Key → 403, richtiger → 200."""
+    client, _, settings, _ = regime_client
+    settings.trade_api_key = "secret-trade"
+
+    assert client.post(REGIME_DETECT_URL, json=make_regime_payload()).status_code == 401
+    assert (
+        client.post(
+            REGIME_DETECT_URL,
+            json=make_regime_payload(),
+            headers={"X-Trade-API-Key": "wrong"},
+        ).status_code
+        == 403
+    )
+    resp = client.post(
+        REGIME_DETECT_URL,
+        json=make_regime_payload(),
+        headers={"X-Trade-API-Key": "secret-trade"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+def test_detect_regime_disabled_returns_403(
+    regime_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """influxdb_enabled=False → 403 QUANT_DISABLED, kein Store-Aufruf."""
+    client, _, settings, regime_store = regime_client
+    settings.influxdb_enabled = False
+    resp = client.post(REGIME_DETECT_URL, json=make_regime_payload())
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
+    regime_store.detect_and_store.assert_not_awaited()
+
+
+def test_detect_regime_real_store_wiring(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Echter RegimeStore (P4-2) auf mocktem InfluxDBStore: Getter + Write-Pipeline.
+
+    Verifiziert die Integration der lazy ``get_regime_store``-Konstruktion
+    (``RegimeStore(store=...)``) und des ``detect_and_store``-Aufrufs gegen
+    das echte P4-2-Modul — nur der InfluxDB-Zugriff bleibt gemockt.
+    """
+    if importlib.util.find_spec("trading_harness.quant.regime_store") is None:
+        pytest.skip("quant/regime_store.py nicht vorhanden (P4-2 parallel)")
+    client, store, _ = quant_client
+    # Globalen Cache leeren, damit der Getter in diesem Test neu konstruiert.
+    monkeypatch.setattr(quant_routes, "_regime_store", None)
+    resp = client.post(REGIME_DETECT_URL, json=make_regime_payload())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["stored"] is True
+    assert data["regime"] in REGIME_NAMES
+    # Echter RegimeStore: genau ein Write pro Detect-Lauf in das regime-Measurement.
+    assert store.write_points.await_count == 1
+    assert store.write_points.call_args.kwargs["measurement"] == quant_schema.REGIME_MEASUREMENT
+
+
+# ---------------------------------------------------------------------------
+# GET /quant/regime/{symbol} (P4-3)
+# ---------------------------------------------------------------------------
+
+
+def test_get_regimes_returns_regimes(
+    regime_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Gespeicherte Regimes → 200 mit symbol, regimes und count; Filter weitergereicht."""
+    client, _, _, regime_store = regime_client
+    regime_store.get_regime = AsyncMock(
+        return_value=[
+            {"time": "2026-08-25T12:00:00Z", "regime": "strong_bull", "confidence": 0.9},
+            {"time": "2026-08-25T12:05:00Z", "regime": "range", "confidence": 0.6},
+        ]
+    )
+    resp = client.get(
+        REGIME_URL.format(symbol="BTCUSDT"),
+        params={
+            "timeframe": "1m",
+            "start": "2026-08-25T12:00:00Z",
+            "end": "2026-08-25T12:05:00Z",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["symbol"] == "BTCUSDT"
+    assert data["count"] == 2
+    assert data["regimes"][0]["regime"] == "strong_bull"
+
+    # start/end als UTC-ISO-Strings an den RegimeStore weitergegeben.
+    regime_store.get_regime.assert_awaited_once_with(
+        "BTCUSDT",
+        "1m",
+        "2026-08-25T12:00:00+00:00",
+        "2026-08-25T12:05:00+00:00",
+    )
+
+
+def test_get_regimes_without_store_empty(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RegimeStore nicht verfügbar → 200 mit leerer Regime-Liste."""
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_regime_store", lambda: None)
+    resp = client.get(REGIME_URL.format(symbol="BTCUSDT"))
+    assert resp.status_code == 200
+    assert resp.json() == {"symbol": "BTCUSDT", "regimes": [], "count": 0}
+
+
+def test_get_regimes_unknown_symbol_empty(
+    regime_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Unbekanntes Symbol ohne gespeicherte Regimes → 200 mit leerer Liste (kein 404)."""
+    client, _, _, _ = regime_client
+    resp = client.get(REGIME_URL.format(symbol="NOPE"))
+    assert resp.status_code == 200
+    assert resp.json() == {"symbol": "NOPE", "regimes": [], "count": 0}
+
+
+def test_get_regimes_requires_read_key(
+    regime_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Mit gesetztem Read-Key: fehlender Key → 401, richtiger Key → 200."""
+    client, _, settings, _ = regime_client
+    settings.read_api_key = "secret-read"
+    assert client.get(REGIME_URL.format(symbol="BTCUSDT")).status_code == 401
+    resp = client.get(
+        REGIME_URL.format(symbol="BTCUSDT"),
+        headers={"X-Read-API-Key": "secret-read"},
+    )
+    assert resp.status_code == 200
+
+
+def test_get_regimes_invalid_timeframe_422(
+    regime_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Unbekannter Timeframe → 422, keine Store-Abfrage."""
+    client, _, _, regime_store = regime_client
+    resp = client.get(REGIME_URL.format(symbol="BTCUSDT"), params={"timeframe": "2m"})
+    assert resp.status_code == 422
+    regime_store.get_regime.assert_not_awaited()

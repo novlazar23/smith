@@ -15,6 +15,8 @@ Auth-Trennung nach dem bestehenden Read/Trade-Muster (R5.21):
 - ``GET  /quant/features/{symbol}``   → Read-Key
 - ``POST /quant/anomalies/detect``    → Trade-Key (Schreiboperation)
 - ``GET  /quant/anomalies/{symbol}``  → Read-Key
+- ``POST /quant/regime/detect``       → Trade-Key (Schreiboperation)
+- ``GET  /quant/regime/{symbol}``     → Read-Key
 
 Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``, ``FeatureStore``,
 ``AnomalyStore``) werden über die modul-scope-Getter ``get_settings``
@@ -42,6 +44,15 @@ persistiert sie über ``AnomalyStore`` (falls verfügbar);
 ``get_anomaly_store`` liefert daher ``None``, bis das Modul vorhanden ist,
 und die Endpunkte bleiben ohne Persistenz funktional
 (``stored=false`` / leere Anomalie-Listen).
+
+Regime-Endpunkte (P4-3): ``POST /quant/regime/detect`` erkennt mit dem
+deterministischen ``RegimeDetector`` die Marktphase einer Kerzenreihe und
+persistiert sie über ``RegimeStore`` (falls verfügbar);
+``GET /quant/regime/{symbol}`` liefert gespeicherte Regimes.
+``quant/regime_store.py`` entsteht parallel (P4-2) — der Getter
+``get_regime_store`` liefert daher ``None``, bis das Modul vorhanden ist,
+und die Endpunkte bleiben ohne Persistenz funktional
+(``stored=false`` / leere Regime-Listen).
 """
 
 from __future__ import annotations
@@ -59,6 +70,7 @@ from trading_harness.quant import schema as quant_schema
 from trading_harness.quant.anomaly_detection import Anomaly, AnomalyDetector
 from trading_harness.quant.features import FeatureEngine
 from trading_harness.quant.influxdb_client import InfluxDBStore
+from trading_harness.quant.regime_detection import REGIME_NAMES, RegimeDetector, RegimeResult
 
 # Exchange-Tag für manuell per API ingestete Daten (keine konkrete Exchange).
 MANUAL_INGEST_EXCHANGE: str = "api"
@@ -156,6 +168,36 @@ def get_anomaly_store() -> Any | None:
         except (TypeError, ValueError):
             return None
     return _anomaly_store
+
+
+_regime_store: Any | None = None
+
+
+def get_regime_store() -> Any | None:
+    """Liefert den geteilten ``RegimeStore`` (lazy) — oder ``None``.
+
+    ``quant/regime_store.py`` entsteht parallel (P4-2) und wird deshalb
+    lazy per ``importlib`` geladen: solange das Modul fehlt (oder der
+    Konstruktor noch nicht kompatibel ist), liefert der Getter ``None``
+    und die Regime-Endpoints bleiben funktional ohne Persistenz.
+    Endpunkt-Vertrag: ``detect_and_store(symbol, timeframe, candles,
+    exchange=...)`` → Ergebnis mit ``regime``/``confidence``/``stored`` und
+    ``get_regime(symbol, timeframe, start, end)``.
+    """
+    global _regime_store
+    if _regime_store is None:
+        try:
+            module = importlib.import_module("trading_harness.quant.regime_store")
+        except ImportError:
+            return None
+        regime_store_cls = getattr(module, "RegimeStore", None)
+        if regime_store_cls is None:
+            return None
+        try:
+            _regime_store = regime_store_cls(store=get_influx_store())
+        except (TypeError, ValueError):
+            return None
+    return _regime_store
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +358,59 @@ class AnomalyQueryResponse(BaseModel):
     count: int = Field(ge=0)
 
 
+class RegimeDetectRequest(BaseModel):
+    """Detect-Anfrage: Kerzenreihe eines Symbols → Regime erkennen + speichern."""
+
+    symbol: str = Field(min_length=1)
+    timeframe: str
+    exchange: str = Field(min_length=1)
+    candles: list[OHLCVCandle] = Field(min_length=1)
+
+    @field_validator("timeframe")
+    @classmethod
+    def _check_timeframe(cls, value: str) -> str:
+        if value not in quant_schema.SUPPORTED_TIMEFRAMES:
+            raise ValueError(
+                f"unsupported timeframe '{value}', "
+                f"expected one of: {', '.join(quant_schema.SUPPORTED_TIMEFRAMES)}"
+            )
+        return value
+
+    @field_validator("symbol")
+    @classmethod
+    def _check_symbol(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("symbol must be non-empty")
+        return value
+
+
+class RegimeDetectResponse(BaseModel):
+    """Ergebnis eines Detect-Laufs: erkannte Marktphase + Persistenz-Status."""
+
+    status: str = "ok"
+    symbol: str
+    regime: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    stored: bool
+
+    @field_validator("regime")
+    @classmethod
+    def _check_regime(cls, value: str) -> str:
+        if value not in REGIME_NAMES:
+            raise ValueError(
+                f"unknown regime '{value}', expected one of: {', '.join(REGIME_NAMES)}"
+            )
+        return value
+
+
+class RegimeQueryResponse(BaseModel):
+    """Gespeicherte Regimes für ein Symbol (leere Liste, falls keine vorhanden)."""
+
+    symbol: str
+    regimes: list[dict[str, Any]]
+    count: int = Field(ge=0)
+
+
 # ---------------------------------------------------------------------------
 # Hilfsfunktionen (deterministische Ingest-Logik)
 # ---------------------------------------------------------------------------
@@ -389,6 +484,26 @@ def _candles_to_detector_input(candles: list[OHLCVCandle]) -> list[dict[str, Any
         }
         for candle in candles
     ]
+
+
+def _candles_to_regime_input(candles: list[OHLCVCandle]) -> list[dict[str, Any]]:
+    """API-Kerzen → RegimeDetector-Kerzen (ISO-Zeitstempel + numerische Fields)."""
+    return [
+        {
+            "time": candle.time.isoformat(),
+            "open": candle.open,
+            "high": candle.high,
+            "low": candle.low,
+            "close": candle.close,
+            "volume": candle.volume,
+        }
+        for candle in candles
+    ]
+
+
+def _regime_result_from_store(result: Any) -> tuple[str, float, bool]:
+    """Store-Ergebnis → (regime, confidence, stored) mit defensiver Typisierung."""
+    return str(result.regime), float(result.confidence), bool(result.stored)
 
 
 # ---------------------------------------------------------------------------
@@ -620,3 +735,76 @@ async def get_anomalies(
     if store is not None:
         rows = await store.get_anomalies(symbol, timeframe, anomaly_type, start_iso, end_iso)
     return AnomalyQueryResponse(symbol=symbol, anomalies=rows, count=len(rows))
+
+
+@router.post(
+    "/regime/detect",
+    response_model=RegimeDetectResponse,
+    dependencies=[Depends(require_trade_key)],
+)
+async def detect_regime(payload: RegimeDetectRequest) -> RegimeDetectResponse:
+    """Erkennt die Marktphase mit dem ``RegimeDetector`` und persistiert sie.
+
+    ``regime``/``confidence`` kommen aus der deterministischen Erkennung
+    (``quant/regime_detection.py``); ``stored`` ist True, wenn ein
+    verfügbarer ``RegimeStore`` das Ergebnis übernommen hat; ohne Store
+    bleibt der Endpunkt funktional (``stored=false``).
+    """
+    _require_quant_enabled()
+    candle_dicts = _candles_to_regime_input(payload.candles)
+    store = get_regime_store()
+    if store is not None:
+        result = await store.detect_and_store(
+            payload.symbol,
+            payload.timeframe,
+            candle_dicts,
+            exchange=payload.exchange,
+        )
+        regime, confidence, stored = _regime_result_from_store(result)
+    else:
+        regime_result: RegimeResult = RegimeDetector().detect(candle_dicts)
+        regime, confidence, stored = (
+            regime_result.regime,
+            regime_result.confidence,
+            False,
+        )
+    return RegimeDetectResponse(
+        status="ok",
+        symbol=payload.symbol,
+        regime=regime,
+        confidence=confidence,
+        stored=stored,
+    )
+
+
+@router.get(
+    "/regime/{symbol}",
+    response_model=RegimeQueryResponse,
+    dependencies=[Depends(require_read_key)],
+)
+async def get_regimes(
+    symbol: str,
+    timeframe: str = "1m",
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> RegimeQueryResponse:
+    """Liefert gespeicherte Regimes für ein Symbol.
+
+    ``timeframe`` wird gegen die unterstützten Werte validiert;
+    ``start``/``end`` sind optionale UTC-Zeitgrenzen. Unbekannte Symbole
+    liefern eine leere Liste (kein Fehler).
+    """
+    _require_quant_enabled()
+    if timeframe not in quant_schema.SUPPORTED_TIMEFRAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported timeframe '{timeframe}'",
+        )
+    # RegimeStore erwartet UTC-ISO-Strings (naive API-Zeiten sind UTC).
+    start_iso = start.isoformat() if start is not None else None
+    end_iso = end.isoformat() if end is not None else None
+    store = get_regime_store()
+    rows: list[dict[str, Any]] = []
+    if store is not None:
+        rows = await store.get_regime(symbol, timeframe, start_iso, end_iso)
+    return RegimeQueryResponse(symbol=symbol, regimes=rows, count=len(rows))

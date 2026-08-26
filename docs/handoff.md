@@ -2,6 +2,12 @@
 
 ## Current state
 
+**Phase 4 abgeschlossen: Quantitative Trading Data Platform — Regime Detection (2026-08-25).**
+1092 Tests (1057+35 neue Phase-4-Tests), ruff clean, mypy clean (68 source files).
+Neue Module: `quant/regime_detection.py` (RegimeDetector: SMA-Crossover, ADX, Volatilität,
+Crash/Recovery), `quant/regime_store.py` (RegimeStore: detect+store+query in InfluxDB),
+erweiterte `api/quant_routes.py` (2 neue Endpunkte: /quant/regime/detect, /quant/regime/{symbol}).
+
 **Phase 3 abgeschlossen: Quantitative Trading Data Platform — Anomaly Detection (2026-08-25).**
 1057 Tests (1020+37 neue Phase-3-Tests), ruff clean, mypy clean (66 source files).
 Neue Module: `quant/anomaly_detection.py` (AnomalyDetector: Z-Score, IQR, Price Shock, Volume Spike,
