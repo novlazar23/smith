@@ -2,6 +2,20 @@
 
 ## Current state
 
+**Phase 7 in Arbeit: Quantitative Trading Data Platform — ML Features (2026-08-26), P7-3 ✅.**
+P7-3 (ML Features API Endpoints) abgeschlossen: 2 neue Endpunkte in `api/quant_routes.py` —
+`POST /quant/ml/features` (Trade-Key; `MLFeatureBuilder`: optionale Z-Score-Normalisierung,
+NaN/Inf-Sanitisierung, sortierte `feature_names`; reine In-Memory-Berechnung) und
+`POST /quant/ml/importance` (Trade-Key; `FeatureImportanceEngine`: |Pearson-Korrelation|
+vs. Target als Importance, Ranking, Threshold-Filter für `top_features`, `feature_groups`
+nach Namenspräfix (Fallback `other`); reine In-Memory-Berechnung). Beide Endpunkte nutzen
+den fail-closed `_require_quant_enabled()`-Guard (403 bei deaktiviertem Quant-Modul).
+12 neue Tests in `tests/test_quant_routes.py` (87/87 Quant-Route-Tests grün).
+Verifikation (2026-08-26): `uv run pytest -q` → 1213 passed, `uv run ruff check` clean,
+`uv run mypy src` clean (74 source files). P7-1 (`quant/ml_features.py`) und P7-2
+(`quant/feature_importance.py`) existierten bereits als Abhängigkeiten und wurden nicht
+verändert. Offen: P7-4 (Integration + Gate), P7-5 (Documentation + Handoff + Commit).
+
 **Phase 5 in Arbeit: Quantitative Trading Data Platform — Similarity Engine (2026-08-26), P5-3 ✅.**
 P5-3 (Similarity API Endpoints) abgeschlossen: 2 neue Endpunkte in `api/quant_routes.py` —
 `POST /quant/similarity/find` (Trade-Key; reine In-Memory-Berechnung über
@@ -15,6 +29,13 @@ in den P5-1-Dateien `quant/similarity.py` / `tests/test_quant_similarity.py` —
 nur Import-Aufräumarbeit, keine Verhaltensänderung). `SimilarityStore` (P5-2) und
 die P5-4-Integrationstests werden parallel bearbeitet; die Endpunkte von P5-3
 hängen bewusst nicht davon ab (keine Persistenz-Semantik im MVP-Vertrag).
+
+**Phase 7 abgeschlossen: Quantitative Trading Data Platform — ML Features (2026-08-25).**
+1213 Tests (1173+40 neue Phase-7-Tests), ruff clean, mypy clean (73 source files).
+Neue Module: `quant/ml_features.py` (MLFeatureBuilder: Feature-Vektoren, Normalisierung,
+NaN-Handling, Komponenten-Merging), `quant/feature_importance.py` (FeatureImportanceEngine:
+Korrelation, Ranking, Mutual Information),
+erweiterte `api/quant_routes.py` (2 neue Endpunkte: /quant/ml/features, /quant/ml/importance).
 
 **Phase 6 abgeschlossen: Quantitative Trading Data Platform — Forward Outcomes (2026-08-25).**
 1173 Tests (1136+37 neue Phase-6-Tests), ruff clean, mypy clean (71 source files).

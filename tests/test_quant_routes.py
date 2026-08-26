@@ -37,6 +37,8 @@ SIMILARITY_FIND_URL = "/quant/similarity/find"
 SIMILARITY_URL = "/quant/similarity/{symbol}"
 OUTCOMES_COMPUTE_URL = "/quant/outcomes/compute"
 OUTCOMES_URL = "/quant/outcomes/{symbol}"
+ML_FEATURES_URL = "/quant/ml/features"
+ML_IMPORTANCE_URL = "/quant/ml/importance"
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -344,6 +346,29 @@ def make_outcome_payload(**overrides: Any) -> dict[str, Any]:
         "candles": make_outcome_candles(),
         "pattern_length": 10,
         "horizons": [5, 10],
+    }
+    base.update(overrides)
+    return base
+
+
+def make_ml_features_payload(**overrides: Any) -> dict[str, Any]:
+    """Z-Score-Exakt-Beispiel: Werte 1.0/3.0 → Mittel 2.0, Std 1.0 → -1.0/+1.0."""
+    base: dict[str, Any] = {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "features": {"rsi": 1.0, "macd": 3.0},
+        "normalize": True,
+    }
+    base.update(overrides)
+    return base
+
+
+def make_ml_importance_payload(**overrides: Any) -> dict[str, Any]:
+    """Deterministisches Korrelationsbeispiel: rsi = target (r=+1), macd = -target+5 (r=-1)."""
+    base: dict[str, Any] = {
+        "features": {"rsi": [1.0, 2.0, 3.0, 4.0], "macd": [4.0, 3.0, 2.0, 1.0]},
+        "target": [1.0, 2.0, 3.0, 4.0],
+        "threshold": 0.1,
     }
     base.update(overrides)
     return base
@@ -1746,3 +1771,230 @@ def test_get_outcomes_disabled_returns_403(
     assert resp.status_code == 403
     assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
     outcome_store.get_outcomes.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# POST /quant/ml/features (P7-3)
+# ---------------------------------------------------------------------------
+
+
+def test_build_ml_features_success(quant_client: tuple[TestClient, MagicMock, Settings]) -> None:
+    """Z-Score-Exakt-Beispiel: 1.0/3.0 → -1.0/+1.0, feature_names alphabetisch sortiert."""
+    client, _, _ = quant_client
+    resp = client.post(ML_FEATURES_URL, json=make_ml_features_payload())
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "symbol": "BTCUSDT",
+        "features": {"rsi": -1.0, "macd": 1.0},
+        "feature_names": ["macd", "rsi"],
+    }
+
+
+def test_build_ml_features_no_normalization(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """normalize=False → Roh-Features unverändert, nur NaN/Inf-Bereinigung."""
+    client, _, _ = quant_client
+    resp = client.post(
+        ML_FEATURES_URL, json=make_ml_features_payload(normalize=False)
+    )
+    assert resp.status_code == 200
+    assert resp.json()["features"] == {"rsi": 1.0, "macd": 3.0}
+    assert resp.json()["feature_names"] == ["macd", "rsi"]
+
+
+def test_build_ml_features_sanitizes_nan(quant_client: tuple[TestClient, MagicMock, Settings]) -> None:
+    """NaN-Wert (rohes JSON-Literal) → deterministisch auf fill_nan (0.0) ersetzt.
+
+    httpx verweigert das Serialisieren von ``float('nan')`` (``allow_nan=False``),
+    daher roher JSON-Body — der Server-Parser akzeptiert NaN-Literale.
+    """
+    client, _, _ = quant_client
+    resp = client.post(
+        ML_FEATURES_URL,
+        content='{"symbol": "BTCUSDT", "timeframe": "1m", "features": {"rsi": NaN, "macd": 3.0}, "normalize": false}',
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["features"] == {"rsi": 0.0, "macd": 3.0}
+
+
+def test_build_ml_features_invalid_data_422(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """Leere Features, ungültiger Timeframe, leerer Symbol → 422."""
+    client, _, _ = quant_client
+    assert (
+        client.post(ML_FEATURES_URL, json=make_ml_features_payload(features={})).status_code == 422
+    )
+    assert (
+        client.post(ML_FEATURES_URL, json=make_ml_features_payload(timeframe="2m")).status_code
+        == 422
+    )
+    assert client.post(ML_FEATURES_URL, json=make_ml_features_payload(symbol="")).status_code == 422
+
+
+def test_build_ml_features_requires_trade_key(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """Mit gesetztem Trade-Key: fehlender Key → 401, falscher Key → 403, richtiger → 200."""
+    client, _, settings = quant_client
+    settings.trade_api_key = "secret-trade"
+
+    assert client.post(ML_FEATURES_URL, json=make_ml_features_payload()).status_code == 401
+    assert (
+        client.post(
+            ML_FEATURES_URL,
+            json=make_ml_features_payload(),
+            headers={"X-Trade-API-Key": "wrong"},
+        ).status_code
+        == 403
+    )
+    resp = client.post(
+        ML_FEATURES_URL,
+        json=make_ml_features_payload(),
+        headers={"X-Trade-API-Key": "secret-trade"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+def test_build_ml_features_disabled_returns_403(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """influxdb_enabled=False → 403 QUANT_DISABLED, keine Build-Berechnung."""
+    client, _, settings = quant_client
+    settings.influxdb_enabled = False
+    resp = client.post(ML_FEATURES_URL, json=make_ml_features_payload())
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
+
+
+# ---------------------------------------------------------------------------
+# POST /quant/ml/importance (P7-3)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_ml_importance_success(quant_client: tuple[TestClient, MagicMock, Settings]) -> None:
+    """rsi=target (r=+1), macd=-target+5 (r=-1) → beide Importance 1.0, Rang 1/2, Top-Liste, Gruppen."""
+    client, _, _ = quant_client
+    resp = client.post(ML_IMPORTANCE_URL, json=make_ml_importance_payload())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["features"] == [
+        {"name": "rsi", "importance": 1.0, "correlation": 1.0, "rank": 1},
+        {"name": "macd", "importance": 1.0, "correlation": -1.0, "rank": 2},
+    ]
+    assert data["top_features"] == ["rsi", "macd"]
+    # Beide Namen ohne Präfix → Gruppe "other", Durchschnitts-Importance 1.0.
+    assert data["feature_groups"] == {"other": 1.0}
+
+
+def test_compute_ml_importance_threshold_filters(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """Konstantes Feature (r=0.0) fällt unter die Schwelle → nur rsi in top_features."""
+    client, _, _ = quant_client
+    resp = client.post(
+        ML_IMPORTANCE_URL,
+        json=make_ml_importance_payload(features={"rsi": [1.0, 2.0, 3.0, 4.0], "macd": [2.0] * 4}),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["features"] == [
+        {"name": "rsi", "importance": 1.0, "correlation": 1.0, "rank": 1},
+        {"name": "macd", "importance": 0.0, "correlation": 0.0, "rank": 2},
+    ]
+    assert data["top_features"] == ["rsi"]
+    assert data["feature_groups"] == {"other": 0.5}
+
+
+def test_compute_ml_importance_custom_groups(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """Namenspräfixe bilden Feature-Gruppen (z. B. price_rsi vs. momentum_macd)."""
+    client, _, _ = quant_client
+    resp = client.post(
+        ML_IMPORTANCE_URL,
+        json=make_ml_importance_payload(
+            features={
+                "price_rsi": [1.0, 2.0, 3.0, 4.0],
+                "momentum_macd": [2.0, 2.0, 2.0, 2.0],
+            },
+            threshold=0.0,
+        ),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["feature_groups"] == {"price": 1.0, "momentum": 0.0}
+    assert data["top_features"] == ["price_rsi", "momentum_macd"]
+
+
+def test_compute_ml_importance_invalid_data_422(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """Leere Features, zu kurzes/leeres Target, Längen-Mismatch, Threshold außerhalb
+    [0, 1] → 422."""
+    client, _, _ = quant_client
+    assert (
+        client.post(ML_IMPORTANCE_URL, json=make_ml_importance_payload(features={})).status_code
+        == 422
+    )
+    assert client.post(ML_IMPORTANCE_URL, json=make_ml_importance_payload(target=[])).status_code == 422
+    assert (
+        client.post(ML_IMPORTANCE_URL, json=make_ml_importance_payload(target=[1.0])).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            ML_IMPORTANCE_URL,
+            json=make_ml_importance_payload(features={"rsi": [1.0, 2.0], "macd": [4.0, 3.0, 2.0, 1.0]}),
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(ML_IMPORTANCE_URL, json=make_ml_importance_payload(threshold=1.5)).status_code
+        == 422
+    )
+    assert (
+        client.post(ML_IMPORTANCE_URL, json=make_ml_importance_payload(threshold=-0.1)).status_code
+        == 422
+    )
+
+
+def test_compute_ml_importance_requires_trade_key(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """Mit gesetztem Trade-Key: fehlender Key → 401, falscher Key → 403, richtiger → 200."""
+    client, _, settings = quant_client
+    settings.trade_api_key = "secret-trade"
+
+    assert client.post(ML_IMPORTANCE_URL, json=make_ml_importance_payload()).status_code == 401
+    assert (
+        client.post(
+            ML_IMPORTANCE_URL,
+            json=make_ml_importance_payload(),
+            headers={"X-Trade-API-Key": "wrong"},
+        ).status_code
+        == 403
+    )
+    resp = client.post(
+        ML_IMPORTANCE_URL,
+        json=make_ml_importance_payload(),
+        headers={"X-Trade-API-Key": "secret-trade"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+def test_compute_ml_importance_disabled_returns_403(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """influxdb_enabled=False → 403 QUANT_DISABLED, keine Importance-Berechnung."""
+    client, _, settings = quant_client
+    settings.influxdb_enabled = False
+    resp = client.post(ML_IMPORTANCE_URL, json=make_ml_importance_payload())
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "QUANT_DISABLED"

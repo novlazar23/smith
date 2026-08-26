@@ -1,5 +1,5 @@
 """Quant-Plattform API-Endpunkte (Phase 1, P1-8; Phase 2, P2-3; Phase 3, P3-3;
-Phase 4, P4-3; Phase 5, P5-3; Phase 6, P6-3).
+Phase 4, P4-3; Phase 5, P5-3; Phase 6, P6-3; Phase 7, P7-3).
 
 Stellt die InfluxDB-basierte OHLCV-Ingestion, die Feature-Endpunkte, die
 Anomaly-Endpunkte und die Similarity-Endpunkte unter ``/quant/*`` als eigenen
@@ -22,6 +22,8 @@ Auth-Trennung nach dem bestehenden Read/Trade-Muster (R5.21):
 - ``GET  /quant/similarity/{symbol}`` → Read-Key
 - ``POST /quant/outcomes/compute``    → Trade-Key (Schreiboperation)
 - ``GET  /quant/outcomes/{symbol}``   → Read-Key
+- ``POST /quant/ml/features``         → Trade-Key (reine Berechnung)
+- ``POST /quant/ml/importance``       → Trade-Key (reine Berechnung)
 
  Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``, ``FeatureStore``,
 ``AnomalyStore``, ``RegimeStore``, ``ForwardOutcomeStore``) werden über die
@@ -76,10 +78,20 @@ persistiert sie über ``RegimeStore`` (falls verfügbar);
   (Mean/Median, Hit Rate, Profit Factor, Expectancy, Std) für die
   angefragten Horizonte und persistiert über ``ForwardOutcomeStore``
   (falls verfügbar); ``GET /quant/outcomes/{symbol}`` liefert gespeicherte
-  Outcomes. ``quant/forward_outcomes_store.py`` entsteht parallel (P6-2) —
-  der Getter ``get_outcome_store`` liefert daher ``None``, bis das Modul
-  vorhanden ist, und die Endpunkte bleiben ohne Persistenz funktional
-  (``stored=false`` / leere Outcome-Listen).
+   Outcomes. ``quant/forward_outcomes_store.py`` entsteht parallel (P6-2) —
+   der Getter ``get_outcome_store`` liefert daher ``None``, bis das Modul
+   vorhanden ist, und die Endpunkte bleiben ohne Persistenz funktional
+   (``stored=false`` / leere Outcome-Listen).
+
+   ML-Endpunkte (P7-3): ``POST /quant/ml/features`` baut mit dem
+   deterministischen ``MLFeatureBuilder`` (``quant/ml_features.py``, P7-1)
+   einen ML-Feature-Vektor aus übergebenen Roh-Features — Z-Score-
+   Normalisierung (optional) und NaN-/Inf-Sanitisierung, reine
+   In-Memory-Berechnung ohne Persistenz. ``POST /quant/ml/importance``
+   berechnet mit der deterministischen ``FeatureImportanceEngine``
+   (``quant/feature_importance.py``, P7-2) die Feature-Importance
+   (Pearson-Korrelation gegen ein Ziel, Ranking, Threshold-Filter und
+   Feature-Gruppen-Aggregation) — ebenfalls reine In-Memory-Berechnung.
 """
 
 from __future__ import annotations
@@ -89,15 +101,17 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from trading_harness.api.security import require_read_key, require_trade_key
 from trading_harness.config import get_settings
 from trading_harness.quant import schema as quant_schema
 from trading_harness.quant.anomaly_detection import Anomaly, AnomalyDetector
+from trading_harness.quant.feature_importance import FeatureImportanceEngine
 from trading_harness.quant.features import FeatureEngine
 from trading_harness.quant.forward_outcomes import ForwardOutcomeEngine
 from trading_harness.quant.influxdb_client import InfluxDBStore
+from trading_harness.quant.ml_features import MLFeatureBuilder
 from trading_harness.quant.regime_detection import REGIME_NAMES, RegimeDetector, RegimeResult
 from trading_harness.quant.similarity import SimilarityEngine
 
@@ -607,6 +621,87 @@ class OutcomeQueryResponse(BaseModel):
     symbol: str
     outcomes: list[dict[str, Any]]
     count: int = Field(ge=0)
+
+
+class MLFeaturesRequest(BaseModel):
+    """Build-Anfrage: Roh-Features eines Symbols → ML-Feature-Vektor (P7-3).
+
+    ``features`` ist die Roh-Feature-Map (Key → Wert); NaN/Inf-Werte werden
+    vom ``MLFeatureBuilder`` deterministisch durch ``fill_nan`` ersetzt.
+    ``normalize`` steuert die Z-Score-Normalisierung (Default: aktiv).
+    """
+
+    symbol: str = Field(min_length=1)
+    timeframe: str
+    features: dict[str, float] = Field(min_length=1)
+    normalize: bool = True
+
+    @field_validator("timeframe")
+    @classmethod
+    def _check_timeframe(cls, value: str) -> str:
+        if value not in quant_schema.SUPPORTED_TIMEFRAMES:
+            raise ValueError(
+                f"unsupported timeframe '{value}', "
+                f"expected one of: {', '.join(quant_schema.SUPPORTED_TIMEFRAMES)}"
+            )
+        return value
+
+    @field_validator("symbol")
+    @classmethod
+    def _check_symbol(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("symbol must be non-empty")
+        return value
+
+
+class MLFeaturesResponse(BaseModel):
+    """Ergebnis des ML-Feature-Vector-Builds: bereinigte Features + Namen."""
+
+    status: str = "ok"
+    symbol: str
+    features: dict[str, float]
+    feature_names: list[str]
+
+
+class MLImportanceRequest(BaseModel):
+    """Importance-Anfrage: Feature-Zeitreihen gegen ein Ziel (P7-3).
+
+    ``features`` ist eine Map Feature-Name → Werteliste; jede Liste muss
+    exakt die Länge von ``target`` haben. ``threshold`` ist die
+    Mindest-Importance für ``top_features`` (Default: 0.1).
+    """
+
+    features: dict[str, list[float]] = Field(min_length=1)
+    target: list[float] = Field(min_length=2)
+    threshold: float = Field(default=0.1, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _check_lengths(self) -> MLImportanceRequest:
+        for name, values in self.features.items():
+            if len(values) != len(self.target):
+                raise ValueError(
+                    f"feature '{name}' length {len(values)} does not match "
+                    f"target length {len(self.target)}"
+                )
+        return self
+
+
+class MLImportanceFeatureModel(BaseModel):
+    """Einzelnes Feature mit Importance, Korrelation und Rang (API-Darstellung)."""
+
+    name: str
+    importance: float = Field(ge=0.0)
+    correlation: float
+    rank: int = Field(ge=1)
+
+
+class MLImportanceResponse(BaseModel):
+    """Ergebnis der Feature-Importance: Ranking, Top-Features, Gruppen."""
+
+    status: str = "ok"
+    features: list[MLImportanceFeatureModel]
+    top_features: list[str]
+    feature_groups: dict[str, float]
 
 
 # ---------------------------------------------------------------------------
@@ -1223,3 +1318,64 @@ async def get_outcomes(
     if store is not None:
         rows = await store.get_outcomes(symbol, timeframe, start_iso, end_iso)
     return OutcomeQueryResponse(symbol=symbol, outcomes=rows, count=len(rows))
+
+
+# ---------------------------------------------------------------------------
+# ML-Endpunkte (P7-3)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/ml/features",
+    response_model=MLFeaturesResponse,
+    dependencies=[Depends(require_trade_key)],
+)
+async def build_ml_features(payload: MLFeaturesRequest) -> MLFeaturesResponse:
+    """Baut einen ML-Feature-Vektor mit dem ``MLFeatureBuilder``.
+
+    Die Roh-Features werden deterministisch bereinigt (NaN/Inf →
+    ``fill_nan``) und optional Z-Score-normalisiert. Reine In-Memory-
+    Berechnung — es findet keine Persistenz und kein InfluxDB-Zugriff statt.
+    """
+    _require_quant_enabled()
+    builder = MLFeatureBuilder(normalize=payload.normalize)
+    result = builder.build(payload.symbol, payload.timeframe, payload.features)
+    return MLFeaturesResponse(
+        status="ok",
+        symbol=result.symbol,
+        features=result.features,
+        feature_names=result.feature_names,
+    )
+
+
+@router.post(
+    "/ml/importance",
+    response_model=MLImportanceResponse,
+    dependencies=[Depends(require_trade_key)],
+)
+async def compute_ml_importance(payload: MLImportanceRequest) -> MLImportanceResponse:
+    """Berechnet Feature-Importance mit der ``FeatureImportanceEngine``.
+
+    Importance = |Pearson-Korrelation| jedes Features gegen ``target``;
+    Features werden absteigend gerankt, ``top_features`` enthält alle mit
+    Importance ≥ ``threshold``, ``feature_groups`` die durchschnittliche
+    Importance pro Namensgruppe (Präfix vor dem ersten ``_``). Reine
+    In-Memory-Berechnung ohne Persistenz und InfluxDB-Zugriff.
+    """
+    _require_quant_enabled()
+    engine = FeatureImportanceEngine(threshold=payload.threshold)
+    result = engine.compute(payload.features, payload.target)
+    return MLImportanceResponse(
+        status="ok",
+        features=[
+            MLImportanceFeatureModel(
+                name=f.name,
+                importance=f.importance,
+                correlation=f.correlation,
+                rank=f.rank,
+            )
+            for f in result.features
+        ],
+        top_features=result.top_features,
+        feature_groups=result.feature_groups,
+    )
