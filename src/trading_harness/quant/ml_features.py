@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 
 @dataclass
@@ -25,7 +25,7 @@ class MLFeatureBuilder:
     """Baut einheitliche ML-Feature-Vectoren aus Quant-Modul-Ausgaben."""
 
     # Gewichtung der verschiedenen Feature-Gruppen
-    GROUP_WEIGHTS: dict[str, float] = {
+    GROUP_WEIGHTS: ClassVar[dict[str, float]] = {
         "price": 1.0,
         "volume": 0.8,
         "momentum": 1.2,

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import time
+
 import pytest
-from trading_harness.quant.feature_cache import FeatureCache, CacheStats
+
+from trading_harness.quant.feature_cache import FeatureCache
 
 
 class TestFeatureCache:

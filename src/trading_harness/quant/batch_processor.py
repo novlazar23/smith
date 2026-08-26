@@ -4,9 +4,9 @@ Batch-Verarbeitung für mehrere Symbole mit Chunking und Fortschritts-Tracking.
 """
 from __future__ import annotations
 
-import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 
 @dataclass
@@ -65,8 +65,8 @@ class BatchProcessor:
                 result = processor(symbol)
                 job.results[symbol] = result
                 job.processed += 1
-            except Exception as e:
-                job.errors.append(f"{symbol}: {str(e)}")
+            except Exception as e:  # noqa: BLE001 - bewusste Fehlerisolation pro Symbol
+                job.errors.append(f"{symbol}: {e!s}")
         job.status = "completed" if not job.errors else "failed"
         return job
 
@@ -87,9 +87,9 @@ class BatchProcessor:
                 for symbol, result in results.items():
                     job.results[symbol] = result
                     job.processed += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - bewusste Fehlerisolation pro Chunk
                 for symbol in chunk:
-                    job.errors.append(f"{symbol}: {str(e)}")
+                    job.errors.append(f"{symbol}: {e!s}")
         job.status = "completed" if not job.errors else "failed"
         return job
 

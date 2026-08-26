@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import pytest
+
 from trading_harness.quant.feature_importance import (
-    FeatureImportance,
     FeatureImportanceEngine,
-    FeatureImportanceResult,
 )
 
 

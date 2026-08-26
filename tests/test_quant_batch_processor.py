@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import pytest
-from trading_harness.quant.batch_processor import BatchProcessor, BatchJob, BatchStatus
+
+from trading_harness.quant.batch_processor import BatchProcessor, BatchStatus
 
 
 class TestBatchProcessor:

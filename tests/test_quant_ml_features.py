@@ -1,8 +1,8 @@
 """Tests für ML Feature Builder."""
 from __future__ import annotations
 
-import math
 import pytest
+
 from trading_harness.quant.ml_features import MLFeatureBuilder, MLFeatures
 
 

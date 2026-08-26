@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import math
+
 import pytest
+
 from trading_harness.quant.backtesting import (
     BacktestEngine,
     BacktestResult,
-    BacktestTrade,
     Signal,
 )
 
