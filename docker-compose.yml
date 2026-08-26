@@ -16,6 +16,22 @@ services:
       - ./prompts:/app/prompts:ro
       - ./schemas:/app/schemas:ro
       - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
 
   postgres:
     image: timescale/timescaledb:latest-pg17
