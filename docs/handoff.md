@@ -46,6 +46,29 @@ nur Import-Aufräumarbeit, keine Verhaltensänderung). `SimilarityStore` (P5-2) 
 die P5-4-Integrationstests werden parallel bearbeitet; die Endpunkte von P5-3
 hängen bewusst nicht davon ab (keine Persistenz-Semantik im MVP-Vertrag).
 
+**Phase 13 abgeschlossen: Quantitative Trading Data Platform — Final Verification (2026-08-25).**
+1365 Tests ✓, ruff clean ✓, mypy clean ✓ (80 source files, 22 Quant-Module).
+
+**GESAMTÜBERSICHT:**
+- Phase 0-4: Infrastructure, InfluxDB, Features, Anomalies, Regime (Commits `0661e7f`–`00563ba`)
+- Phase 5: Similarity Engine (`91bf280`)
+- Phase 6: Forward Outcomes (`be72652`)
+- Phase 7: ML Features (`edc3509`)
+- Phase 8: Backtesting Engine (`e0120e4`)
+- Phase 9: Shadow-Loop Integration (`befbe14`)
+- Phase 10: Performance Optimization (`4b6a377`)
+- Phase 11: Hardening (`6ae81ba`)
+- Phase 12: Documentation (`1497099`)
+- Phase 13: Final Verification (dieser Commit)
+
+**Module:** schema, influxdb_client, ohlcv_ingestion, features, feature_store,
+anomaly_detection, anomaly_store, regime_detection, regime_store, similarity,
+similarity_store, forward_outcomes, forward_outcomes_store, ml_features,
+feature_importance, backtesting, backtest_store, evidence_aggregator,
+feature_cache, batch_processor, validation, error_recovery, observability
+
+**API-Endpunkte:** 22 Quant-Endpunkte unter /quant/*
+
 **Phase 12 abgeschlossen: Quantitative Trading Data Platform — Documentation (2026-08-25).**
 Dokumentation: `docs/quant-platform.md` (Architektur, Module, API, Konfiguration, Beispiele),
 `docs/quant-integration.md` (Shadow-Loop-Integration, Performance, Fehlerbehandlung).
