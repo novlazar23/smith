@@ -1,10 +1,11 @@
-"""Quant-Plattform API-Endpunkte (Phase 1, P1-8; Phase 2, P2-3; Phase 3, P3-3).
+"""Quant-Plattform API-Endpunkte (Phase 1, P1-8; Phase 2, P2-3; Phase 3, P3-3;
+Phase 4, P4-3; Phase 5, P5-3).
 
-Stellt die InfluxDB-basierte OHLCV-Ingestion, die Feature-Endpunkte und die
-Anomaly-Endpunkte unter ``/quant/*`` als eigenen ``APIRouter`` bereit. Die
-Einhängung in die Haupt-App erfolgt erst in Phase 9 (siehe
-``docs/quant-platform-phase01-plan.md``, P1-8) — deshalb trägt der Router
-selbst seinen Prefix und ``main.py`` bleibt unangetastet.
+Stellt die InfluxDB-basierte OHLCV-Ingestion, die Feature-Endpunkte, die
+Anomaly-Endpunkte und die Similarity-Endpunkte unter ``/quant/*`` als eigenen
+``APIRouter`` bereit. Die Einhängung in die Haupt-App erfolgt erst in Phase 9
+(siehe ``docs/quant-platform-phase01-plan.md``, P1-8) — deshalb trägt der
+Router selbst seinen Prefix und ``main.py`` bleibt unangetastet.
 
 Auth-Trennung nach dem bestehenden Read/Trade-Muster (R5.21):
 
@@ -17,6 +18,8 @@ Auth-Trennung nach dem bestehenden Read/Trade-Muster (R5.21):
 - ``GET  /quant/anomalies/{symbol}``  → Read-Key
 - ``POST /quant/regime/detect``       → Trade-Key (Schreiboperation)
 - ``GET  /quant/regime/{symbol}``     → Read-Key
+- ``POST /quant/similarity/find``     → Trade-Key (Schreiboperation)
+- ``GET  /quant/similarity/{symbol}`` → Read-Key
 
 Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``, ``FeatureStore``,
 ``AnomalyStore``) werden über die modul-scope-Getter ``get_settings``
@@ -49,10 +52,19 @@ Regime-Endpunkte (P4-3): ``POST /quant/regime/detect`` erkennt mit dem
 deterministischen ``RegimeDetector`` die Marktphase einer Kerzenreihe und
 persistiert sie über ``RegimeStore`` (falls verfügbar);
 ``GET /quant/regime/{symbol}`` liefert gespeicherte Regimes.
-``quant/regime_store.py`` entsteht parallel (P4-2) — der Getter
-``get_regime_store`` liefert daher ``None``, bis das Modul vorhanden ist,
-und die Endpunkte bleiben ohne Persistenz funktional
-(``stored=false`` / leere Regime-Listen).
+ ``quant/regime_store.py`` entsteht parallel (P4-2) — der Getter
+ ``get_regime_store`` liefert daher ``None``, bis das Modul vorhanden ist,
+ und die Endpunkte bleiben ohne Persistenz funktional
+ (``stored=false`` / leere Regime-Listen).
+
+ Similarity-Endpunkte (P5-3): ``POST /quant/similarity/find`` sucht mit dem
+ deterministischen ``SimilarityEngine`` (``quant/similarity.py``) die
+ top_k ähnlichsten historischen Fenster für eine Query-Kerzenreihe — reine
+ In-Memory-Berechnung ohne Persistenz (``best_distance``/``best_correlation``
+ sind ``None``, wenn zu wenig Historie vorhanden ist).
+ ``GET /quant/similarity/{symbol}`` liefert Similitäts-Infos:
+ ``available`` spiegelt die InfluxDB-Verfügbarkeit (Datenquelle für
+ Historie) und ``window_size`` die Standard-Fenstergröße der Engine.
 """
 
 from __future__ import annotations
@@ -71,6 +83,7 @@ from trading_harness.quant.anomaly_detection import Anomaly, AnomalyDetector
 from trading_harness.quant.features import FeatureEngine
 from trading_harness.quant.influxdb_client import InfluxDBStore
 from trading_harness.quant.regime_detection import REGIME_NAMES, RegimeDetector, RegimeResult
+from trading_harness.quant.similarity import SimilarityEngine
 
 # Exchange-Tag für manuell per API ingestete Daten (keine konkrete Exchange).
 MANUAL_INGEST_EXCHANGE: str = "api"
@@ -411,6 +424,69 @@ class RegimeQueryResponse(BaseModel):
     count: int = Field(ge=0)
 
 
+class SimilarityFindRequest(BaseModel):
+    """Find-Anfrage: Query-Kerzenreihe → ähnliche historische Fenster suchen.
+
+    ``query`` und ``history`` sind beide Kerzenreihen; die Ähnlichkeit wird
+    rein in-memory (ohne Persistenz) mit dem ``SimilarityEngine`` berechnet.
+    """
+
+    symbol: str = Field(min_length=1)
+    timeframe: str
+    exchange: str = Field(min_length=1)
+    query: list[OHLCVCandle] = Field(min_length=2)
+    history: list[OHLCVCandle] = Field(min_length=1)
+    top_k: int = Field(default=5, ge=1, le=100)
+
+    @field_validator("timeframe")
+    @classmethod
+    def _check_timeframe(cls, value: str) -> str:
+        if value not in quant_schema.SUPPORTED_TIMEFRAMES:
+            raise ValueError(
+                f"unsupported timeframe '{value}', "
+                f"expected one of: {', '.join(quant_schema.SUPPORTED_TIMEFRAMES)}"
+            )
+        return value
+
+    @field_validator("symbol")
+    @classmethod
+    def _check_symbol(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("symbol must be non-empty")
+        return value
+
+
+class SimilarMatchModel(BaseModel):
+    """Ein ähnlicher historischer Ausschnitt (API-Darstellung)."""
+
+    start_index: int = Field(ge=0)
+    end_index: int = Field(ge=0)
+    distance: float = Field(ge=0.0)
+    correlation: float = Field(ge=-1.0, le=1.0)
+
+
+class SimilarityFindResponse(BaseModel):
+    """Ergebnis der Similarity-Suche: Top-K-Matches + Bestwerte.
+
+    ``best_distance``/``best_correlation`` sind ``None``, wenn keine Matches
+    gefunden wurden (z. B. unzureichende Historie).
+    """
+
+    status: str = "ok"
+    query_length: int = Field(ge=0)
+    matches: list[SimilarMatchModel]
+    best_distance: float | None = None
+    best_correlation: float | None = None
+
+
+class SimilarityInfoResponse(BaseModel):
+    """Similitäts-Infos für ein Symbol (Datenverfügbarkeit + Fenstergröße)."""
+
+    symbol: str
+    available: bool
+    window_size: int = Field(ge=1)
+
+
 # ---------------------------------------------------------------------------
 # Hilfsfunktionen (deterministische Ingest-Logik)
 # ---------------------------------------------------------------------------
@@ -488,6 +564,25 @@ def _candles_to_detector_input(candles: list[OHLCVCandle]) -> list[dict[str, Any
 
 def _candles_to_regime_input(candles: list[OHLCVCandle]) -> list[dict[str, Any]]:
     """API-Kerzen → RegimeDetector-Kerzen (ISO-Zeitstempel + numerische Fields)."""
+    return [
+        {
+            "time": candle.time.isoformat(),
+            "open": candle.open,
+            "high": candle.high,
+            "low": candle.low,
+            "close": candle.close,
+            "volume": candle.volume,
+        }
+        for candle in candles
+    ]
+
+
+def _candles_to_similarity_input(candles: list[OHLCVCandle]) -> list[dict[str, Any]]:
+    """API-Kerzen → SimilarityEngine-Kerzen (ISO-Zeitstempel + numerische Fields).
+
+    Die Engine nutzt ausschließlich das ``close``-Field für die Distanz-/
+    Korrelationsberechnung; die übrigen Fields bleiben zur Vollständigkeit.
+    """
     return [
         {
             "time": candle.time.isoformat(),
@@ -808,3 +903,75 @@ async def get_regimes(
     if store is not None:
         rows = await store.get_regime(symbol, timeframe, start_iso, end_iso)
     return RegimeQueryResponse(symbol=symbol, regimes=rows, count=len(rows))
+
+
+# ---------------------------------------------------------------------------
+# Similarity-Endpunkte (P5-3)
+# ---------------------------------------------------------------------------
+
+# Standard-Fenstergröße der SimilarityEngine (Sliding-Window-Länge in Kerzen).
+SIMILARITY_DEFAULT_WINDOW_SIZE: int = 20
+
+
+@router.post(
+    "/similarity/find",
+    response_model=SimilarityFindResponse,
+    dependencies=[Depends(require_trade_key)],
+)
+async def find_similarity(payload: SimilarityFindRequest) -> SimilarityFindResponse:
+    """Findet die top_k ähnlichsten historischen Fenster für eine Query-Reihe.
+
+    Die Ähnlichkeit wird mit dem deterministischen ``SimilarityEngine``
+    (Euclidean Distance + Pearson-Korrelation auf normalisierten Close-
+    Reihen) rein in-memory berechnet — es findet keine Persistenz statt.
+    ``best_distance``/``best_correlation`` referenzieren den besten Match
+    bzw. sind ``None``, wenn die Historie zu kurz für ein Fenster ist.
+    """
+    _require_quant_enabled()
+    engine = SimilarityEngine(window_size=SIMILARITY_DEFAULT_WINDOW_SIZE, top_k=payload.top_k)
+    query = _candles_to_similarity_input(payload.query)
+    history = _candles_to_similarity_input(payload.history)
+    result = engine.find_similar(query, history)
+    matches = [
+        SimilarMatchModel(
+            start_index=m.start_index,
+            end_index=m.end_index,
+            distance=m.distance,
+            correlation=m.correlation,
+        )
+        for m in result.matches
+    ]
+    return SimilarityFindResponse(
+        status="ok",
+        query_length=result.query_length,
+        matches=matches,
+        best_distance=result.best_distance,
+        best_correlation=result.best_correlation,
+    )
+
+
+@router.get(
+    "/similarity/{symbol}",
+    response_model=SimilarityInfoResponse,
+    dependencies=[Depends(require_read_key)],
+)
+async def get_similarity_info(symbol: str, timeframe: str = "1m") -> SimilarityInfoResponse:
+    """Liefert Similitäts-Infos für ein Symbol.
+
+    ``available`` spiegelt die InfluxDB-Verfügbarkeit (Datenquelle für die
+    Historie); ``window_size`` ist die Standard-Fenstergröße der Engine.
+    ``timeframe`` wird gegen die unterstützten Werte validiert.
+    """
+    _require_quant_enabled()
+    if timeframe not in quant_schema.SUPPORTED_TIMEFRAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported timeframe '{timeframe}'",
+        )
+    store = get_influx_store()
+    available = await store.health_check()
+    return SimilarityInfoResponse(
+        symbol=symbol,
+        available=available,
+        window_size=SIMILARITY_DEFAULT_WINDOW_SIZE,
+    )

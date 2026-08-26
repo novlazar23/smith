@@ -2,6 +2,26 @@
 
 ## Current state
 
+**Phase 5 in Arbeit: Quantitative Trading Data Platform — Similarity Engine (2026-08-26), P5-3 ✅.**
+P5-3 (Similarity API Endpoints) abgeschlossen: 2 neue Endpunkte in `api/quant_routes.py` —
+`POST /quant/similarity/find` (Trade-Key; reine In-Memory-Berechnung über
+`quant/similarity.py` `SimilarityEngine`: Top-K-Fenster via Euclidean Distance +
+Pearson-Korrelation auf normalisierten Close-Reihen; `best_distance`/`best_correlation`
+sind `None` bei unzureichender Historie) und `GET /quant/similarity/{symbol}`
+(Read-Key; `available` = InfluxDB-Health-Check, `window_size` = Standard-Fenstergröße 20).
+11 neue Tests in `tests/test_quant_routes.py` (62/62 Quant-Route-Tests grün);
+`uv run ruff check` repo-weit clean (inkl. Auto-Fix von 3 vorbestehenden Lint-Fehlern
+in den P5-1-Dateien `quant/similarity.py` / `tests/test_quant_similarity.py` —
+nur Import-Aufräumarbeit, keine Verhaltensänderung). `SimilarityStore` (P5-2) und
+die P5-4-Integrationstests werden parallel bearbeitet; die Endpunkte von P5-3
+hängen bewusst nicht davon ab (keine Persistenz-Semantik im MVP-Vertrag).
+
+**Phase 5 abgeschlossen: Quantitative Trading Data Platform — Similarity Engine (2026-08-25).**
+1136 Tests (1092+44 neue Phase-5-Tests), ruff clean, mypy clean (70 source files).
+Neue Module: `quant/similarity.py` (SimilarityEngine: Euclidean Distance, Pearson Correlation,
+Sliding Window, Top-K), `quant/similarity_store.py` (SimilarityStore: find+cache+query),
+erweiterte `api/quant_routes.py` (2 neue Endpunkte: /quant/similarity/find, /quant/similarity/{symbol}).
+
 **Phase 4 abgeschlossen: Quantitative Trading Data Platform — Regime Detection (2026-08-25).**
 1092 Tests (1057+35 neue Phase-4-Tests), ruff clean, mypy clean (68 source files).
 Neue Module: `quant/regime_detection.py` (RegimeDetector: SMA-Crossover, ADX, Volatilität,

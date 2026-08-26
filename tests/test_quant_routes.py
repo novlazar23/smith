@@ -33,6 +33,8 @@ ANOMALIES_DETECT_URL = "/quant/anomalies/detect"
 ANOMALIES_URL = "/quant/anomalies/{symbol}"
 REGIME_DETECT_URL = "/quant/regime/detect"
 REGIME_URL = "/quant/regime/{symbol}"
+SIMILARITY_FIND_URL = "/quant/similarity/find"
+SIMILARITY_URL = "/quant/similarity/{symbol}"
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -261,6 +263,39 @@ def make_regime_payload(**overrides: Any) -> dict[str, Any]:
         "timeframe": "1m",
         "exchange": "binance",
         "candles": make_regime_candles(),
+    }
+    base.update(overrides)
+    return base
+
+
+def make_similarity_candles(prices: list[float]) -> list[dict[str, Any]]:
+    """Deterministische OHLC-konsistente Kerzenreihe aus einer Preisliste."""
+    return [
+        {
+            "time": (CANDLE_TIME + timedelta(minutes=i)).isoformat(),
+            "open": price,
+            "high": price + 5.0,
+            "low": price - 5.0,
+            "close": price,
+            "volume": 10.0,
+        }
+        for i, price in enumerate(prices)
+    ]
+
+
+def make_similarity_history(count: int = 20) -> list[dict[str, Any]]:
+    """Deterministische Historie (Standard: exakt window_size Kerzen)."""
+    return make_similarity_candles([100.0 + (i % 7) * 3.0 for i in range(count)])
+
+
+def make_similarity_payload(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "exchange": "binance",
+        "query": make_similarity_candles([100.0, 110.0, 105.0, 115.0, 108.0]),
+        "history": make_similarity_history(),
+        "top_k": 5,
     }
     base.update(overrides)
     return base
@@ -1203,3 +1238,192 @@ def test_get_regimes_invalid_timeframe_422(
     resp = client.get(REGIME_URL.format(symbol="BTCUSDT"), params={"timeframe": "2m"})
     assert resp.status_code == 422
     regime_store.get_regime.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# POST /quant/similarity/find (P5-3)
+# ---------------------------------------------------------------------------
+
+
+def test_find_similarity_success(quant_client: tuple[TestClient, MagicMock, Settings]) -> None:
+    """20er-Historie (exakt ein Fenster) → 1 Match, Bestwerte = Match-Werte."""
+    client, _, _ = quant_client
+    resp = client.post(SIMILARITY_FIND_URL, json=make_similarity_payload())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["query_length"] == 5
+    assert len(data["matches"]) == 1
+    match = data["matches"][0]
+    assert match["start_index"] == 0
+    assert match["end_index"] == 19
+    assert match["distance"] >= 0.0
+    assert -1.0 <= match["correlation"] <= 1.0
+    assert data["best_distance"] == match["distance"]
+    assert data["best_correlation"] == match["correlation"]
+
+
+def test_find_similarity_top_k_sorted(quant_client: tuple[TestClient, MagicMock, Settings]) -> None:
+    """40er-Historie → mehrere Kandidaten, top_k begrenzt, Distanzen aufsteigend."""
+    client, _, _ = quant_client
+    resp = client.post(
+        SIMILARITY_FIND_URL,
+        json=make_similarity_payload(history=make_similarity_history(40), top_k=3),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert 1 <= len(data["matches"]) <= 3
+    distances = [m["distance"] for m in data["matches"]]
+    assert distances == sorted(distances)
+    assert data["best_distance"] == distances[0]
+    assert data["best_correlation"] == data["matches"][0]["correlation"]
+
+
+def test_find_similarity_insufficient_history(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """Historie kürzer als window_size → 200, leere Matches, Bestwerte None."""
+    client, _, _ = quant_client
+    resp = client.post(
+        SIMILARITY_FIND_URL,
+        json=make_similarity_payload(history=make_similarity_history(5)),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["query_length"] == 5
+    assert data["matches"] == []
+    assert data["best_distance"] is None
+    assert data["best_correlation"] is None
+
+
+def test_find_similarity_invalid_data_422(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """Negativer Preis, zu kurze Query, leere History, 2m, leerer Symbol, top_k=0 → 422."""
+    client, _, _ = quant_client
+
+    bad_query = make_similarity_candles([100.0, 110.0])
+    bad_query[0] = {**bad_query[0], "open": -5.0}
+    assert (
+        client.post(SIMILARITY_FIND_URL, json=make_similarity_payload(query=bad_query)).status_code
+        == 422
+    )
+    # query=min_length=2 → 1 Kerze ist zu kurz
+    assert (
+        client.post(
+            SIMILARITY_FIND_URL, json=make_similarity_payload(query=make_similarity_candles([100.0]))
+        ).status_code
+        == 422
+    )
+    assert client.post(SIMILARITY_FIND_URL, json=make_similarity_payload(history=[])).status_code == 422
+    assert (
+        client.post(SIMILARITY_FIND_URL, json=make_similarity_payload(timeframe="2m")).status_code
+        == 422
+    )
+    assert (
+        client.post(SIMILARITY_FIND_URL, json=make_similarity_payload(symbol="")).status_code == 422
+    )
+    assert (
+        client.post(SIMILARITY_FIND_URL, json=make_similarity_payload(top_k=0)).status_code == 422
+    )
+
+
+def test_find_similarity_requires_trade_key(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """Mit gesetztem Trade-Key: fehlender Key → 401, falscher Key → 403, richtiger → 200."""
+    client, _, settings = quant_client
+    settings.trade_api_key = "secret-trade"
+
+    assert client.post(SIMILARITY_FIND_URL, json=make_similarity_payload()).status_code == 401
+    assert (
+        client.post(
+            SIMILARITY_FIND_URL,
+            json=make_similarity_payload(),
+            headers={"X-Trade-API-Key": "wrong"},
+        ).status_code
+        == 403
+    )
+    resp = client.post(
+        SIMILARITY_FIND_URL,
+        json=make_similarity_payload(),
+        headers={"X-Trade-API-Key": "secret-trade"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+def test_find_similarity_disabled_returns_403(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """influxdb_enabled=False → 403 QUANT_DISABLED, keine Engine-Berechnung."""
+    client, _, settings = quant_client
+    settings.influxdb_enabled = False
+    resp = client.post(SIMILARITY_FIND_URL, json=make_similarity_payload())
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
+
+
+# ---------------------------------------------------------------------------
+# GET /quant/similarity/{symbol} (P5-3)
+# ---------------------------------------------------------------------------
+
+
+def test_get_similarity_info(quant_client: tuple[TestClient, MagicMock, Settings]) -> None:
+    """InfluxDB verbunden → 200 mit symbol, available=true, Standard-Fenstergröße 20."""
+    client, store, _ = quant_client
+    store.health_check = AsyncMock(return_value=True)
+    resp = client.get(SIMILARITY_URL.format(symbol="BTCUSDT"), params={"timeframe": "1m"})
+    assert resp.status_code == 200
+    assert resp.json() == {"symbol": "BTCUSDT", "available": True, "window_size": 20}
+    store.health_check.assert_awaited_once()
+
+
+def test_get_similarity_info_unavailable(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """InfluxDB down → 200 mit available=false (kein Fehler, nur Status)."""
+    client, store, _ = quant_client
+    store.health_check = AsyncMock(return_value=False)
+    resp = client.get(SIMILARITY_URL.format(symbol="BTCUSDT"))
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["symbol"] == "BTCUSDT"
+    assert data["available"] is False
+    assert data["window_size"] == 20
+
+
+def test_get_similarity_info_requires_read_key(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """Mit gesetztem Read-Key: fehlender Key → 401, richtiger Key → 200."""
+    client, _, settings = quant_client
+    settings.read_api_key = "secret-read"
+    assert client.get(SIMILARITY_URL.format(symbol="BTCUSDT")).status_code == 401
+    resp = client.get(
+        SIMILARITY_URL.format(symbol="BTCUSDT"),
+        headers={"X-Read-API-Key": "secret-read"},
+    )
+    assert resp.status_code == 200
+
+
+def test_get_similarity_info_invalid_timeframe_422(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """Unbekannter Timeframe → 422, keine Health-Check-Abfrage."""
+    client, store, _ = quant_client
+    resp = client.get(SIMILARITY_URL.format(symbol="BTCUSDT"), params={"timeframe": "2m"})
+    assert resp.status_code == 422
+    store.health_check.assert_not_awaited()
+
+
+def test_get_similarity_info_disabled_returns_403(
+    quant_client: tuple[TestClient, MagicMock, Settings]
+) -> None:
+    """influxdb_enabled=False → 403 QUANT_DISABLED, keine Health-Check-Abfrage."""
+    client, store, settings = quant_client
+    settings.influxdb_enabled = False
+    resp = client.get(SIMILARITY_URL.format(symbol="BTCUSDT"))
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
+    store.health_check.assert_not_awaited()
