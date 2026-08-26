@@ -1,6 +1,6 @@
 """Quant-Plattform API-Endpunkte (Phase 1, P1-8; Phase 2, P2-3; Phase 3, P3-3;
 Phase 4, P4-3; Phase 5, P5-3; Phase 6, P6-3; Phase 7, P7-3; Phase 8, P8-3;
-Phase 9, P9-3; Phase 10, P10-3).
+Phase 9, P9-3; Phase 10, P10-3; Phase 11, P11-3).
 
 Stellt die InfluxDB-basierte OHLCV-Ingestion, die Feature-Endpunkte, die
 Anomaly-Endpunkte und die Similarity-Endpunkte unter ``/quant/*`` als eigenen
@@ -30,6 +30,7 @@ Auth-Trennung nach dem bestehenden Read/Trade-Muster (R5.21):
 - ``GET  /quant/shadow/status``       → Read-Key
 - ``GET  /quant/perf/cache-stats``    → Read-Key
 - ``GET  /quant/perf/batch-status``   → Read-Key
+- ``POST /quant/validate``            → Trade-Key (reine Berechnung)
 
  Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``, ``FeatureStore``,
 ``AnomalyStore``, ``RegimeStore``, ``ForwardOutcomeStore``, ``BacktestStore``)
@@ -128,8 +129,18 @@ persistiert sie über ``RegimeStore`` (falls verfügbar);
       Hit-Rate; ``GET /quant/perf/batch-status`` liefert den Gesamtstatus
       des geteilten ``BatchProcessor`` (``quant/batch_processor.py``) —
       Job-Zählungen nach Status. Beide sind reine In-Memory-Status-
-      Endpunkte wie ``GET /quant/shadow/status``: kein InfluxDB-Zugriff,
-      kein Fail-closed-Guard.
+       Endpunkte wie ``GET /quant/shadow/status``: kein InfluxDB-Zugriff,
+       kein Fail-closed-Guard.
+
+       Validierungs-Endpunkte (P11-3): ``POST /quant/validate`` validiert
+       Eingabedaten über den deterministischen ``Validator``
+       (``quant/validation.py``, Phase 11) ohne Persistenz:
+       ``type='candle'`` prüft ein Kerzen-Dict (OHLC-Konsistenz, positive
+       Preise, nicht-negatives Volume), ``type='features'`` prüft eine
+       Feature-Map (NaN/Inf/Range, leere Map → Warning). Ungültige Daten
+       werden mit ``valid=false`` + Fehlerliste gemeldet (Status 200) —
+       der Endpunkt dient als reine Validierungsschnittstelle und
+       verändert nichts (wie ``POST /quant/ml/*``).
 """
 
 from __future__ import annotations
@@ -137,7 +148,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -157,6 +168,7 @@ from trading_harness.quant.influxdb_client import InfluxDBStore
 from trading_harness.quant.ml_features import MLFeatureBuilder
 from trading_harness.quant.regime_detection import REGIME_NAMES, RegimeDetector, RegimeResult
 from trading_harness.quant.similarity import SimilarityEngine
+from trading_harness.quant.validation import ValidationResult, Validator
 
 # Exchange-Tag für manuell per API ingestete Daten (keine konkrete Exchange).
 MANUAL_INGEST_EXCHANGE: str = "api"
@@ -389,6 +401,22 @@ def get_batch_processor() -> BatchProcessor:
     if _batch_processor is None:
         _batch_processor = BatchProcessor()
     return _batch_processor
+
+
+_validator: Validator | None = None
+
+
+def get_validator() -> Validator:
+    """Liefert den geteilten ``Validator`` (lazy, eine Instanz pro Prozess).
+
+    Der ``Validator`` (``quant/validation.py``, Phase 11) ist stateless und
+    deterministisch; ``POST /quant/validate`` (P11-3) prüft damit
+    Candle-/Feature-Daten ohne Persistenz.
+    """
+    global _validator
+    if _validator is None:
+        _validator = Validator()
+    return _validator
 
 
 # ---------------------------------------------------------------------------
@@ -990,6 +1018,30 @@ class PerfBatchStatusResponse(BaseModel):
     batch: PerfBatchStatusModel
 
 
+class QuantValidateRequest(BaseModel):
+    """Validate-Anfrage: Daten eines unterstützten Typs prüfen (P11-3).
+
+    ``type`` wählt die Validierungs-Regel: ``candle`` = ein Kerzen-Dict
+    (``time``/``open``/``high``/``low``/``close``/``volume``),
+    ``features`` = Feature-Map (Name → Zahl). ``data`` ist das zu
+    prüfende Datenobjekt; inhaltlich fehlerhafte Daten werden nicht mit
+    422 abgewiesen, sondern als ``valid=false`` gemeldet (Validierungs-
+    Semantik des Endpunkts).
+    """
+
+    type: Literal["candle", "features"]
+    data: dict[str, Any]
+
+
+class QuantValidateResponse(BaseModel):
+    """Ergebnis der Validierung: Gültigkeits-Flag + Fehler-/Warnliste."""
+
+    status: str = "ok"
+    valid: bool
+    errors: list[str]
+    warnings: list[str]
+
+
 # ---------------------------------------------------------------------------
 # Hilfsfunktionen (deterministische Ingest-Logik)
 # ---------------------------------------------------------------------------
@@ -1197,6 +1249,29 @@ def _backtest_result_to_model(
         avg_trade_pnl=float(result.avg_trade_pnl),
         profit_factor=float(result.profit_factor),
     )
+
+
+# Candle-Fields, die vom ``Validator`` numerisch verglichen werden
+# (OHLC-Konsistenz, Nicht-Negativität) — defensive Vorabprüfung.
+_VALIDATE_CANDLE_FIELDS: tuple[str, ...] = ("open", "high", "low", "close", "volume")
+
+
+def _numeric_value_errors(data: dict[str, Any], fields: tuple[str, ...]) -> list[str]:
+    """Defensive Prüfung: gelistete ``data``-Keys müssen numerisch sein.
+
+    Schützt den ``Validator`` vor ``TypeError`` (z. B. ``high < max(open,
+    close)`` auf String-Werten) — nicht-numerische Werte werden als
+    Validierungsfehler gemeldet (``valid=false``), nicht als 500-Fehler.
+    Fehlende Keys werden ignoriert (``Validator`` meldet sie selbst).
+    """
+    errors: list[str] = []
+    for name in fields:
+        if name not in data:
+            continue
+        value = data[name]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            errors.append(f"Field '{name}' must be a number, got {type(value).__name__}")
+    return errors
 
 
 def _last_evidence_from_aggregator(aggregator: EvidenceAggregator) -> dict[str, Any]:
@@ -1916,4 +1991,39 @@ def perf_batch_status() -> PerfBatchStatusResponse:
             running=int(status.running_jobs),
             pending=int(status.pending_jobs),
         ),
+    )
+
+
+@router.post(
+    "/validate",
+    response_model=QuantValidateResponse,
+    dependencies=[Depends(require_trade_key)],
+)
+def validate_input(payload: QuantValidateRequest) -> QuantValidateResponse:
+    """Validiert Eingabedaten mit dem deterministischen ``Validator`` (P11-3).
+
+    ``type='candle'`` prüft ein Kerzen-Dict (OHLC-Konsistenz, positive
+    Preise, nicht-negatives Volume); ``type='features'`` prüft eine
+    Feature-Map (NaN/Inf/Range, leere Map → Warning). Ungültige Daten
+    werden mit ``valid=false`` + Fehlerliste gemeldet (Status 200) —
+    der Endpunkt dient als reine Validierungsschnittstelle und
+    verändert nichts (kein Store-Zugriff, kein Fail-closed-Guard).
+    """
+    validator = get_validator()
+    if payload.type == "candle":
+        type_errors = _numeric_value_errors(payload.data, _VALIDATE_CANDLE_FIELDS)
+        result = (
+            ValidationResult(valid=False, errors=type_errors)
+            if type_errors
+            else validator.validate_candle(payload.data)
+        )
+    else:
+        type_errors = _numeric_value_errors(payload.data, tuple(payload.data))
+        result = (
+            ValidationResult(valid=False, errors=type_errors)
+            if type_errors
+            else validator.validate_features(payload.data)
+        )
+    return QuantValidateResponse(
+        status="ok", valid=result.valid, errors=result.errors, warnings=result.warnings
     )

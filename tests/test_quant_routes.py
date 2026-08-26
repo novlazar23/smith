@@ -48,6 +48,7 @@ BACKTEST_URL = "/quant/backtest/{symbol}"
 SHADOW_STATUS_URL = "/quant/shadow/status"
 PERF_CACHE_STATS_URL = "/quant/perf/cache-stats"
 PERF_BATCH_STATUS_URL = "/quant/perf/batch-status"
+VALIDATE_URL = "/quant/validate"
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -2602,7 +2603,7 @@ def test_perf_batch_status_failed_jobs_counted_in_total(
     client, _, _ = quant_client
     processor = BatchProcessor()
     job_failed = processor.create_job(["BTCUSDT"])
-    job_pending = processor.create_job(["ETHUSDT"])
+    processor.create_job(["ETHUSDT"])
 
     def failing_processor(symbol: str) -> str:
         raise ValueError("boom")
@@ -2627,5 +2628,149 @@ def test_perf_batch_status_requires_read_key(
     settings.read_api_key = "secret-read"
     assert client.get(PERF_BATCH_STATUS_URL).status_code == 401
     resp = client.get(PERF_BATCH_STATUS_URL, headers={"X-Read-API-Key": "secret-read"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# POST /quant/validate (P11-3)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_candle_valid(quant_client: tuple[TestClient, MagicMock, Settings]) -> None:
+    """Gültige Kerze → 200, valid=true, keine Fehler/Warnings."""
+    client, _, _ = quant_client
+    resp = client.post(VALIDATE_URL, json={"type": "candle", "data": make_candle()})
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok", "valid": True, "errors": [], "warnings": []}
+
+
+def test_validate_candle_inconsistent_high(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+) -> None:
+    """High < max(open, close) → 200, valid=false mit OHLC-Konsistenz-Fehler."""
+    client, _, _ = quant_client
+    resp = client.post(
+        VALIDATE_URL, json={"type": "candle", "data": make_candle(high=48000.0)}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["valid"] is False
+    assert any("High" in error for error in body["errors"])
+    assert body["warnings"] == []
+
+
+def test_validate_candle_missing_field(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+) -> None:
+    """Fehlendes Pflicht-Field (volume) → valid=false, Missing-Field-Fehler."""
+    client, _, _ = quant_client
+    candle = make_candle()
+    del candle["volume"]
+    resp = client.post(VALIDATE_URL, json={"type": "candle", "data": candle})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["valid"] is False
+    assert "Missing required field: volume" in body["errors"]
+
+
+def test_validate_candle_non_numeric_field(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+) -> None:
+    """Nicht-numerisches OHLC-Field → valid=false statt 500 (Defensive Guard)."""
+    client, _, _ = quant_client
+    resp = client.post(
+        VALIDATE_URL, json={"type": "candle", "data": make_candle(open="abc")}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["valid"] is False
+    assert any("must be a number" in error for error in body["errors"])
+
+
+def test_validate_features_valid(quant_client: tuple[TestClient, MagicMock, Settings]) -> None:
+    """Gültige Feature-Map → 200, valid=true, keine Fehler/Warnings."""
+    client, _, _ = quant_client
+    resp = client.post(
+        VALIDATE_URL,
+        json={"type": "features", "data": {"sma_20": 50250.5, "rsi_14": 55.0}},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok", "valid": True, "errors": [], "warnings": []}
+
+
+def test_validate_features_out_of_range(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+) -> None:
+    """Feature-Wert außerhalb von ±1e10 → valid=false mit Range-Fehler."""
+    client, _, _ = quant_client
+    resp = client.post(VALIDATE_URL, json={"type": "features", "data": {"momentum": 1.5e12}})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["valid"] is False
+    assert any("out of range" in error for error in body["errors"])
+
+
+def test_validate_features_empty_warning(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+) -> None:
+    """Leere Feature-Map → valid=true mit Empty-Warning (kein Fehler)."""
+    client, _, _ = quant_client
+    resp = client.post(VALIDATE_URL, json={"type": "features", "data": {}})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["valid"] is True
+    assert body["errors"] == []
+    assert "Empty features dict" in body["warnings"]
+
+
+def test_validate_features_non_numeric_value(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+) -> None:
+    """Feature-Wert als String → valid=false statt 500 (Defensive Guard)."""
+    client, _, _ = quant_client
+    resp = client.post(VALIDATE_URL, json={"type": "features", "data": {"sma": "NaN"}})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["valid"] is False
+    assert any("must be a number" in error for error in body["errors"])
+
+
+def test_validate_unknown_type_422(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+) -> None:
+    """Unbekannter Typ → 422 (Pydantic-Literal-Prüfung)."""
+    client, _, _ = quant_client
+    resp = client.post(VALIDATE_URL, json={"type": "bogus", "data": {}})
+    assert resp.status_code == 422
+
+
+def test_validate_data_must_be_object_422(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+) -> None:
+    """``data`` als Liste statt Objekt → 422."""
+    client, _, _ = quant_client
+    resp = client.post(VALIDATE_URL, json={"type": "candle", "data": [1, 2, 3]})
+    assert resp.status_code == 422
+
+
+def test_validate_requires_trade_key(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+) -> None:
+    """Mit gesetztem Trade-Key: fehlender Key → 401, falscher → 403, richtiger → 200."""
+    client, _, settings = quant_client
+    settings.trade_api_key = "secret-trade"
+    payload = {"type": "candle", "data": make_candle()}
+
+    assert client.post(VALIDATE_URL, json=payload).status_code == 401
+    assert (
+        client.post(VALIDATE_URL, json=payload, headers={"X-Trade-API-Key": "wrong"})
+        .status_code
+        == 403
+    )
+    resp = client.post(
+        VALIDATE_URL, json=payload, headers={"X-Trade-API-Key": "secret-trade"}
+    )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"

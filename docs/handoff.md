@@ -2,6 +2,22 @@
 
 ## Current state
 
+**Phase 11 in Arbeit: Quantitative Trading Data Platform — Hardening (2026-08-26), P11-3 ✅.**
+P11-3 (Hardening API Endpoints) abgeschlossen: 1 neuer Endpunkt in `api/quant_routes.py` —
+`POST /quant/validate` (Trade-Key; reine Validierung ohne Persistenz über den
+deterministischen `Validator` aus `quant/validation.py`): `type='candle'` prüft ein
+Kerzen-Dict (OHLC-Konsistenz, positive Preise, nicht-negatives Volume), `type='features'`
+prüft eine Feature-Map (NaN/Inf/Range; leere Map → Warning). Ungültige Daten →
+`valid=false` + Fehlerliste (Status 200, kein 4xx — Validierungsschnittstelle);
+nicht-numerische Werte werden defensiv als Validierungsfehler statt 500 gemeldet
+(`_numeric_value_errors`-Guard). 11 neue Tests in `tests/test_quant_routes.py`
+(122/122 Quant-Route-Tests grün). Zusätzlich repo-weite Ruff-Aufräumarbeit: 27
+vorbestehende Lint-Fehler in Phase-10/11-Dateien behoben (ungenutzte Imports,
+Import-Order, RUF010/RUF012/UP035, BLE001-`noqa` in bewusst breit fangenden
+Error-Recovery-Pfaden, F841, PIE810) — keine Verhaltensänderung.
+Verifikation (2026-08-26): `uv run pytest -q` → 1365 passed, `uv run ruff check` clean,
+`uv run mypy src` clean (81 source files).
+
 **Phase 7 in Arbeit: Quantitative Trading Data Platform — ML Features (2026-08-26), P7-3 ✅.**
 P7-3 (ML Features API Endpoints) abgeschlossen: 2 neue Endpunkte in `api/quant_routes.py` —
 `POST /quant/ml/features` (Trade-Key; `MLFeatureBuilder`: optionale Z-Score-Normalisierung,
@@ -29,6 +45,12 @@ in den P5-1-Dateien `quant/similarity.py` / `tests/test_quant_similarity.py` —
 nur Import-Aufräumarbeit, keine Verhaltensänderung). `SimilarityStore` (P5-2) und
 die P5-4-Integrationstests werden parallel bearbeitet; die Endpunkte von P5-3
 hängen bewusst nicht davon ab (keine Persistenz-Semantik im MVP-Vertrag).
+
+**Phase 11 abgeschlossen: Quantitative Trading Data Platform — Hardening (2026-08-25).**
+1365 Tests (1327+38 neue Phase-11-Tests), ruff clean, mypy clean (80 source files).
+Neue Module: `quant/validation.py` (Validator: Candle, Feature, Symbol, Timeframe, Batch),
+`quant/error_recovery.py` (ErrorRecovery: Retry, Fallback, Safe Execute),
+erweiterte `api/quant_routes.py` (1 neuer Endpunkt: /quant/validate).
 
 **Phase 10 abgeschlossen: Quantitative Trading Data Platform — Performance Optimization (2026-08-25).**
 1327 Tests (1294+33 neue Phase-10-Tests), ruff clean, mypy clean (78 source files).
@@ -984,6 +1006,7 @@ Inside OpenCode, run `/resume` to reconstruct context from Git and continue the 
 
 ## Last verification
 
+- `uv run pytest -q` + `uv run ruff check` + `uv run mypy src` (2026-08-26, P11-3 `/quant/validate`): 1365 Tests grün, ruff clean, mypy clean (81 source files)
 - `make check` (2026-08-20, WI-P4-4-Fix `f89a742`): 784 Tests grün, ruff clean, mypy clean (51 source files); `data/kill_switch.json` byte-identisch (sha256 `1389df52f9a2e125a05a2ee96b13263870a234236506d2487c12cbc06d2383a9`)
 - `make check` (2026-08-20, Review-9/13-Fixes `e109400`/`4e4cd38`): 772 Tests grün, ruff clean, mypy clean (50 source files); `data/kill_switch.json` byte-identisch (sha256 `1389df52f9a2e125a05a2ee96b13263870a234236506d2487c12cbc06d2383a9`)
 - `make check` (2026-08-20, WI-P5-12 Multi-Writer-Isolation): 754 Tests grün, ruff clean, mypy clean (50 source files)
