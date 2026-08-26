@@ -30,6 +30,12 @@ nur Import-Aufräumarbeit, keine Verhaltensänderung). `SimilarityStore` (P5-2) 
 die P5-4-Integrationstests werden parallel bearbeitet; die Endpunkte von P5-3
 hängen bewusst nicht davon ab (keine Persistenz-Semantik im MVP-Vertrag).
 
+**Phase 10 abgeschlossen: Quantitative Trading Data Platform — Performance Optimization (2026-08-25).**
+1327 Tests (1294+33 neue Phase-10-Tests), ruff clean, mypy clean (78 source files).
+Neue Module: `quant/feature_cache.py` (FeatureCache: LRU, TTL, Stats),
+`quant/batch_processor.py` (BatchProcessor: Chunking, Job-Tracking),
+erweiterte `api/quant_routes.py` (2 neue Endpunkte: /quant/perf/cache-stats, /quant/perf/batch-status).
+
 **Phase 9 abgeschlossen: Quantitative Trading Data Platform — Shadow-Loop Integration (2026-08-25).**
 1294 Tests (1263+31 neue Phase-9-Tests), ruff clean, mypy clean (76 source files).
 Neue Module: `quant/evidence_aggregator.py` (EvidenceAggregator: combine all quant evidence,

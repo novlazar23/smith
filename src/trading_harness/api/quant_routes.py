@@ -1,6 +1,6 @@
 """Quant-Plattform API-Endpunkte (Phase 1, P1-8; Phase 2, P2-3; Phase 3, P3-3;
 Phase 4, P4-3; Phase 5, P5-3; Phase 6, P6-3; Phase 7, P7-3; Phase 8, P8-3;
-Phase 9, P9-3).
+Phase 9, P9-3; Phase 10, P10-3).
 
 Stellt die InfluxDB-basierte OHLCV-Ingestion, die Feature-Endpunkte, die
 Anomaly-Endpunkte und die Similarity-Endpunkte unter ``/quant/*`` als eigenen
@@ -28,6 +28,8 @@ Auth-Trennung nach dem bestehenden Read/Trade-Muster (R5.21):
 - ``POST /quant/backtest/run``        → Trade-Key (reine Berechnung)
 - ``GET  /quant/backtest/{symbol}``   → Read-Key
 - ``GET  /quant/shadow/status``       → Read-Key
+- ``GET  /quant/perf/cache-stats``    → Read-Key
+- ``GET  /quant/perf/batch-status``   → Read-Key
 
  Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``, ``FeatureStore``,
 ``AnomalyStore``, ``RegimeStore``, ``ForwardOutcomeStore``, ``BacktestStore``)
@@ -115,10 +117,19 @@ persistiert sie über ``RegimeStore`` (falls verfügbar);
      ``integration_active`` spiegelt das Quant-Feature-Flag
      (``influxdb_enabled``), ``quant_engines`` listet die Quant-Module,
      deren Ergebnisse der ``EvidenceAggregator`` (``quant/evidence_aggregator.py``,
-     P9-2) als Evidence aufnehmen kann, und ``last_evidence`` enthält die
-     jeweils letzten pro Engine aggregierten Einträge (leeres Dict, solange
-     keine Evidence aggregiert wurde). Reiner Status-Endpunkt wie
-     ``GET /quant/status``: kein InfluxDB-Zugriff, kein Fail-closed-Guard.
+      P9-2) als Evidence aufnehmen kann, und ``last_evidence`` enthält die
+      jeweils letzten pro Engine aggregierten Einträge (leeres Dict, solange
+      keine Evidence aggregiert wurde). Reiner Status-Endpunkt wie
+      ``GET /quant/status``: kein InfluxDB-Zugriff, kein Fail-closed-Guard.
+
+      Performance-Endpunkte (P10-3): ``GET /quant/perf/cache-stats``
+      liefert die Statistiken des geteilten ``FeatureCache``
+      (``quant/feature_cache.py``) — Hits, Misses, aktuelle Größe und
+      Hit-Rate; ``GET /quant/perf/batch-status`` liefert den Gesamtstatus
+      des geteilten ``BatchProcessor`` (``quant/batch_processor.py``) —
+      Job-Zählungen nach Status. Beide sind reine In-Memory-Status-
+      Endpunkte wie ``GET /quant/shadow/status``: kein InfluxDB-Zugriff,
+      kein Fail-closed-Guard.
 """
 
 from __future__ import annotations
@@ -136,7 +147,9 @@ from trading_harness.config import get_settings
 from trading_harness.quant import schema as quant_schema
 from trading_harness.quant.anomaly_detection import Anomaly, AnomalyDetector
 from trading_harness.quant.backtesting import BacktestEngine, BacktestResult, Signal
+from trading_harness.quant.batch_processor import BatchProcessor
 from trading_harness.quant.evidence_aggregator import EvidenceAggregator
+from trading_harness.quant.feature_cache import FeatureCache
 from trading_harness.quant.feature_importance import FeatureImportanceEngine
 from trading_harness.quant.features import FeatureEngine
 from trading_harness.quant.forward_outcomes import ForwardOutcomeEngine
@@ -346,6 +359,36 @@ def get_evidence_aggregator() -> EvidenceAggregator:
     if _evidence_aggregator is None:
         _evidence_aggregator = EvidenceAggregator()
     return _evidence_aggregator
+
+
+_feature_cache: FeatureCache | None = None
+
+
+def get_feature_cache() -> FeatureCache:
+    """Liefert den geteilten ``FeatureCache`` (lazy, eine Instanz pro Prozess).
+
+    Der LRU/TTL-Cache merkt berechnete Features;
+    ``GET /quant/perf/cache-stats`` (P10-3) liert seine Statistiken.
+    """
+    global _feature_cache
+    if _feature_cache is None:
+        _feature_cache = FeatureCache()
+    return _feature_cache
+
+
+_batch_processor: BatchProcessor | None = None
+
+
+def get_batch_processor() -> BatchProcessor:
+    """Liefert den geteilten ``BatchProcessor`` (lazy, eine Instanz pro Prozess).
+
+    Der Processor verarbeitet mehrere Symbole in Batches;
+    ``GET /quant/perf/batch-status`` (P10-3) liest seinen Gesamtstatus.
+    """
+    global _batch_processor
+    if _batch_processor is None:
+        _batch_processor = BatchProcessor()
+    return _batch_processor
 
 
 # ---------------------------------------------------------------------------
@@ -908,6 +951,43 @@ class ShadowStatusResponse(BaseModel):
     integration_active: bool
     quant_engines: list[str]
     last_evidence: dict[str, Any]
+
+
+class PerfCacheStatsModel(BaseModel):
+    """Cache-Statistiken des ``FeatureCache`` (API-Darstellung)."""
+
+    hits: int = Field(ge=0)
+    misses: int = Field(ge=0)
+    size: int = Field(ge=0)
+    hit_rate: float = Field(ge=0.0, le=1.0)
+
+
+class PerfCacheStatsResponse(BaseModel):
+    """Cache-Statistiken (P10-3): Treffer, Verfehlungen, Größe, Hit-Rate."""
+
+    status: str = "ok"
+    cache: PerfCacheStatsModel
+
+
+class PerfBatchStatusModel(BaseModel):
+    """Batch-Processor-Gesamtstatus (API-Darstellung von ``BatchStatus``).
+
+    ``completed``/``running``/``pending`` zählen die Jobs nach Status;
+    ``failed``-Jobs sind in ``total_jobs`` enthalten, aber in keiner der
+    drei Status-Zählungen.
+    """
+
+    total_jobs: int = Field(ge=0)
+    completed: int = Field(ge=0)
+    running: int = Field(ge=0)
+    pending: int = Field(ge=0)
+
+
+class PerfBatchStatusResponse(BaseModel):
+    """Batch-Processor-Status (P10-3): Job-Zählungen nach Status."""
+
+    status: str = "ok"
+    batch: PerfBatchStatusModel
 
 
 # ---------------------------------------------------------------------------
@@ -1779,4 +1859,61 @@ def shadow_status() -> ShadowStatusResponse:
         integration_active=settings.influxdb_enabled,
         quant_engines=list(SHADOW_QUANT_ENGINES),
         last_evidence=_last_evidence_from_aggregator(aggregator),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Performance-Endpunkte (P10-3)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/perf/cache-stats",
+    response_model=PerfCacheStatsResponse,
+    dependencies=[Depends(require_read_key)],
+)
+def perf_cache_stats() -> PerfCacheStatsResponse:
+    """Liefert die Statistiken des geteilten ``FeatureCache`` (P10-3).
+
+    ``hits``/``misses`` zählen die Cache-Zugriffe, ``size`` die aktuell
+    gespeicherten Einträge und ``hit_rate`` den Trefferquotienten
+    (``0.0`` ohne Zugriffe). Reiner In-Memory-Status-Endpunkt wie
+    ``GET /quant/shadow/status``: kein InfluxDB-Zugriff, kein
+    Fail-closed-Guard.
+    """
+    stats = get_feature_cache().stats()
+    return PerfCacheStatsResponse(
+        status="ok",
+        cache=PerfCacheStatsModel(
+            hits=int(stats.hits),
+            misses=int(stats.misses),
+            size=int(stats.size),
+            hit_rate=float(stats.hit_rate),
+        ),
+    )
+
+
+@router.get(
+    "/perf/batch-status",
+    response_model=PerfBatchStatusResponse,
+    dependencies=[Depends(require_read_key)],
+)
+def perf_batch_status() -> PerfBatchStatusResponse:
+    """Liefert den Gesamtstatus des geteilten ``BatchProcessor`` (P10-3).
+
+    ``total_jobs`` zählt alle bekannten Jobs; ``completed``/``running``/
+    ``pending`` die Jobs nach Status (``failed`` zählt nur in
+    ``total_jobs``). Reiner In-Memory-Status-Endpunkt wie
+    ``GET /quant/shadow/status``: kein InfluxDB-Zugriff, kein
+    Fail-closed-Guard.
+    """
+    status = get_batch_processor().get_status()
+    return PerfBatchStatusResponse(
+        status="ok",
+        batch=PerfBatchStatusModel(
+            total_jobs=int(status.total_jobs),
+            completed=int(status.completed_jobs),
+            running=int(status.running_jobs),
+            pending=int(status.pending_jobs),
+        ),
     )

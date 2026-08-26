@@ -20,7 +20,9 @@ from trading_harness.api import quant_routes, security
 from trading_harness.config import Settings
 from trading_harness.quant import schema as quant_schema
 from trading_harness.quant.backtesting import BacktestResult
+from trading_harness.quant.batch_processor import BatchProcessor
 from trading_harness.quant.evidence_aggregator import EvidenceAggregator
+from trading_harness.quant.feature_cache import FeatureCache
 from trading_harness.quant.regime_detection import REGIME_NAMES
 
 # Naiv (bewusst ohne tzinfo): die Route interpretiert naive Zeiten als UTC.
@@ -44,6 +46,8 @@ ML_IMPORTANCE_URL = "/quant/ml/importance"
 BACKTEST_RUN_URL = "/quant/backtest/run"
 BACKTEST_URL = "/quant/backtest/{symbol}"
 SHADOW_STATUS_URL = "/quant/shadow/status"
+PERF_CACHE_STATS_URL = "/quant/perf/cache-stats"
+PERF_BATCH_STATUS_URL = "/quant/perf/batch-status"
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -2488,5 +2492,140 @@ def test_shadow_status_requires_read_key(
     settings.read_api_key = "secret-read"
     assert client.get(SHADOW_STATUS_URL).status_code == 401
     resp = client.get(SHADOW_STATUS_URL, headers={"X-Read-API-Key": "secret-read"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# GET /quant/perf/cache-stats (P10-3)
+# ---------------------------------------------------------------------------
+
+
+def test_perf_cache_stats_success(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Echter FeatureCache mit 3 Hits, 1 Miss, 2 Einträgen → exakte Stats (0.75)."""
+    client, _, _ = quant_client
+    cache = FeatureCache(max_size=10)
+    cache.put("a", 1)
+    cache.put("b", 2)
+    assert cache.get("a") == 1  # hit
+    assert cache.get("a") == 1  # hit
+    assert cache.get("b") == 2  # hit
+    assert cache.get("c") is None  # miss
+    monkeypatch.setattr(quant_routes, "get_feature_cache", lambda: cache)
+    resp = client.get(PERF_CACHE_STATS_URL)
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "cache": {"hits": 3, "misses": 1, "size": 2, "hit_rate": 0.75},
+    }
+
+
+def test_perf_cache_stats_empty(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Frischer Cache ohne Zugriffe → 200, alle Werte 0, hit_rate=0.0."""
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_feature_cache", lambda: FeatureCache())
+    resp = client.get(PERF_CACHE_STATS_URL)
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "cache": {"hits": 0, "misses": 0, "size": 0, "hit_rate": 0.0},
+    }
+
+
+def test_perf_cache_stats_requires_read_key(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mit gesetztem Read-Key: fehlender Key → 401, richtiger Key → 200."""
+    client, _, settings = quant_client
+    monkeypatch.setattr(quant_routes, "get_feature_cache", lambda: FeatureCache())
+    settings.read_api_key = "secret-read"
+    assert client.get(PERF_CACHE_STATS_URL).status_code == 401
+    resp = client.get(PERF_CACHE_STATS_URL, headers={"X-Read-API-Key": "secret-read"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# GET /quant/perf/batch-status (P10-3)
+# ---------------------------------------------------------------------------
+
+
+def test_perf_batch_status_success(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Echter BatchProcessor: 2 completed, 1 running, 0 pending → exakte Zählungen."""
+    client, _, _ = quant_client
+    processor = BatchProcessor()
+    job_1 = processor.create_job(["BTCUSDT"])
+    job_2 = processor.create_job(["ETHUSDT", "SOLUSDT"])
+    job_3 = processor.create_job(["XRPUSDT"])
+    processor.process(job_1, lambda symbol: symbol)
+    processor.process(job_2, lambda symbol: symbol)
+    processor.get_job(job_3).status = "running"
+    monkeypatch.setattr(quant_routes, "get_batch_processor", lambda: processor)
+    resp = client.get(PERF_BATCH_STATUS_URL)
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "batch": {"total_jobs": 3, "completed": 2, "running": 1, "pending": 0},
+    }
+
+
+def test_perf_batch_status_empty(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BatchProcessor ohne Jobs → 200, alle Zählungen 0."""
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_batch_processor", lambda: BatchProcessor())
+    resp = client.get(PERF_BATCH_STATUS_URL)
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "batch": {"total_jobs": 0, "completed": 0, "running": 0, "pending": 0},
+    }
+
+
+def test_perf_batch_status_failed_jobs_counted_in_total(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failed-Job zählt in total_jobs mit, aber in keine Status-Zählung."""
+    client, _, _ = quant_client
+    processor = BatchProcessor()
+    job_failed = processor.create_job(["BTCUSDT"])
+    job_pending = processor.create_job(["ETHUSDT"])
+
+    def failing_processor(symbol: str) -> str:
+        raise ValueError("boom")
+
+    processor.process(job_failed, failing_processor)
+    monkeypatch.setattr(quant_routes, "get_batch_processor", lambda: processor)
+    resp = client.get(PERF_BATCH_STATUS_URL)
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "batch": {"total_jobs": 2, "completed": 0, "running": 0, "pending": 1},
+    }
+
+
+def test_perf_batch_status_requires_read_key(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mit gesetztem Read-Key: fehlender Key → 401, richtiger Key → 200."""
+    client, _, settings = quant_client
+    monkeypatch.setattr(quant_routes, "get_batch_processor", lambda: BatchProcessor())
+    settings.read_api_key = "secret-read"
+    assert client.get(PERF_BATCH_STATUS_URL).status_code == 401
+    resp = client.get(PERF_BATCH_STATUS_URL, headers={"X-Read-API-Key": "secret-read"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
