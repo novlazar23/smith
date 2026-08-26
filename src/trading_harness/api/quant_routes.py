@@ -1,5 +1,6 @@
 """Quant-Plattform API-Endpunkte (Phase 1, P1-8; Phase 2, P2-3; Phase 3, P3-3;
-Phase 4, P4-3; Phase 5, P5-3; Phase 6, P6-3; Phase 7, P7-3; Phase 8, P8-3).
+Phase 4, P4-3; Phase 5, P5-3; Phase 6, P6-3; Phase 7, P7-3; Phase 8, P8-3;
+Phase 9, P9-3).
 
 Stellt die InfluxDB-basierte OHLCV-Ingestion, die Feature-Endpunkte, die
 Anomaly-Endpunkte und die Similarity-Endpunkte unter ``/quant/*`` als eigenen
@@ -26,6 +27,7 @@ Auth-Trennung nach dem bestehenden Read/Trade-Muster (R5.21):
 - ``POST /quant/ml/importance``       → Trade-Key (reine Berechnung)
 - ``POST /quant/backtest/run``        → Trade-Key (reine Berechnung)
 - ``GET  /quant/backtest/{symbol}``   → Read-Key
+- ``GET  /quant/shadow/status``       → Read-Key
 
  Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``, ``FeatureStore``,
 ``AnomalyStore``, ``RegimeStore``, ``ForwardOutcomeStore``, ``BacktestStore``)
@@ -102,11 +104,21 @@ persistiert sie über ``RegimeStore`` (falls verfügbar);
     Parameter werden über ``strategy``/``params`` übergeben; PnL, Win Rate,
     Drawdown, Sharpe Ratio und Profit Factor werden pro Lauf berechnet.
     Persistenz erfolgt über ``BacktestStore`` (falls verfügbar);
-    ``GET /quant/backtest/{symbol}`` liefert gespeicherte Backtest-Ergebnisse.
-    ``quant/backtest_store.py`` entsteht parallel (P8-2) — der Getter
-    ``get_backtest_store`` liefert daher ``None``, bis das Modul vorhanden
-    ist, und die Endpunkte bleiben ohne Persistenz funktional
-    (``stored=false`` / leere Ergebnis-Listen).
+     ``GET /quant/backtest/{symbol}`` liefert gespeicherte Backtest-Ergebnisse.
+     ``quant/backtest_store.py`` entsteht parallel (P8-2) — der Getter
+     ``get_backtest_store`` liefert daher ``None``, bis das Modul vorhanden
+     ist, und die Endpunkte bleiben ohne Persistenz funktional
+     (``stored=false`` / leere Ergebnis-Listen).
+
+     Shadow-Loop-Status (P9-3): ``GET /quant/shadow/status`` liefert den
+     Integrationsstatus der Quant-Plattform im Shadow Trading Loop —
+     ``integration_active`` spiegelt das Quant-Feature-Flag
+     (``influxdb_enabled``), ``quant_engines`` listet die Quant-Module,
+     deren Ergebnisse der ``EvidenceAggregator`` (``quant/evidence_aggregator.py``,
+     P9-2) als Evidence aufnehmen kann, und ``last_evidence`` enthält die
+     jeweils letzten pro Engine aggregierten Einträge (leeres Dict, solange
+     keine Evidence aggregiert wurde). Reiner Status-Endpunkt wie
+     ``GET /quant/status``: kein InfluxDB-Zugriff, kein Fail-closed-Guard.
 """
 
 from __future__ import annotations
@@ -124,6 +136,7 @@ from trading_harness.config import get_settings
 from trading_harness.quant import schema as quant_schema
 from trading_harness.quant.anomaly_detection import Anomaly, AnomalyDetector
 from trading_harness.quant.backtesting import BacktestEngine, BacktestResult, Signal
+from trading_harness.quant.evidence_aggregator import EvidenceAggregator
 from trading_harness.quant.feature_importance import FeatureImportanceEngine
 from trading_harness.quant.features import FeatureEngine
 from trading_harness.quant.forward_outcomes import ForwardOutcomeEngine
@@ -318,6 +331,21 @@ def get_backtest_store() -> Any | None:
         except (TypeError, ValueError):
             return None
     return _backtest_store
+
+
+_evidence_aggregator: EvidenceAggregator | None = None
+
+
+def get_evidence_aggregator() -> EvidenceAggregator:
+    """Liefert den geteilten ``EvidenceAggregator`` (lazy, eine Instanz pro Prozess).
+
+    Der Aggregator (P9-2) sammelt die Quant-Evidence des Shadow-Loops;
+    ``GET /quant/shadow/status`` (P9-3) liest seinen aktuellen Stand.
+    """
+    global _evidence_aggregator
+    if _evidence_aggregator is None:
+        _evidence_aggregator = EvidenceAggregator()
+    return _evidence_aggregator
 
 
 # ---------------------------------------------------------------------------
@@ -853,6 +881,35 @@ class BacktestQueryResponse(BaseModel):
     count: int = Field(ge=0)
 
 
+# Quant-Module, deren Ergebnisse der Shadow-Loop als Evidence nutzt (P9-3);
+# entspricht den bekannten Quellen des ``EvidenceAggregator`` (P9-2).
+SHADOW_QUANT_ENGINES: tuple[str, ...] = (
+    "features",
+    "anomalies",
+    "regime",
+    "similarity",
+    "forward_outcomes",
+    "ml_features",
+    "backtest",
+)
+
+
+class ShadowStatusResponse(BaseModel):
+    """Shadow-Loop-Integrationsstatus der Quant-Plattform (P9-3).
+
+    ``integration_active`` ist True, wenn die Quant-Plattform als
+    Evidence-Quelle des Shadow-Loops aktiviert ist (``influxdb_enabled``);
+    ``quant_engines`` listet alle Quant-Module des ``EvidenceAggregator``;
+    ``last_evidence`` enthält die jeweils letzten pro Engine aggregierten
+    Einträge (leeres Dict, solange keine Evidence aggregiert wurde).
+    """
+
+    status: str = "ok"
+    integration_active: bool
+    quant_engines: list[str]
+    last_evidence: dict[str, Any]
+
+
 # ---------------------------------------------------------------------------
 # Hilfsfunktionen (deterministische Ingest-Logik)
 # ---------------------------------------------------------------------------
@@ -1060,6 +1117,22 @@ def _backtest_result_to_model(
         avg_trade_pnl=float(result.avg_trade_pnl),
         profit_factor=float(result.profit_factor),
     )
+
+
+def _last_evidence_from_aggregator(aggregator: EvidenceAggregator) -> dict[str, Any]:
+    """Aggregator-Einträge → API-Dict (die jeweils letzten Einträge pro Engine)."""
+    last_evidence: dict[str, Any] = {}
+    for source in aggregator.sources:
+        entry = aggregator.get_entry(source)
+        if entry is None:
+            continue
+        last_evidence[source] = {
+            "timestamp": str(entry.timestamp),
+            "confidence": float(entry.confidence),
+            "priority": int(entry.priority),
+            "data": dict(entry.data),
+        }
+    return last_evidence
 
 
 # ---------------------------------------------------------------------------
@@ -1677,3 +1750,33 @@ async def get_backtests(
     if store is not None:
         rows = await store.get_backtests(symbol, timeframe, start_iso, end_iso)
     return BacktestQueryResponse(symbol=symbol, results=rows, count=len(rows))
+
+
+# ---------------------------------------------------------------------------
+# Shadow-Loop-Status (P9-3)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/shadow/status",
+    response_model=ShadowStatusResponse,
+    dependencies=[Depends(require_read_key)],
+)
+def shadow_status() -> ShadowStatusResponse:
+    """Liefert den Shadow-Loop-Integrationsstatus der Quant-Plattform.
+
+    ``integration_active`` spiegelt das Quant-Feature-Flag
+    (``influxdb_enabled``), ``quant_engines`` listet die Quant-Module,
+    deren Ergebnisse der ``EvidenceAggregator`` als Evidence aufnehmen
+    kann, und ``last_evidence`` die jeweils letzten pro Engine
+    aggregierten Einträge. Reiner Status-Endpunkt wie
+    ``GET /quant/status``: kein InfluxDB-Zugriff, kein Fail-closed-Guard.
+    """
+    settings = get_settings()
+    aggregator = get_evidence_aggregator()
+    return ShadowStatusResponse(
+        status="ok",
+        integration_active=settings.influxdb_enabled,
+        quant_engines=list(SHADOW_QUANT_ENGINES),
+        last_evidence=_last_evidence_from_aggregator(aggregator),
+    )

@@ -20,6 +20,7 @@ from trading_harness.api import quant_routes, security
 from trading_harness.config import Settings
 from trading_harness.quant import schema as quant_schema
 from trading_harness.quant.backtesting import BacktestResult
+from trading_harness.quant.evidence_aggregator import EvidenceAggregator
 from trading_harness.quant.regime_detection import REGIME_NAMES
 
 # Naiv (bewusst ohne tzinfo): die Route interpretiert naive Zeiten als UTC.
@@ -42,6 +43,7 @@ ML_FEATURES_URL = "/quant/ml/features"
 ML_IMPORTANCE_URL = "/quant/ml/importance"
 BACKTEST_RUN_URL = "/quant/backtest/run"
 BACKTEST_URL = "/quant/backtest/{symbol}"
+SHADOW_STATUS_URL = "/quant/shadow/status"
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -2385,3 +2387,106 @@ def test_get_backtests_disabled_returns_403(
     assert resp.status_code == 403
     assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
     backtest_store.get_backtests.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# GET /quant/shadow/status (P9-3)
+# ---------------------------------------------------------------------------
+
+EXPECTED_SHADOW_ENGINES = [
+    "features",
+    "anomalies",
+    "regime",
+    "similarity",
+    "forward_outcomes",
+    "ml_features",
+    "backtest",
+]
+
+
+def test_shadow_status_active(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Quant aktiviert → 200, integration_active=true, alle Engines, leere Evidence."""
+    client, _, _ = quant_client
+    monkeypatch.setattr(
+        quant_routes, "get_evidence_aggregator", lambda: EvidenceAggregator()
+    )
+    resp = client.get(SHADOW_STATUS_URL)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["integration_active"] is True
+    assert data["quant_engines"] == EXPECTED_SHADOW_ENGINES
+    assert data["last_evidence"] == {}
+
+
+def test_shadow_status_integration_inactive(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """influxdb_enabled=False → 200 mit integration_active=false (Status, kein Fehler)."""
+    client, _, settings = quant_client
+    settings.influxdb_enabled = False
+    monkeypatch.setattr(
+        quant_routes, "get_evidence_aggregator", lambda: EvidenceAggregator()
+    )
+    resp = client.get(SHADOW_STATUS_URL)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["integration_active"] is False
+    assert data["quant_engines"] == EXPECTED_SHADOW_ENGINES
+    assert data["last_evidence"] == {}
+
+
+def test_shadow_status_with_evidence(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Aggregator mit Einträgen → last_evidence pro Engine (Zeitstempel/Conf/Priority/Data)."""
+    client, _, _ = quant_client
+    aggregator = EvidenceAggregator()
+    aggregator.add_entry(
+        "regime",
+        {"regime": "strong_bull", "confidence": 0.85},
+        timestamp="2026-08-25T12:00:00+00:00",
+        confidence=0.9,
+    )
+    aggregator.add_entry(
+        "anomalies", {"count": 2}, timestamp="2026-08-25T12:01:00+00:00"
+    )
+    monkeypatch.setattr(quant_routes, "get_evidence_aggregator", lambda: aggregator)
+    resp = client.get(SHADOW_STATUS_URL)
+    assert resp.status_code == 200
+    evidence = resp.json()["last_evidence"]
+    assert set(evidence) == {"regime", "anomalies"}
+    assert evidence["regime"] == {
+        "timestamp": "2026-08-25T12:00:00+00:00",
+        "confidence": 0.9,
+        "priority": EvidenceAggregator.SOURCE_PRIORITIES["regime"],
+        "data": {"regime": "strong_bull", "confidence": 0.85},
+    }
+    assert evidence["anomalies"]["timestamp"] == "2026-08-25T12:01:00+00:00"
+    assert evidence["anomalies"]["confidence"] == 1.0
+    assert evidence["anomalies"]["priority"] == EvidenceAggregator.SOURCE_PRIORITIES[
+        "anomalies"
+    ]
+    assert evidence["anomalies"]["data"] == {"count": 2}
+
+
+def test_shadow_status_requires_read_key(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mit gesetztem Read-Key: fehlender Key → 401, richtiger Key → 200."""
+    client, _, settings = quant_client
+    monkeypatch.setattr(
+        quant_routes, "get_evidence_aggregator", lambda: EvidenceAggregator()
+    )
+    settings.read_api_key = "secret-read"
+    assert client.get(SHADOW_STATUS_URL).status_code == 401
+    resp = client.get(SHADOW_STATUS_URL, headers={"X-Read-API-Key": "secret-read"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
