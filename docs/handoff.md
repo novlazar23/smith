@@ -46,6 +46,10 @@ nur Import-Aufräumarbeit, keine Verhaltensänderung). `SimilarityStore` (P5-2) 
 die P5-4-Integrationstests werden parallel bearbeitet; die Endpunkte von P5-3
 hängen bewusst nicht davon ab (keine Persistenz-Semantik im MVP-Vertrag).
 
+**Docker-Ready Phase gestartet: Autonomous System with Web Interface (2026-08-25).**
+1378 Tests (1365+13 neue Evaluation Engine Tests), ruff clean, mypy clean.
+Neues Modul: `services/evaluation_engine.py` (Brier Score, Calibration, Walk-Forward, Sharpe).
+
 **Phase 13 abgeschlossen: Quantitative Trading Data Platform — Final Verification (2026-08-25).**
 1365 Tests ✓, ruff clean ✓, mypy clean ✓ (80 source files, 22 Quant-Module).
 
