@@ -28,6 +28,8 @@ STATUS_URL = "/quant/status"
 SCHEMA_URL = "/quant/schema"
 FEATURES_COMPUTE_URL = "/quant/features/compute"
 FEATURES_URL = "/quant/features/{symbol}"
+ANOMALIES_DETECT_URL = "/quant/anomalies/detect"
+ANOMALIES_URL = "/quant/anomalies/{symbol}"
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -84,6 +86,22 @@ def feature_client(
     return client, store, settings, feature_store
 
 
+@pytest.fixture
+def anomaly_client(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TestClient, MagicMock, Settings, MagicMock]:
+    """Quant-Test-App mit zusätzlichem AnomalyStore-Mock (P3-2-Interface)."""
+    client, store, settings = quant_client
+    anomaly_store = MagicMock()
+    anomaly_store.detect_and_store = AsyncMock(
+        return_value=MagicMock(anomalies_found=2, stored=True)
+    )
+    anomaly_store.get_anomalies = AsyncMock(return_value=[])
+    monkeypatch.setattr(quant_routes, "get_anomaly_store", lambda: anomaly_store)
+    return client, store, settings, anomaly_store
+
+
 def make_candle(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "time": CANDLE_TIME.isoformat(),
@@ -137,6 +155,58 @@ def make_compute_payload(**overrides: Any) -> dict[str, Any]:
         "timeframe": "1m",
         "exchange": "binance",
         "candles": make_feature_candles(),
+    }
+    base.update(overrides)
+    return base
+
+
+def make_anomaly_candles(count: int = 21) -> list[dict[str, Any]]:
+    """Flache Baseline + Sprungkerze → deterministisch genau 2 Anomalien.
+
+    20 flache Kerzen (close=50000, volume=10) bilden eine Null-Varianz-
+    Baseline; die letzte Sprungkerze (close=60000, volume=100) triggert
+    ``price_shock`` und ``volume_spike`` (flache Baseline → Z-Score
+    2×Schwelle). Bei Default-``window_size=20`` wird mit 21 Kerzen nur die
+    letzte Kerze bewertet.
+    """
+    candles: list[dict[str, Any]] = []
+    for i in range(count):
+        is_shock = i == count - 1
+        price = 60000.0 if is_shock else 50000.0
+        candles.append(
+            {
+                "time": (CANDLE_TIME + timedelta(minutes=i)).isoformat(),
+                "open": price,
+                "high": price + 1.0,
+                "low": price - 1.0,
+                "close": price,
+                "volume": 100.0 if is_shock else 10.0,
+            }
+        )
+    return candles
+
+
+def make_flat_candles(count: int = 21) -> list[dict[str, Any]]:
+    """Komplett flache Kerzenreihe → keine Anomalien."""
+    return [
+        {
+            "time": (CANDLE_TIME + timedelta(minutes=i)).isoformat(),
+            "open": 50000.0,
+            "high": 50001.0,
+            "low": 49999.0,
+            "close": 50000.0,
+            "volume": 10.0,
+        }
+        for i in range(count)
+    ]
+
+
+def make_detect_payload(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "symbol": "BTCUSDT",
+        "timeframe": "1m",
+        "exchange": "binance",
+        "candles": make_anomaly_candles(),
     }
     base.update(overrides)
     return base
@@ -556,3 +626,288 @@ def test_compute_features_real_store_wiring(
     # Echter FeatureStore: ein write_points-Aufruf pro Kerze.
     assert store.write_points.await_count == 5
     assert store.write_points.call_args.kwargs["measurement"] == quant_schema.FEATURE_MEASUREMENT
+
+
+# ---------------------------------------------------------------------------
+# POST /quant/anomalies/detect (P3-3)
+# ---------------------------------------------------------------------------
+
+
+def test_detect_anomalies_success(
+    anomaly_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Sprungkerzenreihe → 200, AnomalyResult-Felder weitergereicht, Store-Aufruf erfolgt."""
+    client, _, _, anomaly_store = anomaly_client
+    resp = client.post(ANOMALIES_DETECT_URL, json=make_detect_payload())
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "symbol": "BTCUSDT",
+        "anomalies_found": 2,
+        "stored": True,
+    }
+
+    anomaly_store.detect_and_store.assert_awaited_once()
+    args = anomaly_store.detect_and_store.call_args.args
+    kwargs = anomaly_store.detect_and_store.call_args.kwargs
+    assert args[0] == "BTCUSDT"
+    assert args[1] == "1m"
+    assert len(args[2]) == 21
+    assert args[2][-1]["close"] == 60000.0  # Sprungkerze
+    assert args[2][-1]["volume"] == 100.0
+    assert kwargs == {"exchange": "binance"}
+
+
+def test_detect_anomalies_without_store(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AnomalyStore nicht verfügbar (None) → echter Detector läuft, stored=false.
+
+    Mit der Sprungkerzenreihe (20 flache Kerzen + Sprung) erkennt der
+    ``AnomalyDetector`` deterministisch genau 2 Anomalien
+    (``price_shock`` + ``volume_spike``).
+    """
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_anomaly_store", lambda: None)
+    resp = client.post(ANOMALIES_DETECT_URL, json=make_detect_payload())
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "symbol": "BTCUSDT",
+        "anomalies_found": 2,
+        "stored": False,
+    }
+
+
+def test_detect_anomalies_no_anomalies(
+    anomaly_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Flache Kerzenreihe ohne Sprünge → 200, Store-Result (0, stored=False) weitergereicht."""
+    client, _, _, anomaly_store = anomaly_client
+    anomaly_store.detect_and_store = AsyncMock(
+        return_value=MagicMock(anomalies_found=0, stored=False)
+    )
+    resp = client.post(ANOMALIES_DETECT_URL, json=make_detect_payload(candles=make_flat_candles()))
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "symbol": "BTCUSDT",
+        "anomalies_found": 0,
+        "stored": False,
+    }
+    anomaly_store.detect_and_store.assert_awaited_once()
+    assert len(anomaly_store.detect_and_store.call_args.args[2]) == 21
+
+
+def test_detect_anomalies_insufficient_history(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nur 10 Kerzen (weniger als window_size+1) → 200, anomalies_found=0 (kein Fehler)."""
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_anomaly_store", lambda: None)
+    resp = client.post(
+        ANOMALIES_DETECT_URL, json=make_detect_payload(candles=make_flat_candles(10))
+    )
+    assert resp.status_code == 200
+    assert resp.json()["anomalies_found"] == 0
+    assert resp.json()["stored"] is False
+
+
+def test_detect_anomalies_invalid_data_422(
+    anomaly_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Negativer Preis, leere Candle-Liste, ungültiger Timeframe → 422, kein Store-Write."""
+    client, _, _, anomaly_store = anomaly_client
+
+    bad_candles = make_anomaly_candles()
+    bad_candles[0] = {**bad_candles[0], "open": -5.0}
+    resp = client.post(ANOMALIES_DETECT_URL, json=make_detect_payload(candles=bad_candles))
+    assert resp.status_code == 422
+
+    assert (
+        client.post(ANOMALIES_DETECT_URL, json=make_detect_payload(candles=[])).status_code == 422
+    )
+    assert (
+        client.post(
+            ANOMALIES_DETECT_URL, json=make_detect_payload(timeframe="2m")
+        ).status_code
+        == 422
+    )
+    assert client.post(ANOMALIES_DETECT_URL, json=make_detect_payload(symbol="")).status_code == 422
+    anomaly_store.detect_and_store.assert_not_awaited()
+
+
+def test_detect_anomalies_requires_trade_key(
+    anomaly_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Mit gesetztem Trade-Key: fehlender Key → 401, falscher Key → 403, richtiger → 200."""
+    client, _, settings, _ = anomaly_client
+    settings.trade_api_key = "secret-trade"
+
+    assert client.post(ANOMALIES_DETECT_URL, json=make_detect_payload()).status_code == 401
+    assert (
+        client.post(
+            ANOMALIES_DETECT_URL,
+            json=make_detect_payload(),
+            headers={"X-Trade-API-Key": "wrong"},
+        ).status_code
+        == 403
+    )
+    resp = client.post(
+        ANOMALIES_DETECT_URL,
+        json=make_detect_payload(),
+        headers={"X-Trade-API-Key": "secret-trade"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+def test_detect_anomalies_disabled_returns_403(
+    anomaly_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """influxdb_enabled=False → 403 QUANT_DISABLED, kein Detect-Store-Aufruf."""
+    client, _, settings, anomaly_store = anomaly_client
+    settings.influxdb_enabled = False
+    resp = client.post(ANOMALIES_DETECT_URL, json=make_detect_payload())
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
+    anomaly_store.detect_and_store.assert_not_awaited()
+
+
+def test_detect_anomalies_real_store_wiring(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Echter AnomalyStore (P3-2) auf mocktem InfluxDBStore: Getter + Write-Pipeline.
+
+    Verifiziert die Integration der lazy ``get_anomaly_store``-Konstruktion
+    (``AnomalyStore(store=...)``) und des ``detect_and_store``-Aufrufs gegen
+    das echte P3-2-Modul — nur der InfluxDB-Zugriff bleibt gemockt.
+    """
+    if importlib.util.find_spec("trading_harness.quant.anomaly_store") is None:
+        pytest.skip("quant/anomaly_store.py nicht vorhanden (P3-2 parallel)")
+    client, store, _ = quant_client
+    # Globalen Cache leeren, damit der Getter in diesem Test neu konstruiert.
+    monkeypatch.setattr(quant_routes, "_anomaly_store", None)
+    resp = client.post(ANOMALIES_DETECT_URL, json=make_detect_payload())
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "symbol": "BTCUSDT",
+        "anomalies_found": 2,
+        "stored": True,
+    }
+    # Echter AnomalyStore: ein write_points-Aufruf pro erkannter Anomalie.
+    assert store.write_points.await_count == 2
+    assert store.write_points.call_args.kwargs["measurement"] == quant_schema.ANOMALY_MEASUREMENT
+
+
+# ---------------------------------------------------------------------------
+# GET /quant/anomalies/{symbol} (P3-3)
+# ---------------------------------------------------------------------------
+
+
+def test_get_anomalies_returns_anomalies(
+    anomaly_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Gespeicherte Anomalien → 200 mit symbol, anomalies und count; Filter weitergereicht."""
+    client, _, _, anomaly_store = anomaly_client
+    anomaly_store.get_anomalies = AsyncMock(
+        return_value=[
+            {
+                "time": "2026-08-25T12:00:20Z",
+                "anomaly_type": "price_shock",
+                "severity": 1.0,
+                "value": 0.182,
+            },
+            {
+                "time": "2026-08-25T12:00:20Z",
+                "anomaly_type": "volume_spike",
+                "severity": 0.75,
+                "value": 100.0,
+            },
+        ]
+    )
+    resp = client.get(
+        ANOMALIES_URL.format(symbol="BTCUSDT"),
+        params={
+            "timeframe": "1m",
+            "anomaly_type": "price_shock",
+            "start": "2026-08-25T12:00:00Z",
+            "end": "2026-08-25T12:05:00Z",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["symbol"] == "BTCUSDT"
+    assert data["count"] == 2
+    assert data["anomalies"][0]["anomaly_type"] == "price_shock"
+
+    # anomaly_type/start/end (UTC-ISO) an den AnomalyStore weitergegeben.
+    anomaly_store.get_anomalies.assert_awaited_once_with(
+        "BTCUSDT",
+        "1m",
+        "price_shock",
+        "2026-08-25T12:00:00+00:00",
+        "2026-08-25T12:05:00+00:00",
+    )
+
+
+def test_get_anomalies_without_store_empty(
+    quant_client: tuple[TestClient, MagicMock, Settings],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AnomalyStore nicht verfügbar → 200 mit leerer Anomalie-Liste."""
+    client, _, _ = quant_client
+    monkeypatch.setattr(quant_routes, "get_anomaly_store", lambda: None)
+    resp = client.get(ANOMALIES_URL.format(symbol="BTCUSDT"))
+    assert resp.status_code == 200
+    assert resp.json() == {"symbol": "BTCUSDT", "anomalies": [], "count": 0}
+
+
+def test_get_anomalies_unknown_symbol_empty(
+    anomaly_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Unbekanntes Symbol ohne gespeicherte Anomalien → 200 mit leerer Liste (kein 404)."""
+    client, _, _, _ = anomaly_client
+    resp = client.get(ANOMALIES_URL.format(symbol="NOPE"))
+    assert resp.status_code == 200
+    assert resp.json() == {"symbol": "NOPE", "anomalies": [], "count": 0}
+
+
+def test_get_anomalies_requires_read_key(
+    anomaly_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Mit gesetztem Read-Key: fehlender Key → 401, richtiger Key → 200."""
+    client, _, settings, _ = anomaly_client
+    settings.read_api_key = "secret-read"
+    assert client.get(ANOMALIES_URL.format(symbol="BTCUSDT")).status_code == 401
+    resp = client.get(
+        ANOMALIES_URL.format(symbol="BTCUSDT"),
+        headers={"X-Read-API-Key": "secret-read"},
+    )
+    assert resp.status_code == 200
+
+
+def test_get_anomalies_invalid_timeframe_422(
+    anomaly_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """Unbekannter Timeframe → 422, keine Store-Abfrage."""
+    client, _, _, anomaly_store = anomaly_client
+    resp = client.get(ANOMALIES_URL.format(symbol="BTCUSDT"), params={"timeframe": "2m"})
+    assert resp.status_code == 422
+    anomaly_store.get_anomalies.assert_not_awaited()
+
+
+def test_get_anomalies_disabled_returns_403(
+    anomaly_client: tuple[TestClient, MagicMock, Settings, MagicMock]
+) -> None:
+    """influxdb_enabled=False → 403 QUANT_DISABLED, keine Store-Abfrage."""
+    client, _, settings, anomaly_store = anomaly_client
+    settings.influxdb_enabled = False
+    resp = client.get(ANOMALIES_URL.format(symbol="BTCUSDT"))
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "QUANT_DISABLED"
+    anomaly_store.get_anomalies.assert_not_awaited()

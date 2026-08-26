@@ -2,6 +2,12 @@
 
 ## Current state
 
+**Phase 3 abgeschlossen: Quantitative Trading Data Platform — Anomaly Detection (2026-08-25).**
+1057 Tests (1020+37 neue Phase-3-Tests), ruff clean, mypy clean (66 source files).
+Neue Module: `quant/anomaly_detection.py` (AnomalyDetector: Z-Score, IQR, Price Shock, Volume Spike,
+Volatility Outlier), `quant/anomaly_store.py` (AnomalyStore: detect+store+query in InfluxDB),
+erweiterte `api/quant_routes.py` (2 neue Endpunkte: /quant/anomalies/detect, /quant/anomalies/{symbol}).
+
 **Phase 2 abgeschlossen: Quantitative Trading Data Platform — Feature Engineering (2026-08-25).**
 1020 Tests (980+40 neue Phase-2-Tests), ruff clean, mypy clean (64 source files).
 Neue Module: `quant/features.py` (FeatureEngine: RSI, MACD, Bollinger, ATR, Volatilität, VWAP),

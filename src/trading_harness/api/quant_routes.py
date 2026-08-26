@@ -1,10 +1,10 @@
-"""Quant-Plattform API-Endpunkte (Phase 1, P1-8; Phase 2, P2-3).
+"""Quant-Plattform API-Endpunkte (Phase 1, P1-8; Phase 2, P2-3; Phase 3, P3-3).
 
-Stellt die InfluxDB-basierte OHLCV-Ingestion und die Feature-Endpunkte
-unter ``/quant/*`` als eigenen ``APIRouter`` bereit. Die Einhängung in die
-Haupt-App erfolgt erst in Phase 9 (siehe ``docs/quant-platform-phase01-plan.md``,
-P1-8) — deshalb trägt der Router selbst seinen Prefix und ``main.py`` bleibt
-unangetastet.
+Stellt die InfluxDB-basierte OHLCV-Ingestion, die Feature-Endpunkte und die
+Anomaly-Endpunkte unter ``/quant/*`` als eigenen ``APIRouter`` bereit. Die
+Einhängung in die Haupt-App erfolgt erst in Phase 9 (siehe
+``docs/quant-platform-phase01-plan.md``, P1-8) — deshalb trägt der Router
+selbst seinen Prefix und ``main.py`` bleibt unangetastet.
 
 Auth-Trennung nach dem bestehenden Read/Trade-Muster (R5.21):
 
@@ -13,12 +13,14 @@ Auth-Trennung nach dem bestehenden Read/Trade-Muster (R5.21):
 - ``GET  /quant/schema``              → Read-Key
 - ``POST /quant/features/compute``    → Trade-Key (Schreiboperation)
 - ``GET  /quant/features/{symbol}``   → Read-Key
+- ``POST /quant/anomalies/detect``    → Trade-Key (Schreiboperation)
+- ``GET  /quant/anomalies/{symbol}``  → Read-Key
 
-Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``, ``FeatureStore``)
-werden über die modul-scope-Getter ``get_settings`` (re-export aus ``config``),
-``get_influx_store`` und ``get_feature_store`` aufgelöst — Unit-Tests binden
-alle per Monkeypatch auf Mocks, es wird nie eine echte InfluxDB-Verbindung
-aufgebaut.
+Testbarkeit: Abhängigkeiten (Settings, ``InfluxDBStore``, ``FeatureStore``,
+``AnomalyStore``) werden über die modul-scope-Getter ``get_settings``
+(re-export aus ``config``), ``get_influx_store``, ``get_feature_store`` und
+``get_anomaly_store`` aufgelöst — Unit-Tests binden alle per Monkeypatch auf
+Mocks, es wird nie eine echte InfluxDB-Verbindung aufgebaut.
 
 Die Candle-Validierung (OHLC-Konsistenz) und die Point-Konvertierung sind die
 eigentliche Endpunkt-Logik; die Ticker-basierte Ingestion aus dem
@@ -31,6 +33,15 @@ deterministischen ``FeatureEngine`` und persistiert über ``FeatureStore``
 Features. ``quant/feature_store.py`` entsteht parallel (P2-2) — der Getter
 liefert daher ``None``, bis das Modul vorhanden ist, und die Endpunkte
 bleiben ohne Persistenz funktional (``stored=false`` / leere Feature-Listen).
+
+Anomaly-Endpunkte (P3-3): ``POST /quant/anomalies/detect`` erkennt mit dem
+deterministischen ``AnomalyDetector`` Anomalien in einer Kerzenreihe und
+persistiert sie über ``AnomalyStore`` (falls verfügbar);
+``GET /quant/anomalies/{symbol}`` liefert gespeicherte Anomalien.
+``quant/anomaly_store.py`` entsteht parallel — der Getter
+``get_anomaly_store`` liefert daher ``None``, bis das Modul vorhanden ist,
+und die Endpunkte bleiben ohne Persistenz funktional
+(``stored=false`` / leere Anomalie-Listen).
 """
 
 from __future__ import annotations
@@ -45,6 +56,7 @@ from pydantic import BaseModel, Field, field_validator
 from trading_harness.api.security import require_read_key, require_trade_key
 from trading_harness.config import get_settings
 from trading_harness.quant import schema as quant_schema
+from trading_harness.quant.anomaly_detection import Anomaly, AnomalyDetector
 from trading_harness.quant.features import FeatureEngine
 from trading_harness.quant.influxdb_client import InfluxDBStore
 
@@ -114,6 +126,36 @@ def get_feature_store() -> Any | None:
         except (TypeError, ValueError):
             return None
     return _feature_store
+
+
+_anomaly_store: Any | None = None
+
+
+def get_anomaly_store() -> Any | None:
+    """Liefert den geteilten ``AnomalyStore`` (lazy) — oder ``None``.
+
+    ``quant/anomaly_store.py`` entsteht parallel (P3-2) und wird deshalb
+    lazy per ``importlib`` geladen: solange das Modul fehlt (oder der
+    Konstruktor noch nicht kompatibel ist), liefert der Getter ``None``
+    und die Anomaly-Endpoints bleiben funktional ohne Persistenz.
+    Endpunkt-Vertrag: ``detect_and_store(symbol, timeframe, candles,
+    exchange=...)`` → ``AnomalyResult(anomalies_found, stored)`` und
+    ``get_anomalies(symbol, timeframe, anomaly_type, start, end)``.
+    """
+    global _anomaly_store
+    if _anomaly_store is None:
+        try:
+            module = importlib.import_module("trading_harness.quant.anomaly_store")
+        except ImportError:
+            return None
+        anomaly_store_cls = getattr(module, "AnomalyStore", None)
+        if anomaly_store_cls is None:
+            return None
+        try:
+            _anomaly_store = anomaly_store_cls(store=get_influx_store())
+        except (TypeError, ValueError):
+            return None
+    return _anomaly_store
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +273,49 @@ class FeatureQueryResponse(BaseModel):
     count: int = Field(ge=0)
 
 
+class AnomalyDetectRequest(BaseModel):
+    """Detect-Anfrage: Kerzenreihe eines Symbols → Anomalien erkennen + speichern."""
+
+    symbol: str = Field(min_length=1)
+    timeframe: str
+    exchange: str = Field(min_length=1)
+    candles: list[OHLCVCandle] = Field(min_length=1)
+
+    @field_validator("timeframe")
+    @classmethod
+    def _check_timeframe(cls, value: str) -> str:
+        if value not in quant_schema.SUPPORTED_TIMEFRAMES:
+            raise ValueError(
+                f"unsupported timeframe '{value}', "
+                f"expected one of: {', '.join(quant_schema.SUPPORTED_TIMEFRAMES)}"
+            )
+        return value
+
+    @field_validator("symbol")
+    @classmethod
+    def _check_symbol(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("symbol must be non-empty")
+        return value
+
+
+class AnomalyDetectResponse(BaseModel):
+    """Ergebnis eines Detect-Laufs: gefundene Anomalien + Persistenz-Status."""
+
+    status: str = "ok"
+    symbol: str
+    anomalies_found: int = Field(ge=0)
+    stored: bool
+
+
+class AnomalyQueryResponse(BaseModel):
+    """Gespeicherte Anomalien für ein Symbol (leere Liste, falls keine vorhanden)."""
+
+    symbol: str
+    anomalies: list[dict[str, Any]]
+    count: int = Field(ge=0)
+
+
 # ---------------------------------------------------------------------------
 # Hilfsfunktionen (deterministische Ingest-Logik)
 # ---------------------------------------------------------------------------
@@ -281,6 +366,21 @@ def _candles_to_engine_input(candles: list[OHLCVCandle]) -> list[dict[str, Any]]
     return [
         {
             "time": candle.time,
+            "open": candle.open,
+            "high": candle.high,
+            "low": candle.low,
+            "close": candle.close,
+            "volume": candle.volume,
+        }
+        for candle in candles
+    ]
+
+
+def _candles_to_detector_input(candles: list[OHLCVCandle]) -> list[dict[str, Any]]:
+    """API-Kerzen → AnomalyDetector-Kerzen (ISO-Zeitstempel + numerische Fields)."""
+    return [
+        {
+            "time": candle.time.isoformat(),
             "open": candle.open,
             "high": candle.high,
             "low": candle.low,
@@ -447,3 +547,76 @@ async def get_features(
     if store is not None:
         rows = await store.get_features(symbol, timeframe, feature_names, start_iso, end_iso)
     return FeatureQueryResponse(symbol=symbol, features=rows, count=len(rows))
+
+
+@router.post(
+    "/anomalies/detect",
+    response_model=AnomalyDetectResponse,
+    dependencies=[Depends(require_trade_key)],
+)
+async def detect_anomalies(payload: AnomalyDetectRequest) -> AnomalyDetectResponse:
+    """Erkennt Anomalien und persistiert sie über ``AnomalyStore``.
+
+    ``anomalies_found`` zählt die erkannten Anomalien über die gesamte
+    Kerzenreihe (Detector-Semantik: rolling Fenster, deterministisch).
+    ``stored`` ist True, wenn mindestens eine Anomalie in einen
+    verfügbaren ``AnomalyStore`` geschrieben wurde; ohne Store bleibt
+    der Endpunkt funktional (``stored=false``).
+    """
+    _require_quant_enabled()
+    candle_dicts = _candles_to_detector_input(payload.candles)
+    store = get_anomaly_store()
+    if store is not None:
+        result = await store.detect_and_store(
+            payload.symbol,
+            payload.timeframe,
+            candle_dicts,
+            exchange=payload.exchange,
+        )
+        anomalies_found = int(result.anomalies_found)
+        stored = bool(result.stored)
+    else:
+        anomalies: list[Anomaly] = AnomalyDetector().detect(candle_dicts)
+        anomalies_found = len(anomalies)
+        stored = False
+    return AnomalyDetectResponse(
+        status="ok",
+        symbol=payload.symbol,
+        anomalies_found=anomalies_found,
+        stored=stored,
+    )
+
+
+@router.get(
+    "/anomalies/{symbol}",
+    response_model=AnomalyQueryResponse,
+    dependencies=[Depends(require_read_key)],
+)
+async def get_anomalies(
+    symbol: str,
+    timeframe: str = "1m",
+    anomaly_type: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> AnomalyQueryResponse:
+    """Liefert gespeicherte Anomalien für ein Symbol.
+
+    ``anomaly_type`` filtert nach Anomalietyp (``price_shock``,
+    ``volume_spike``, ``volatility_outlier``); ``start``/``end`` sind
+    optionale UTC-Zeitgrenzen. Unbekannte Symbole liefern eine leere
+    Liste (kein Fehler).
+    """
+    _require_quant_enabled()
+    if timeframe not in quant_schema.SUPPORTED_TIMEFRAMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported timeframe '{timeframe}'",
+        )
+    # AnomalyStore erwartet UTC-ISO-Strings (naive API-Zeiten sind UTC).
+    start_iso = start.isoformat() if start is not None else None
+    end_iso = end.isoformat() if end is not None else None
+    store = get_anomaly_store()
+    rows: list[dict[str, Any]] = []
+    if store is not None:
+        rows = await store.get_anomalies(symbol, timeframe, anomaly_type, start_iso, end_iso)
+    return AnomalyQueryResponse(symbol=symbol, anomalies=rows, count=len(rows))
