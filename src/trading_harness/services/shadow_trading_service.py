@@ -10,18 +10,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel
 
 from trading_harness.config import Settings
 from trading_harness.models import (
+    AgentGenome,
     PortfolioState,
     ShadowLoopStatus,
     ShadowSessionState,
     ShadowTradingRecord,
 )
-from trading_harness.services.agent_genome_store import AgentGenomeStore
 from trading_harness.services.agent_runtime import AgentRuntime
 from trading_harness.services.kill_switch import KillSwitch
 from trading_harness.services.orchestrator import TradingRunService
@@ -29,6 +29,7 @@ from trading_harness.services.persisted_snapshot_store import PersistedSnapshotS
 from trading_harness.services.risk_engine import RiskEngine
 from trading_harness.services.shadow_execution_backend import ShadowExecutionBackend
 from trading_harness.services.shadow_trading_loop import (
+    AgentSource,
     CryptoMarketDataProvider,
     ShadowTradingLoop,
 )
@@ -39,7 +40,44 @@ from trading_harness.services.snapshot_store import SnapshotStore
 class _CryptoRouterLike(Protocol):
     """Struktureller Vertrag für den Crypto-Router (Spiegel ``_RouterLike``)."""
 
-    def get_ticker(self, symbol: str) -> dict[str, float]: ...
+    def get_ticker(self, symbol: str) -> dict[str, Any]: ...
+
+
+class CompositeAgentSource:
+    """Vereint mehrere Agenten-Quellen (Z4-Fix: Registry + Genome-Store).
+
+    ``list_all()`` dedupliziert nach Agent-ID über alle Quellen (erstes
+    Vorkommen gewinnt); ``get()`` konsultiert die Quellen der Reihe nach.
+    Unterstützt strukturell ``AgentRegistry``/``PersistedAgentRegistry``
+    (``list()``) sowie ``AgentGenomeStore`` (``list_all()``).
+    """
+
+    def __init__(self, *sources: object) -> None:
+        self._sources = list(sources)
+
+    def list_all(self) -> list[AgentGenome]:
+        by_id: dict[str, AgentGenome] = {}
+        for source in self._sources:
+            items = self._list_from(source)
+            for agent in items:
+                by_id.setdefault(agent.id, agent)
+        return list(by_id.values())
+
+    def get(self, agent_id: str) -> AgentGenome | None:
+        for source in self._sources:
+            getter = getattr(source, "get", None)
+            if callable(getter):
+                found = getter(agent_id)
+                if found is not None:
+                    return found
+        return None
+
+    def _list_from(self, source: object) -> list[AgentGenome]:
+        for method in ("list_all", "list"):
+            fn = getattr(source, method, None)
+            if callable(fn):
+                return list(fn())
+        return []
 
 
 def _default_clock() -> datetime:
@@ -72,7 +110,7 @@ class ShadowTradingService:
         snapshot_store: SnapshotStore | PersistedSnapshotStore,
         risk_engine: RiskEngine,
         kill_switch: KillSwitch,
-        agent_source: AgentGenomeStore,
+        agent_source: AgentSource,
         agent_runtime: AgentRuntime,
         clock: Callable[[], datetime] | None = None,
     ) -> None:

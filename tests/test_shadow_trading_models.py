@@ -26,16 +26,20 @@ from trading_harness.models import (
 
 
 class TestShadowTradingSettings:
-    """Shadow-Trading-Settings (Spec §6.2) — Feature ist default-off."""
+    """Shadow-Trading-Settings (Spec §6.2) — Feature ist default-off.
+
+    Alle Default-Tests nutzen ``_env_file=None``, damit sie gegen eine lokale
+    ``.env`` mit aktiviertem Shadow-Trading immun sind (echte Defaults).
+    """
 
     def test_shadow_trading_disabled_by_default(self):
         """S1/ST.2: `shadow_trading_enabled` Default ist False."""
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.shadow_trading_enabled is False
 
     def test_all_shadow_settings_defaults(self):
         """Alle 9 shadow_*-Keys mit exakten Spec-Default-Werten."""
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.shadow_trading_enabled is False
         assert settings.shadow_loop_interval_seconds == 900
         assert settings.shadow_max_decisions_per_day == 96

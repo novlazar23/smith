@@ -850,6 +850,7 @@ def crypto_status() -> dict:
 from trading_harness.services.shadow_execution_backend import ShadowExecutionBackend
 from trading_harness.services.shadow_trading_loop import ShadowTradingStartError
 from trading_harness.services.shadow_trading_service import (
+    CompositeAgentSource,
     ShadowPortfolioReport,
     ShadowTradingService,
 )
@@ -862,7 +863,7 @@ shadow_trading_service = ShadowTradingService(
     snapshot_store=snapshot_store_inst,
     risk_engine=risk_engine,
     kill_switch=execution_kill_switch,
-    agent_source=evolution_genome_store,
+    agent_source=CompositeAgentSource(agent_store, evolution_genome_store),
     agent_runtime=agent_runtime,
 )
 

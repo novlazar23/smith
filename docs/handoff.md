@@ -2,6 +2,57 @@
 
 ## Current state
 
+**Autonomer Shadow-Trading-Loop (2026-08-28): Shadow Trading erzeugt Entscheidungen
+ohne LLM-Abhängigkeit — NO_ACTIVE_CHAMPIONS behoben. ✅**
+
+Kern-Ursache: Der Loop enumerierte ausschließlich `evolution_genome_store`
+(`AgentGenomeStore`, leer), während `POST /agents` in `agent_store`
+(`PersistedAgentRegistry`) schreibt → 0 sichtbare ACTIVE-Agenten → `signal_count == 0`
+→ `NO_ACTIVE_CHAMPIONS`. Zusätzlich lieferte der simulierte Ticker einen konstanten
+Preis (kein Momentum) und `AgentRuntime.analyze()` bei LLM-Ausfall nur ein hartes
+`NO_TRADE` (confidence 0.0).
+
+Drei strukturelle Fixes (deterministisch, backward-kompatibel, TDD mit 4 neuen
+Regressionstests zuerst rot → grün):
+
+1. **Deterministischer LLM-Fallback** (`services/agent_runtime.py`): Bei LLM-Exception
+   berechnet `deterministic_signal()` ein SMA-Momentum über die Close-Preise der
+   Snapshot-Daten (`candles`-Liste oder `ohlcv`-Dict, ≥8 Closes nötig, Schwelle
+   ±0.0005, `confidence = min(0.95, 0.5 + |momentum|*100)`), Richtung LONG/SHORT/
+   NO_TRADE; `raw_response` enthält `"error"` + `"fallback": "deterministic_sma"`.
+   Ohne Candle-Historie bleibt die bisherige NO_TRADE-Semantik exakt erhalten
+   (bestehender Test `test_analyze_llm_failure_returns_no_trade` bleibt grün).
+2. **Deterministischer Simulations-Price-Walk** (`services/crypto_exchange_adapter.py`):
+   `CryptoExecutionRouter.get_ticker` liefert ohne Credentials pro Symbol einen
+   seed-deterministischen Walk (`shadow-sim:{symbol}`: Richtung ±1, slope 0.1–0.25 %,
+   Amplitude < |slope| garantiert monoton) inkl. `candles` (16 OHLCV-Dicts) und
+   `ohlcv` (letzte Candle) im Payload. Erster Aufruf pro Symbol liefert exakt die
+   Legacy-Werte (50000.0/50001.0/50000.5) — `test_router_get_ticker_simulated`
+   bleibt grün; zwei frische Router-Instanzen erzeugen identische Sequenzen.
+   Protokoll-Rückgabetypen (`_RouterLike`, `MarketDataProvider`,
+   `CryptoMarketDataProvider`, `_CryptoRouterLike`) auf `dict[str, Any]` erweitert.
+3. **Composite-Agent-Quelle** (`services/shadow_trading_service.py` +
+   `services/shadow_trading_loop.py` + `api/routes.py`): `CompositeAgentSource`
+   vereint `agent_store` (Registry, `list()`) und `evolution_genome_store`
+   (`list_all()`), dedupliziert nach Agent-ID; der Loop akzeptiert jetzt
+   strukturell `AgentSource` (Protocol: `list_all()`/`get()`). Wiring in routes.py:
+   `agent_source=CompositeAgentSource(agent_store, evolution_genome_store)`.
+
+Verifikation (2026-08-28):
+- `make check` → **1382 Tests** (1378 + 4 neue) grün, `uv run ruff check src tests`
+  clean, `uv run mypy src` clean (82 source files)
+- Docker-Stack: `docker compose build api` + `up -d api`; `POST /shadow-trading/run-once`
+  → **TRADE / APPROVED / FILLED** für BTCUSDT + ETHUSDT mit `agent_ids:
+  ["agent-macro-01","agent-tech-01"]`; Record-Preis wandert (50000.5 → 49910.51),
+  Equity 100000 → 99980 (2 Positionen, Commission 0.001)
+- Vorbestehend behoben: 2 Lint-Fehler in `tests/test_evaluation_engine.py` (ungenutzter
+  `CalibrationBucket`-Import, Import-Order) — steckten bereits im HEAD-Commit `35f3dda`
+  und blockierten `make check`; per `ruff check --fix` entfernt, keine Verhaltensänderung
+
+Bekannte Grenze: `PersistedAgentRegistry` fällt ohne `agents`-Tabelle in Postgres auf
+In-Memory zurück; nach Container-Recreation müssen ACTIVE-Agenten erneut via
+`POST /agents` angelegt werden (im Stack verifiziert, 2 Agenten neu gepostet).
+
 **Phase 11 in Arbeit: Quantitative Trading Data Platform — Hardening (2026-08-26), P11-3 ✅.**
 P11-3 (Hardening API Endpoints) abgeschlossen: 1 neuer Endpunkt in `api/quant_routes.py` —
 `POST /quant/validate` (Trade-Key; reine Validierung ohne Persistenz über den
@@ -1057,6 +1108,7 @@ Inside OpenCode, run `/resume` to reconstruct context from Git and continue the 
 
 ## Last verification
 
+- `make check` (2026-08-28, Autonomer Shadow-Trading-Loop): 1382 Tests grün, ruff clean, mypy clean (82 source files); Docker run-once → TRADE/APPROVED/FILLED
 - `uv run pytest -q` + `uv run ruff check` + `uv run mypy src` (2026-08-26, P11-3 `/quant/validate`): 1365 Tests grün, ruff clean, mypy clean (81 source files)
 - `make check` (2026-08-20, WI-P4-4-Fix `f89a742`): 784 Tests grün, ruff clean, mypy clean (51 source files); `data/kill_switch.json` byte-identisch (sha256 `1389df52f9a2e125a05a2ee96b13263870a234236506d2487c12cbc06d2383a9`)
 - `make check` (2026-08-20, Review-9/13-Fixes `e109400`/`4e4cd38`): 772 Tests grün, ruff clean, mypy clean (50 source files); `data/kill_switch.json` byte-identisch (sha256 `1389df52f9a2e125a05a2ee96b13263870a234236506d2487c12cbc06d2383a9`)

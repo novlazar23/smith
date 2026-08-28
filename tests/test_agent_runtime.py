@@ -211,6 +211,53 @@ class TestAgentRuntime:
         assert "error" in result.raw_response
 
     @pytest.mark.asyncio
+    async def test_analyze_llm_failure_uses_deterministic_fallback_long(self, mock_llm_client, sample_agent):
+        """LLM-Fehler + steigende Candles → deterministisches LONG statt hartem NO_TRADE."""
+        mock_llm_client.chat.side_effect = Exception("connection refused")
+        closes = [50000.0 + i * 100.0 for i in range(15)]
+        candles = [
+            {"time": f"2026-08-24T12:00:{i:02d}Z", "open": c - 10, "high": c + 20, "low": c - 30, "close": c, "volume": 100.0}
+            for i, c in enumerate(closes)
+        ]
+        snapshot = MarketSnapshot(
+            id="snap-det-1",
+            symbol="BTCUSDT",
+            data={"candles": candles, "ticker": closes[-1]},
+        )
+
+        runtime = AgentRuntime(llm_client=mock_llm_client)
+        result = await runtime.analyze(sample_agent, snapshot, run_id="run-det-1")
+
+        assert result.signal.direction == "LONG"
+        assert result.signal.confidence > 0.0
+        # Fehlerursache bleibt im Reasoning erhalten (Audit-Kette).
+        assert "connection refused" in result.signal.reasoning
+        assert "error" in result.raw_response
+
+    @pytest.mark.asyncio
+    async def test_analyze_llm_failure_uses_deterministic_fallback_short(self, mock_llm_client, sample_agent):
+        """LLM-Fehler + fallende Candles → deterministisches SHORT statt hartem NO_TRADE."""
+        mock_llm_client.chat.side_effect = Exception("connection refused")
+        closes = [51000.0 - i * 100.0 for i in range(15)]
+        candles = [
+            {"time": f"2026-08-24T12:00:{i:02d}Z", "open": c + 10, "high": c + 30, "low": c - 20, "close": c, "volume": 100.0}
+            for i, c in enumerate(closes)
+        ]
+        snapshot = MarketSnapshot(
+            id="snap-det-2",
+            symbol="BTCUSDT",
+            data={"candles": candles, "ticker": closes[-1]},
+        )
+
+        runtime = AgentRuntime(llm_client=mock_llm_client)
+        result = await runtime.analyze(sample_agent, snapshot, run_id="run-det-2")
+
+        assert result.signal.direction == "SHORT"
+        assert result.signal.confidence > 0.0
+        assert "connection refused" in result.signal.reasoning
+        assert "error" in result.raw_response
+
+    @pytest.mark.asyncio
     async def test_analyze_uses_agent_temperature(self, mock_llm_client, sample_agent):
         sample_agent.temperature = 0.3
         mock_llm_client.chat.return_value = {

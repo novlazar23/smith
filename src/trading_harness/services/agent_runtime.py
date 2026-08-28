@@ -121,6 +121,93 @@ def parse_signal_response(raw: dict[str, Any], run_id: str, agent_id: str, snaps
 
 
 # ---------------------------------------------------------------------------
+# Deterministischer Analyse-Fallback (LLM nicht verfügbar)
+# ---------------------------------------------------------------------------
+
+DETERMINISTIC_SMA_FAST = 3
+DETERMINISTIC_SMA_SLOW = 8
+DETERMINISTIC_MIN_CLOSES = 8
+DETERMINISTIC_MOMENTUM_THRESHOLD = 0.0005
+DETERMINISTIC_MAX_CONFIDENCE = 0.95
+
+
+def _extract_closes(data: dict[str, Any]) -> list[float]:
+    """Extrahiert Close-Preise aus Snapshot-Daten.
+
+    Unterstützt ``candles`` (Liste von OHLCV-Dicts) und ``ohlcv``
+    (einzelnes Candle-Dict). Ohne nutzbare Close-Daten -> leere Liste.
+    """
+    candles = data.get("candles")
+    if isinstance(candles, list):
+        closes = [
+            float(c["close"])
+            for c in candles
+            if isinstance(c, dict) and c.get("close") is not None
+        ]
+        if closes:
+            return closes
+    ohlcv = data.get("ohlcv")
+    if isinstance(ohlcv, dict) and ohlcv.get("close") is not None:
+        return [float(ohlcv["close"])]
+    return []
+
+
+def deterministic_signal(
+    snapshot: MarketSnapshot,
+    agent: AgentGenome,
+    run_id: str,
+    llm_error: str,
+) -> AgentSignal:
+    """Deterministisches SMA-Momentum-Signal als LLM-Fallback.
+
+    Berechnet SMA_fast vs. SMA_slow über die Close-Preise der Snapshot-Daten.
+    Ohne ausreichende Candle-Historie (< DETERMINISTIC_MIN_CLOSES) bleibt es
+    beim harten ``NO_TRADE`` mit Confidence 0.0 (bestehende Semantik). Der
+    LLM-Fehler bleibt im Reasoning sichtbar (Audit-Trail).
+    """
+    closes = _extract_closes(snapshot.data)
+    if len(closes) < DETERMINISTIC_MIN_CLOSES:
+        return AgentSignal(
+            run_id=run_id,
+            agent_id=agent.id,
+            snapshot_id=snapshot.id,
+            category=agent.category,
+            direction="NO_TRADE",
+            confidence=0.0,
+            reasoning=f"LLM call failed: {llm_error}",
+        )
+
+    fast = sum(closes[-DETERMINISTIC_SMA_FAST:]) / DETERMINISTIC_SMA_FAST
+    slow = sum(closes[-DETERMINISTIC_SMA_SLOW:]) / DETERMINISTIC_SMA_SLOW
+    momentum = (fast - slow) / slow if slow else 0.0
+    if momentum > DETERMINISTIC_MOMENTUM_THRESHOLD:
+        direction = "LONG"
+    elif momentum < -DETERMINISTIC_MOMENTUM_THRESHOLD:
+        direction = "SHORT"
+    else:
+        direction = "NO_TRADE"
+
+    confidence = (
+        0.0
+        if direction == "NO_TRADE"
+        else min(DETERMINISTIC_MAX_CONFIDENCE, 0.5 + abs(momentum) * 100.0)
+    )
+    return AgentSignal(
+        run_id=run_id,
+        agent_id=agent.id,
+        snapshot_id=snapshot.id,
+        category=agent.category,
+        direction=direction,
+        confidence=confidence,
+        reasoning=(
+            f"LLM call failed: {llm_error}; deterministic fallback: "
+            f"SMA{DETERMINISTIC_SMA_FAST}/SMA{DETERMINISTIC_SMA_SLOW} "
+            f"momentum={momentum:.5f}"
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Agent Runtime Service
 # ---------------------------------------------------------------------------
 
@@ -189,23 +276,16 @@ class AgentRuntime:
             )
         except Exception as exc:  # noqa: BLE001 — catch-all for external LLM service failures
             logger.error("LLM call failed for run=%s agent=%s: %s", run_id, agent.id, exc)
-            # Return NO_TRADE with error reasoning rather than raising
-            signal = AgentSignal(
-                run_id=run_id,
-                agent_id=agent.id,
-                snapshot_id=snapshot.id,
-                category=agent.category,
-                direction="NO_TRADE",
-                confidence=0.0,
-                reasoning=f"LLM call failed: {exc}",
-            )
+            # Deterministischer Fallback: SMA-Momentum statt hartem NO_TRADE.
+            # Ohne Candle-Historie bleibt die bisherige NO_TRADE-Semantik.
+            signal = deterministic_signal(snapshot, agent, run_id, str(exc))
             result = AgentAnalysisResult(
                 run_id=run_id,
                 agent_id=agent.id,
                 signal=signal,
                 prompt_version=agent.prompt_version,
                 model_profile=self._model_profile,
-                raw_response={"error": str(exc)},
+                raw_response={"error": str(exc), "fallback": "deterministic_sma"},
             )
             if self._store is not None:
                 self._store.add(result)

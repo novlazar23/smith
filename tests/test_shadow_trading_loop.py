@@ -1046,3 +1046,57 @@ async def test_incomplete_fill_data_fail_closed(env) -> None:
     assert env.stack.trade_store.all() == []
     assert env.stack.position_store.all() == []
     assert env.loop.status().decisions_today == 1
+
+
+async def test_loop_sees_registry_agents_via_composite_source(tmp_path) -> None:
+    """Z4: ACTIVE-Agenten aus AgentRegistry sind über CompositeAgentSource sichtbar.
+
+    Spiegelt die Produktions-Verdrahtung (agent_store + evolution_genome_store):
+    Der Loop enumeriert ausschließlich ``agent_source.list_all()``; ohne Composite
+    wären Registry-Agenten für den Loop unsichtbar (NO_ACTIVE_CHAMPIONS).
+    """
+    from trading_harness.services.agent_registry import AgentRegistry
+    from trading_harness.services.shadow_trading_service import CompositeAgentSource
+
+    root = tmp_path / "composite-env"
+    root.mkdir(parents=True, exist_ok=True)
+    settings = Settings(
+        _env_file=None,
+        shadow_trading_enabled=True,
+        shadow_trading_symbols=["BTCUSDT"],
+        shadow_loop_interval_seconds=900,
+    )
+    stack = build_paper_execution_stack(db=None)
+    backend = ShadowExecutionBackend(stack)
+    provider = ScriptedTickerProvider({"BTCUSDT": 100.0, "ETHUSDT": 2000.0})
+    runtime = FakeAgentRuntime([("LONG", 0.9)])
+    registry = AgentRegistry()
+    registry.add(AgentGenome(id="agent-registry-1", category="technical", status=AgentStatus.ACTIVE))
+    genome = AgentGenomeStore()
+    genome.add(AgentGenome(id=AGENT_ID, category="technical", status=AgentStatus.ACTIVE))
+    composite = CompositeAgentSource(registry, genome)
+    state_store = ShadowTradingStateStore(root / "shadow_trading_state.json")
+    kill = KillSwitch(db_path=str(root / "kill_switch.json"))
+    clock = MutableClock(T0)
+    loop = ShadowTradingLoop(
+        market_data=provider,
+        backend=backend,
+        agent_runtime=runtime,
+        trading_run_service=TradingRunService(),
+        snapshot_store=SnapshotStore(),
+        risk_engine=RiskEngine(dict(POLICY)),
+        kill_switch=kill,
+        agent_source=composite,
+        settings=settings,
+        state_store=state_store,
+        clock=clock,
+    )
+
+    result = await loop.run_once()
+    entry = result["symbols"][0]
+
+    assert entry["decision"] == "TRADE"
+    assert entry["risk_result"] == "APPROVED"
+    assert entry["execution_result"] == "FILLED"
+    # Beide Quellen wurden enumeriert (Registry- und Genome-Store-Agent).
+    assert {agent_id for agent_id, _ in runtime.calls} == {"agent-registry-1", AGENT_ID}

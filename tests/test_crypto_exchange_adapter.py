@@ -505,6 +505,29 @@ class TestCryptoExecutionRouter:
         assert result["last"] == 50000.5
         router.close()
 
+    def test_router_get_ticker_simulated_walk_and_candles(self):
+        """Router-Ticker wandert deterministisch und liefert Candles für die Analyse."""
+        from trading_harness.services.crypto_exchange_adapter import CryptoExecutionRouter
+
+        router = CryptoExecutionRouter(default_exchange="bybit", credential_manager=None)
+        first = router.get_ticker("BTCUSDT")
+        # Legacy-Kompatibilität: erster Aufruf liefert exakte Basiswerte.
+        assert first["bid"] == 50000.0
+        assert first["ask"] == 50001.0
+        assert first["last"] == 50000.5
+        # Zweiter Aufruf: Preis wandert, Payload enthält Candle-Historie.
+        second = router.get_ticker("BTCUSDT")
+        assert second["last"] != first["last"]
+        assert len(second["candles"]) >= 3
+        assert second["ohlcv"]["close"] == second["last"]
+        # Deterministisch über Router-Instanzen hinweg (gleicher Seed pro Symbol).
+        router2 = CryptoExecutionRouter(default_exchange="bybit", credential_manager=None)
+        first2 = router2.get_ticker("BTCUSDT")
+        second2 = router2.get_ticker("BTCUSDT")
+        assert (first2["last"], second2["last"]) == (first["last"], second["last"])
+        router.close()
+        router2.close()
+
 
 # ===========================================================================
 # HTTP-Level Adapter Tests — Request Construction

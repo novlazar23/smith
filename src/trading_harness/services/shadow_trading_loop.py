@@ -33,6 +33,7 @@ from typing import Any, Protocol
 
 from trading_harness.config import Settings
 from trading_harness.models import (
+    AgentGenome,
     AgentSignal,
     MarketSnapshot,
     OutcomeRecord,
@@ -48,7 +49,6 @@ from trading_harness.models import (
     utcnow,
 )
 from trading_harness.quant.ohlcv_ingestion import OHLCVIngestion
-from trading_harness.services.agent_genome_store import AgentGenomeStore
 from trading_harness.services.agent_runtime import AgentRuntime
 from trading_harness.services.evaluation import _compute_classification_metrics
 from trading_harness.services.kill_switch import KillSwitch
@@ -94,7 +94,19 @@ class ShadowTradingStartError(Exception):
 class MarketDataProvider(Protocol):
     """Synchroner Ticker-Provider: ``get_ticker(symbol) -> {"last": float, ...}``."""
 
-    def get_ticker(self, symbol: str) -> dict[str, float]: ...
+    def get_ticker(self, symbol: str) -> dict[str, Any]: ...
+
+
+class AgentSource(Protocol):
+    """Agenten-Quelle für den Loop (Z4): Enumeration + Einzelabruf.
+
+    Strukturell erfüllt von ``AgentGenomeStore`` und
+    ``CompositeAgentSource`` (agent_store + evolution_genome_store).
+    """
+
+    def list_all(self) -> list[AgentGenome]: ...
+
+    def get(self, agent_id: str) -> AgentGenome | None: ...
 
 
 class _RouterLike(Protocol):
@@ -105,7 +117,7 @@ class _RouterLike(Protocol):
     getrennt; die API-Wiring (WI-ST-06) übergibt den echten Router.
     """
 
-    def get_ticker(self, symbol: str) -> dict[str, float]: ...
+    def get_ticker(self, symbol: str) -> dict[str, Any]: ...
 
 
 class CryptoMarketDataProvider:
@@ -114,7 +126,7 @@ class CryptoMarketDataProvider:
     def __init__(self, router: _RouterLike) -> None:
         self._router = router
 
-    def get_ticker(self, symbol: str) -> dict[str, float]:
+    def get_ticker(self, symbol: str) -> dict[str, Any]:
         return self._router.get_ticker(symbol)
 
 
@@ -167,7 +179,7 @@ class ShadowTradingLoop:
         snapshot_store: SnapshotStore | PersistedSnapshotStore,
         risk_engine: RiskEngine,
         kill_switch: KillSwitch,
-        agent_source: AgentGenomeStore,
+        agent_source: AgentSource,
         settings: Settings,
         state_store: ShadowTradingStateStore,
         clock: Callable[[], datetime] = utcnow,

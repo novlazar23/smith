@@ -11,6 +11,8 @@ import base64
 import hashlib
 import hmac
 import json
+import math
+import random
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -1162,6 +1164,10 @@ class CryptoExecutionRouter(ExchangeAdapter):
         self._credential_manager = credential_manager
         self._adapter_state: dict[str, tuple[bool, dict[str, Any]]] = {}
         self._state_lock = threading.Lock()
+        # Deterministischer Simulations-Walk pro Symbol (keine Credentials).
+        self._sim_steps: dict[str, int] = {}
+        self._sim_history: dict[str, list[float]] = {}
+        self._sim_params: dict[str, tuple[float, float, float]] = {}
 
     @property
     def name(self) -> str:
@@ -1231,14 +1237,106 @@ class CryptoExecutionRouter(ExchangeAdapter):
         adapter = _get_or_create(exchange, **kwargs)
         return adapter.cancel_order(order_id)
 
-    def get_ticker(self, symbol: str) -> dict[str, float]:
-        """Holt Live-Preis über die Standard-Exchange."""
+    def get_ticker(self, symbol: str) -> dict[str, Any]:
+        """Holt Live-Preis über die Standard-Exchange.
+
+        Ohne hinterlegte Credentials liefert der Router einen deterministisch
+        wandernden Simulations-Ticker (inkl. Candle-Historie) statt eines
+        konstanten Preises. Der erste Aufruf pro Symbol bleibt
+        backward-kompatibel mit den Legacy-Basiswerten (50000/50001/50000.5).
+        """
         exchange = self._default
         simulated, kwargs = self._resolve_adapter_state(exchange)
         if simulated:
-            return {"bid": 50000.0, "ask": 50001.0, "last": 50000.5}
+            return self._simulated_ticker(symbol)
         adapter = _get_or_create(exchange, **kwargs)
         return adapter.get_ticker(symbol)
+
+    # ------------------------------------------------------------------
+    # Deterministischer Simulations-Walk (Simulationsmomentum für Shadow Trading)
+    # ------------------------------------------------------------------
+
+    SIM_WALK_HISTORY = 16
+    SIM_WALK_BASE = 50000.5
+
+    def _sim_walk_params(self, symbol: str) -> tuple[float, float, float]:
+        """Deterministische Walk-Parameter pro Symbol: (slope, amplitude, phase).
+
+        Gleicher Seed pro Symbol -> identische Sequenz über alle
+        Router-Instanzen hinweg (Reproduzierbarkeit, Tests).
+        """
+        cached = self._sim_params.get(symbol)
+        if cached is not None:
+            return cached
+        rng = random.Random(f"shadow-sim:{symbol}")
+        direction = rng.choice((-1.0, 1.0))
+        slope = rng.uniform(0.001, 0.0025) * direction
+        amplitude = rng.uniform(0.0002, 0.0005)
+        phase = rng.uniform(0.0, 2 * math.pi)
+        params = (slope, amplitude, phase)
+        self._sim_params[symbol] = params
+        return params
+
+    def _sim_walk_price(self, symbol: str, step: int) -> float:
+        """Preis für Walk-Schritt ``step`` (deterministisch über Symbol-Seed).
+
+        Schritt 0 liefert exakt den Legacy-Basispreis (``SIM_WALK_BASE``),
+        damit der erste Aufruf pro Symbol backward-kompatibel bleibt.
+        """
+        if step == 0:
+            return self.SIM_WALK_BASE
+        slope, amplitude, phase = self._sim_walk_params(symbol)
+        return round(
+            self.SIM_WALK_BASE * (1 + slope * step + amplitude * math.sin(0.9 * step + phase)),
+            2,
+        )
+
+    def _sim_candles(self, symbol: str, closes: list[float]) -> list[dict[str, Any]]:
+        """OHLCV-Candles aus der Close-Historie (für deterministische Analyse)."""
+        rng = random.Random(f"shadow-sim-candles:{symbol}")
+        candles: list[dict[str, Any]] = []
+        prev = closes[0]
+        for index, close in enumerate(closes):
+            open_ = prev
+            high = max(open_, close) * (1 + 0.0002)
+            low = min(open_, close) * (1 - 0.0002)
+            candles.append(
+                {
+                    "time": int(index * 60),
+                    "open": round(open_, 2),
+                    "high": round(high, 2),
+                    "low": round(low, 2),
+                    "close": close,
+                    "volume": round(rng.uniform(80.0, 160.0), 2),
+                }
+            )
+            prev = close
+        return candles
+
+    def _simulated_ticker(self, symbol: str) -> dict[str, Any]:
+        """Deterministisch wandernder Ticker-Snapshot mit Candle-Historie."""
+        with self._state_lock:
+            step = self._sim_steps.get(symbol, 0)
+            history = self._sim_history.get(symbol)
+            if history is None:
+                # Erster Aufruf: Vorgeschichte (Schritte -N..-1) + Legacy-Basis (Schritt 0).
+                closes = [
+                    self._sim_walk_price(symbol, offset)
+                    for offset in range(-(self.SIM_WALK_HISTORY - 1), 1)
+                ]
+            else:
+                closes = (history + [self._sim_walk_price(symbol, step)])[-self.SIM_WALK_HISTORY:]
+            self._sim_steps[symbol] = step + 1
+            self._sim_history[symbol] = closes
+        price = closes[-1]
+        candles = self._sim_candles(symbol, closes)
+        return {
+            "bid": round(price - 0.5, 2),
+            "ask": round(price + 0.5, 2),
+            "last": price,
+            "candles": candles,
+            "ohlcv": candles[-1],
+        }
 
     def get_balance(self, symbol: str) -> float:
         return 100000.0
@@ -1248,3 +1346,6 @@ class CryptoExecutionRouter(ExchangeAdapter):
             adapter.close()
         _REGISTRY.clear()
         self._adapter_state.clear()
+        self._sim_steps.clear()
+        self._sim_history.clear()
+        self._sim_params.clear()

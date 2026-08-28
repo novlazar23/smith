@@ -1,11 +1,16 @@
-"""FastAPI-Einstiegspunkt mit Graceful-Shutdown für Shadow-Trading (WI-ST-06)."""
+"""FastAPI-Einstiegspunkt mit Graceful-Shutdown für Shadow-Trading (WI-ST-06).
+
+Bindet die Haupt-Router (``routes``) sowie die Quant-Plattform-Router
+(``quant_routes``, Prefix ``/quant``) ein, damit die Quant-API im
+Docker-/Produktivbetrieb erreichbar ist.
+"""
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from trading_harness.api import routes
+from trading_harness.api import quant_routes, routes
 
 
 @asynccontextmanager
@@ -23,3 +28,4 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(routes.router)
+app.include_router(quant_routes.router)

@@ -1,7 +1,15 @@
-from functools import lru_cache
+from __future__ import annotations
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
+from functools import lru_cache
+from typing import Annotated, Any
+
+from pydantic import Field, field_validator
+from pydantic_settings import (
+    BaseSettings,
+    NoDecode,
+    SettingsConfigDict,
+)
 
 
 class Settings(BaseSettings):
@@ -38,12 +46,26 @@ class Settings(BaseSettings):
     shadow_trading_enabled: bool = False
     shadow_loop_interval_seconds: int = 900
     shadow_max_decisions_per_day: int = 96
-    shadow_trading_symbols: list[str] = Field(default_factory=list)
+    shadow_trading_symbols: Annotated[list[str], NoDecode] = Field(default_factory=list)
     shadow_min_confidence: float = 0.6
     shadow_stop_loss_fraction: float = 0.02
     shadow_min_risk_reward: float = 2.0
     shadow_state_path: str = "data/shadow_trading_state.json"
     shadow_start_equity: float = 100000.0
+
+    @field_validator("shadow_trading_symbols", mode="before")
+    @classmethod
+    def _parse_symbol_list(cls, value: Any) -> Any:
+        """Erlaubt sowohl JSON-Listen als auch Komma-getrennte Strings aus .env."""
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("["):  # JSON-Liste
+                try:
+                    return json.loads(stripped)
+                except json.JSONDecodeError:
+                    return stripped
+            return [s.strip() for s in stripped.split(",") if s.strip()]
+        return value
 
     # Quant Platform — InfluxDB (Phase 1)
     influxdb_url: str = "http://localhost:8086"
