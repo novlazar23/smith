@@ -41,6 +41,17 @@ router = APIRouter()
 settings = get_settings()
 
 _db = Database(settings.database_url)
+
+
+def initialize_database() -> bool:
+    """Erzwingt Pool- und Schema-Initialisierung beim App-Start.
+
+    Returns True wenn PostgreSQL verfügbar ist (persistente Stores aktiv),
+    False wenn der In-Memory-Fallback aktiv ist.
+    """
+    return _db.initialize()
+
+
 agent_store: AgentRegistry | PersistedAgentRegistry = PersistedAgentRegistry(_db)
 snapshot_store_inst: SnapshotStore | PersistedSnapshotStore = PersistedSnapshotStore(_db)
 risk_engine = RiskEngine(load_yaml(settings.risk_policy_path))

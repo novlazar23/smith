@@ -4,6 +4,8 @@ import threading
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 
+from psycopg.types.json import Jsonb
+
 from trading_harness.models import PaperTrade
 
 if TYPE_CHECKING:
@@ -39,7 +41,7 @@ def _record_to_row(record: PaperTrade) -> dict:
         "slippage_bps": record.slippage_bps,
         "fees": record.fees,
         "status": record.status,
-        "partial_fills": record.partial_fills,
+        "partial_fills": Jsonb(record.partial_fills),
         "created_at": record.created_at.isoformat(),
         "filled_at": record.filled_at.isoformat() if record.filled_at else None,
         "closed_at": record.closed_at.isoformat() if record.closed_at else None,

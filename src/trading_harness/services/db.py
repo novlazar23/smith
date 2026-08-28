@@ -1,13 +1,31 @@
 from __future__ import annotations
 
+import json
 import logging
+import time
 from typing import Any
 
+from psycopg import adapters
 from psycopg.rows import dict_row
+from psycopg.types.json import JsonbDumper
+from psycopg.types.json import set_json_dumps as _psycopg_set_json_dumps
 from psycopg_pool import ConnectionPool
 from psycopg_pool import PoolTimeout as PsycopgPoolTimeout
 
 logger = logging.getLogger(__name__)
+
+# JSONB-Spalten werden direkt mit Python-dict-Werten aus den Stores gefüttert
+# (z.B. agent_analysis_results.raw_response, portfolio_states.positions).
+# psycopg3 adaptiert dict nicht automatisch; der globale Dumper serialisiert
+# dict-Werte als JSONB. Listen werden NICHT global registriert, weil TEXT[]-
+# Spalten (z.B. agents.indicators) auf Listen setzen.
+_psycopg_set_json_dumps(lambda obj: json.dumps(obj, default=str))
+adapters.register_dumper(dict, JsonbDumper)
+
+# Cooldown after a failed connection attempt: stores gate on is_available, so a
+# dead database would otherwise trigger a pool-open attempt (up to timeout=1s)
+# on every request.
+RETRY_COOLDOWN_SECONDS = 30.0
 
 INIT_SQL = """
 CREATE TABLE IF NOT EXISTS agents (
@@ -195,14 +213,30 @@ class Database:
         self._url = database_url
         self._pool: ConnectionPool | None = None
         self._ready = False
+        self._retry_after = 0.0
+
+    def initialize(self) -> bool:
+        """Eagerly ensure pool + schema. Returns True when PostgreSQL is usable.
+
+        Called at application startup so the schema is created and stores never
+        silently run in their in-memory fallback while Postgres is reachable.
+        """
+        self._ensure_pool()
+        return self._ready
 
     @property
     def is_available(self) -> bool:
+        # Lazy init: stores gate on is_available BEFORE calling execute()/write(),
+        # so is_available itself must trigger the pool attempt. Otherwise the pool
+        # is never created and every persisted store silently falls back to memory.
+        self._ensure_pool()
         return self._pool is not None and self._ready
 
     def _ensure_pool(self) -> None:
         """Lazily initialize the connection pool on first use."""
         if self._ready:
+            return
+        if time.monotonic() < self._retry_after:
             return
         try:
             self._pool = ConnectionPool(
@@ -222,10 +256,12 @@ class Database:
         ):
             self._pool = None
             self._ready = False
+            self._retry_after = time.monotonic() + RETRY_COOLDOWN_SECONDS
             logger.warning("PostgreSQL not available, stores will use in-memory fallback")
 
     @property
     def is_connected(self) -> bool:
+        self._ensure_pool()
         return self._ready
 
     def execute(self, sql: str, *args: Any) -> list[dict[str, Any]]:

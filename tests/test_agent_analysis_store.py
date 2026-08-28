@@ -87,6 +87,41 @@ class TestPersistedAgentAnalysisStoreFallback:
         store = PersistedAgentAnalysisStore(db)
         assert store.get("nonexistent-signal") is None
 
+    def test_jsonb_fields_are_adaptable(self):
+        """JSONB columns (signals, risks, raw_response) must not contain raw
+        dict/list values: psycopg3 cannot adapt them, which previously broke
+        every INSERT once Postgres was actually reachable (masked by the
+        in-memory fallback). signals/risks must be Jsonb-wrapped, and
+        dict values must have a registered JSONB dumper."""
+        from psycopg.types.json import Jsonb
+
+        from trading_harness.services.agent_analysis_store import _result_to_row
+
+        signal = AgentSignal(
+            run_id="run-1",
+            agent_id="agent-1",
+            snapshot_id="snap-1",
+            category="technical",
+            direction="LONG",
+            confidence=0.8,
+            reasoning="trend up",
+            signals=[{"name": "sma", "value": 1.5}],
+            risks=["volatility"],
+        )
+        result = AgentAnalysisResult(
+            run_id="run-1",
+            agent_id="agent-1",
+            signal=signal,
+            prompt_version="1",
+            model_profile="local-main",
+            raw_response={"raw": "llm-output"},
+        )
+        row = _result_to_row(result)
+        assert isinstance(row["signals"], Jsonb), "signals must be Jsonb-wrapped"
+        assert isinstance(row["risks"], Jsonb), "risks must be Jsonb-wrapped"
+        # raw_response is a dict -> covered by the global JSONB dumper in db.py.
+        assert isinstance(row["raw_response"], dict)
+
     def test_by_run(self):
         db = Database("postgresql://nonexistent:5432/test")
         db._ensure_pool()

@@ -52,6 +52,53 @@ Verifikation (2026-08-28):
 Bekannte Grenze: `PersistedAgentRegistry` fällt ohne `agents`-Tabelle in Postgres auf
 In-Memory zurück; nach Container-Recreation müssen ACTIVE-Agenten erneut via
 `POST /agents` angelegt werden (im Stack verifiziert, 2 Agenten neu gepostet).
+→ **BEHOBEN (2026-08-28, Folge-Commit zu `2abf2c0`): Postgres-Persistenz im Stack aktiv.**
+
+**Postgres-Persistenz repariert (2026-08-28): Zwei Bugs, die der In-Memory-Fallback
+permanent maskierte, sind behoben — Agenten, Portfolio und Trades überleben jetzt
+Container-Recreation. ✅**
+
+Wurzelursache 1 — **Lazy-Init-Dead-Lock** (`services/db.py`): `Database.is_available`
+prüfte nur `self._ready`, ohne `_ensure_pool()` aufzurufen. Da alle 11 Stores
+(Registry, Snapshot, Portfolio, Paper-Trades, ...) `is_available` VOR jedem
+`execute()`/`execute_write()` als Gate prüfen und der Pool ausschließlich in
+`execute()`/`execute_write()` initialisiert wurde, wurde der Pool NIE erzeugt:
+Postgres wurde nie kontaktiert, `INIT_SQL` lief nie, jeder Store lief stillschweigend
+im In-Memory-Fallback. Fix: `is_available`/`is_connected` lösen lazy selbst
+`_ensure_pool()` aus (mit 30s-Cooldown nach Fehlversuch, damit ein toter DB-Host
+nicht jeden Request mit `PoolTimeout=1s` blockiert); neue öffentliche
+`Database.initialize()` + `routes.initialize_database()` werden im FastAPI-Lifespan
+(`main.py`) beim Start erzwungen → Schema-Anlage + klare Log-Zeile („PostgreSQL
+verbunden, persistente Stores aktiv" bzw. Fallback-Warnung).
+
+Wurzelursache 2 — **JSONB-Adaption** (mehrere Stores): Sobald Postgres wirklich
+erreichbar war, schlug `run-once` mit `psycopg.ProgrammingError: cannot adapt type
+'dict'` fehl. `agent_analysis_results.signals/risks` (Listen) und
+`paper_trades.partial_fills` (Liste) werden jetzt explizit als `Jsonb(...)`-Wrapper
+übergeben; alle dict-Werte (`raw_response`, `positions`, `details`,
+`market_snapshots.data`) adaptiert ein global registrierter `JsonbDumper` für `dict`
+mit `default=str`-Serializer in `db.py` (Listen-Adapter bewusst NICHT global, um
+`TEXT[]`-Spalten wie `agents.indicators` nicht zu brechen).
+
+Regressionstests (TDD, rot → grün):
+- `test_db_is_available_triggers_lazy_connect` — `is_available` muss den
+  Verbindungsversuch auslösen (Fallback-Warnung im Log) statt still Null zu liefern
+- `test_jsonb_fields_are_adaptable` — `_result_to_row` liefert `Jsonb`-Wrapper für
+  `signals`/`risks`
+
+Verifikation (2026-08-28):
+- `make check` → **1384 Tests** grün, `ruff check src tests` clean, `mypy src` clean
+- Docker-Stack: neu gebaut, 2 Agenten via `POST /agents` angelegt, direkt in Postgres
+  verifiziert (`psql: SELECT id, category, status FROM agents` → 2 Rows), dann
+  `docker compose up -d --force-recreate --no-deps api` → **Agenten, Portfolio-Historie
+  (inkl. M2M-Positionen) und Trade-Records nach Recreation vollständig vorhanden**
+- `POST /shadow-trading/run-once` gegen echte DB → TRADE / APPROVED / FILLED für
+  BTCUSDT + ETHUSDT, `agent_analysis_results` (4), `paper_trades` (2) und
+  `portfolio_states` (3) in Postgres persistiert
+
+Damit ist die vormalige bekannte Grenze („Agenten nach Recreation erneut anlegen")
+aufgelöst: `PersistedAgentRegistry`, Portfolio und Paper-Trades laufen jetzt real
+gegen PostgreSQL und überleben Container-Recreation via Docker-Volumes.
 
 **Phase 11 in Arbeit: Quantitative Trading Data Platform — Hardening (2026-08-26), P11-3 ✅.**
 P11-3 (Hardening API Endpoints) abgeschlossen: 1 neuer Endpunkt in `api/quant_routes.py` —

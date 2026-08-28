@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 import pytest
@@ -66,6 +67,20 @@ def test_db_fallback_gracefully():
     db._ensure_pool()  # Should catch exception and set _ready = False
     assert db.is_available is False
     assert db.is_connected is False
+
+
+def test_db_is_available_triggers_lazy_connect(caplog):
+    """Regression: stores gate on is_available and never call execute() while it is
+    False, so is_available itself must trigger the lazy pool init. Otherwise the
+    connection pool is never created and every persisted store silently runs in
+    its in-memory fallback (agents/portfolio lost on container recreation)."""
+    db = Database("postgresql://nonexistent:5432/test")
+    with caplog.at_level(logging.WARNING, logger="trading_harness.services.db"):
+        available = db.is_available
+    assert available is False
+    assert any(
+        "not available" in record.message for record in caplog.records
+    ), "is_available must attempt DB connect and emit the fallback warning"
 
 
 # ---------------------------------------------------------------------------

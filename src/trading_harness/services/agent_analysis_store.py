@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from psycopg.types.json import Jsonb
+
 from trading_harness.models import AgentAnalysisResult
 from trading_harness.services.db import Database
 
@@ -18,8 +20,8 @@ def _result_to_row(result: AgentAnalysisResult) -> dict[str, Any]:
         "direction": signal.direction,
         "confidence": signal.confidence,
         "reasoning": signal.reasoning,
-        "signals": signal.signals,
-        "risks": signal.risks,
+        "signals": Jsonb(signal.signals),
+        "risks": Jsonb(signal.risks),
         "prompt_version": result.prompt_version,
         "model_profile": result.model_profile,
         "raw_response": result.raw_response,

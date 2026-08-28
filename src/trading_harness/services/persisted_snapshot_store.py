@@ -51,7 +51,7 @@ class PersistedSnapshotStore:
                 snapshot.id,
                 snapshot.symbol,
                 snapshot.timestamp.isoformat(),
-                json.dumps(snapshot.data, default=str),
+                snapshot.data,
                 snapshot.content_hash,
             )
         else:
