@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from trading_harness.api import routes
+from trading_harness.api import quant_routes, routes
 
 
 @asynccontextmanager
@@ -23,3 +23,4 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(routes.router)
+app.include_router(quant_routes.router)

@@ -17,7 +17,7 @@ function App() {
     <div className="flex h-screen bg-harness-bg">
       <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
       <main className="flex-1 overflow-auto p-6">
-        <Dashboard activeTab={activeTab} health={health} />
+        <Dashboard activeTab={activeTab} health={health} onTabChange={setActiveTab} />
       </main>
     </div>
   )

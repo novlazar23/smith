@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import pytest
+
 from trading_harness.services.evaluation_engine import (
-    CalibrationBucket,
     EvaluationEngine,
     EvaluationResult,
     Prediction,

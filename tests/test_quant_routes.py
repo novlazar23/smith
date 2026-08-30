@@ -2087,8 +2087,8 @@ def test_run_backtest_success(
 ) -> None:
     """SMA-Reihe (27 Kerzen) → 200, exakte Engine-Statistiken, Store-Aufruf erfolgt.
 
-    Erwartet: 1 Trade (LONG bei 102, TP-Exit bei 106.2), PnL = 42000.0
-    (size = initial_capital·risk/stop = 10000·0.02/0.02).
+    Erwartet: 1 Trade (LONG bei 102, TP-Exit bei 106.2), PnL ≈ 411.76
+    (size = capital·risk/(entry·stop) = 10000·0.02/(102·0.02)).
     """
     client, _, _, backtest_store = backtest_client
     resp = client.post(BACKTEST_RUN_URL, json=make_backtest_payload())
@@ -2105,10 +2105,10 @@ def test_run_backtest_success(
     assert result["winning_trades"] == 1
     assert result["losing_trades"] == 0
     assert result["win_rate"] == 1.0
-    assert result["total_pnl"] == pytest.approx(42000.0)
-    assert result["total_pnl_pct"] == pytest.approx(4.2)
+    assert result["total_pnl"] == pytest.approx(411.7647058823532)
+    assert result["total_pnl_pct"] == pytest.approx(0.04117647058823532)
     assert result["max_drawdown"] == 0.0
-    assert result["avg_trade_pnl"] == pytest.approx(42000.0)
+    assert result["avg_trade_pnl"] == pytest.approx(411.7647058823532)
     assert result["profit_factor"] == 10.0
 
     # Echter BacktestResult (P8-1) wird an den Store übergeben.
@@ -2119,7 +2119,7 @@ def test_run_backtest_success(
     assert args[1] == "1m"
     assert isinstance(args[2], BacktestResult)
     assert args[2].total_trades == 1
-    assert args[2].total_pnl == pytest.approx(42000.0)
+    assert args[2].total_pnl == pytest.approx(411.7647058823532)
     assert kwargs == {"exchange": "binance"}
 
 
@@ -2137,13 +2137,13 @@ def test_run_backtest_without_store(
     result = data["result"]
     assert result["total_trades"] == 1
     assert result["win_rate"] == 1.0
-    assert result["total_pnl"] == pytest.approx(42000.0)
+    assert result["total_pnl"] == pytest.approx(411.7647058823532)
 
 
 def test_run_backtest_rsi_strategy(
     backtest_client: tuple[TestClient, MagicMock, Settings, MagicMock]
 ) -> None:
-    """RSI-Reihe (15 Kerzen) → 200, RSI-Long mit TP-Exit, PnL = 40000.0."""
+    """RSI-Reihe (15 Kerzen) → 200, RSI-Long mit risk-sized TP-Exit."""
     client, _, _, _ = backtest_client
     resp = client.post(
         BACKTEST_RUN_URL,
@@ -2161,8 +2161,8 @@ def test_run_backtest_rsi_strategy(
     assert result["total_trades"] == 1
     assert result["winning_trades"] == 1
     assert result["win_rate"] == 1.0
-    assert result["total_pnl"] == pytest.approx(40000.0)
-    assert result["total_pnl_pct"] == pytest.approx(4.0)
+    assert result["total_pnl"] == pytest.approx(412.37113402061857)
+    assert result["total_pnl_pct"] == pytest.approx(0.041237113402061855)
     assert result["profit_factor"] == 10.0
 
 

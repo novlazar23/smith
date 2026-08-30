@@ -14,7 +14,7 @@ export default function StatCard({ label, value, type }: StatCardProps) {
 
   return (
     <div className="stat-card">
-      <span className="stat-value {colorClasses[type]}">{value}</span>
+      <span className={`stat-value ${colorClasses[type]}`}>{value}</span>
       <span className="stat-label">{label}</span>
     </div>
   )

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { apiRequest } from '../api'
 
 interface Agent {
   id: string
@@ -10,16 +11,36 @@ interface Agent {
 export default function AgentList() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const loadAgents = () => apiRequest<Agent[]>('/agents')
+    .then(data => setAgents(Array.isArray(data) ? data : []))
 
   useEffect(() => {
-    fetch('/api/agents')
-      .then(r => r.json())
-      .then(data => {
-        setAgents(Array.isArray(data) ? data : [])
-        setLoading(false)
-      })
-      .catch(() => setLoading(false))
+    loadAgents().catch(() => setMessage('Could not load agents.')).finally(() => setLoading(false))
   }, [])
+
+  const createAgent = async () => {
+    setCreating(true)
+    setMessage('')
+    try {
+      const agent = await apiRequest<Agent>('/agents', {
+        method: 'POST',
+        body: JSON.stringify({
+          category: 'general',
+          indicators: ['rsi', 'macd'],
+          timeframes: ['1h'],
+        }),
+      })
+      await loadAgents()
+      setMessage(`Created ${agent.id}`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not create agent.')
+    } finally {
+      setCreating(false)
+    }
+  }
 
   if (loading) {
     return <div className="text-gray-400">Loading agents...</div>
@@ -29,10 +50,15 @@ export default function AgentList() {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <p className="text-gray-400">{agents.length} agents registered</p>
-        <button className="px-4 py-2 bg-harness-accent/20 text-harness-accent rounded-lg hover:bg-harness-accent/30 transition">
-          Generate New Agent
+        <button
+          onClick={createAgent}
+          disabled={creating}
+          className="px-4 py-2 bg-harness-accent/20 text-harness-accent rounded-lg hover:bg-harness-accent/30 transition disabled:opacity-50"
+        >
+          {creating ? 'Generating…' : 'Generate New Agent'}
         </button>
       </div>
+      {message && <div className="card text-sm text-gray-300">{message}</div>}
       <div className="card">
         <table className="w-full">
           <thead>

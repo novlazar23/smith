@@ -73,6 +73,7 @@ def make_mock_store(available: bool = True) -> MagicMock:
     store = MagicMock()
     store._bucket = "quant"
     store.is_available = available
+    store.health_check = AsyncMock(return_value=available)
     store.write_points = AsyncMock()
     store.query = AsyncMock(return_value=[])
     return store

@@ -101,13 +101,13 @@ class BacktestEngine:
             if current_trade is None:
                 # Entry
                 if signal == Signal.LONG:
-                    size = (capital * self.risk_per_trade) / self.stop_loss_pct
+                    size = (capital * self.risk_per_trade) / (price * self.stop_loss_pct)
                     current_trade = BacktestTrade(
                         entry_time=time_str, entry_price=price,
                         direction="long", size=size,
                     )
                 elif signal == Signal.SHORT:
-                    size = (capital * self.risk_per_trade) / self.stop_loss_pct
+                    size = (capital * self.risk_per_trade) / (price * self.stop_loss_pct)
                     current_trade = BacktestTrade(
                         entry_time=time_str, entry_price=price,
                         direction="short", size=size,

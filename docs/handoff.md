@@ -1,5 +1,39 @@
 # Development Handoff
 
+## Docker smoke-test hardening (2026-08-26)
+
+- Added the missing `web/package-lock.json`, so the web image's `npm ci` step is
+  reproducible and succeeds.
+- Fixed the `StatCard` color-class interpolation that caused the strict TypeScript
+  production build to fail with unused-variable errors.
+- Replaced the API Compose healthcheck's unavailable `curl` binary with Python's
+  standard-library HTTP client. The full stack now starts successfully; API, Web,
+  PostgreSQL, Redis, and InfluxDB were smoke-tested healthy while Live Execution
+  remained disabled and the kill switch remained active.
+- Fixed the Web reverse proxy to strip the `/api/` prefix before forwarding to
+  FastAPI, and made the dashboard tolerate non-array agent responses. This prevents
+  the React runtime crash that previously left the page black after initial render.
+- Mounted the completed Quant router in the main FastAPI app and installed the
+  locked `quant` extra in the API image. The Web UI now executes Agent creation,
+  Shadow start/stop/run-once and a clearly labelled deterministic Backtest smoke
+  test, reports API errors visibly, and shows live Quant/InfluxDB status. Quick
+  Actions now navigate to their corresponding functional views.
+- Corrected the live/read-only Bybit V5 spot ticker contract: requests now include
+  the mandatory `category=spot` parameter and parse `bid1Price`, `ask1Price`, and
+  `lastPrice`. Live execution remains disabled and the kill switch remains active.
+- Corrected Quant backtest position sizing to express the risk budget in asset
+  quantity: `capital × risk / (entry_price × stop_fraction)`. The previous formula
+  omitted entry price and could report impossible losses and drawdowns above 100%.
+- Backtest persistence now initializes the lazy InfluxDB connection before checking
+  availability. Previously, the first result after an API restart was returned with
+  `stored=false` even while InfluxDB was healthy.
+- Backtest queries now use Flux's valid relative range syntax (`-30d`), so persisted
+  results can be read back instead of degrading to an empty response after a query error.
+- Added the authenticated, idempotent `POST /evolution/population/seed` bootstrap path.
+  It creates four conservative generation-0 champions (technical, market structure,
+  orderflow, statistical) in both the persistent agent registry and the evolution store,
+  closing the previous split that left the shadow loop without active champions.
+
 ## Current state
 
 **Phase 11 in Arbeit: Quantitative Trading Data Platform — Hardening (2026-08-26), P11-3 ✅.**

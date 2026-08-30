@@ -9,9 +9,10 @@ import SystemStatus from './SystemStatus'
 interface DashboardProps {
   activeTab: string
   health: any
+  onTabChange: (tab: string) => void
 }
 
-export default function Dashboard({ activeTab, health }: DashboardProps) {
+export default function Dashboard({ activeTab, health, onTabChange }: DashboardProps) {
   const [stats, setStats] = useState({
     agents: 0,
     activeAgents: 0,
@@ -23,10 +24,11 @@ export default function Dashboard({ activeTab, health }: DashboardProps) {
     fetch('/api/agents')
       .then(r => r.json())
       .then(data => {
+        const agents = Array.isArray(data) ? data : []
         setStats(prev => ({
           ...prev,
-          agents: data.length || 0,
-          activeAgents: data.filter((a: any) => a.status === 'ACTIVE').length || 0,
+          agents: agents.length,
+          activeAgents: agents.filter((a: any) => a.status === 'ACTIVE').length,
         }))
       })
       .catch(() => {})
@@ -59,10 +61,16 @@ export default function Dashboard({ activeTab, health }: DashboardProps) {
               <div className="card">
                 <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
                 <div className="space-y-2">
-                  <button className="w-full px-4 py-2 bg-harness-accent/20 text-harness-accent rounded-lg hover:bg-harness-accent/30 transition">
+                  <button
+                    onClick={() => onTabChange('shadow')}
+                    className="w-full px-4 py-2 bg-harness-accent/20 text-harness-accent rounded-lg hover:bg-harness-accent/30 transition"
+                  >
                     Start Shadow Trading
                   </button>
-                  <button className="w-full px-4 py-2 bg-harness-surface border border-harness-border rounded-lg hover:bg-harness-border transition">
+                  <button
+                    onClick={() => onTabChange('backtest')}
+                    className="w-full px-4 py-2 bg-harness-surface border border-harness-border rounded-lg hover:bg-harness-border transition"
+                  >
                     Run Backtest
                   </button>
                 </div>

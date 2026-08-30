@@ -17,7 +17,7 @@ services:
       - ./schemas:/app/schemas:ro
       - ./data:/app/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5).read()"]
       interval: 10s
       timeout: 5s
       retries: 5

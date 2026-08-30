@@ -1,8 +1,36 @@
 from fastapi.testclient import TestClient
 
+from trading_harness.api import routes
 from trading_harness.main import app
+from trading_harness.services.agent_genome_store import AgentGenomeStore
+from trading_harness.services.agent_registry import AgentRegistry
 
 client = TestClient(app)
+
+
+def test_seed_champion_population_is_idempotent(monkeypatch):
+    """Die Startpopulation steht Registry und Evolution ohne Duplikate bereit."""
+    registry = AgentRegistry()
+    evolution_store = AgentGenomeStore()
+    monkeypatch.setattr(routes, "agent_store", registry)
+    monkeypatch.setattr(routes, "evolution_genome_store", evolution_store)
+
+    first = routes.seed_champion_population()
+    second = routes.seed_champion_population()
+
+    assert first["created"] == 4
+    assert second["created"] == 0
+    assert second["existing"] == 4
+    assert {agent.status.value for agent in registry.list()} == {"CHAMPION"}
+    assert {agent.id for agent in registry.list()} == {
+        agent.id for agent in evolution_store.list_all()
+    }
+    assert {agent.category for agent in evolution_store.list_all()} == {
+        "technical",
+        "market_structure",
+        "orderflow",
+        "statistical",
+    }
 
 
 def test_health():

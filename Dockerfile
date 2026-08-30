@@ -13,7 +13,7 @@ COPY config /app/config
 COPY prompts /app/prompts
 COPY schemas /app/schemas
 
-RUN uv sync --frozen --no-dev --no-editable
+RUN uv sync --frozen --no-dev --no-editable --extra quant
 
 EXPOSE 8080
 
