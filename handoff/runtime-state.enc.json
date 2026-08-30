@@ -1,0 +1,7 @@
+{
+  "ciphertext": "3c1yGkkYiOGE3/7y0HVgx/EaZFlzSvQStX8RdqJ9F00a4lxiK9KEiV3saruZg0WRzq4mExmt0r3Uv/PHtElzHVZ55CsvIZ67SERdfF6U8rVXJwtOu9zzNWYw5u8Mezw6rPv2avV6IQ5RGtAkW3URAGweQwvI+uKHR34FGVGuNVpF22GBoMg29ZEeXudi/XML1oFCbp0TBk2sctnAodbpFGjPldxj0cd+caJ4ZPyOKDaesap25BFy3rAfVTnmdd3K3ZQAAVqfCfB5h+Ce5mk8zik9BTHXo/f7NwGJVOkxCX3FkK5adLoiazZcYEmgF0RzQtQZT03m+lPf2tMPUPw0Hu9ZNpW/oGG4BdNJHLmnCO1rfdKRTlEdWbHi0oKBtomwFyzqX1II9KWF9q9bVfK+bCnijTo+VfaKQ7uNOiln0EaTwqs52unCd857cUavgjEnsrP7R5vDn3y1v/8SlpCvj6MfxsugL1eb0BO9JGnyroar3LV2dXZJvd378nvkXzSmeehUk9pagXBlpcHE+Xihu3cDFU8aA7Cdhu6KNSHRsq+Smh6a+25+dlYNmv80DoAqaYL8PlO9Sv8qXNsGHSWDdQ==",
+  "format": "smith-state-v1",
+  "kdf": "scrypt-n16384-r8-p1",
+  "nonce": "VyGD4CC/Onfi4l1+",
+  "salt": "LXfPEt1bbuCUxznKR+5n3Q=="
+}
