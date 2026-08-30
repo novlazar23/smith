@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     shadow_min_risk_reward: float = 2.0
     shadow_state_path: str = "data/shadow_trading_state.json"
     shadow_start_equity: float = 100000.0
+
+    # Autonomous shadow runtime + encrypted cross-system state handoff.
+    autonomous_shadow_enabled: bool = False
+    state_handoff_enabled: bool = False
+    state_handoff_password: SecretStr = SecretStr("")
+    state_node_id: str = ""
+    state_data_dir: str = "data"
+    state_bundle_path: str = "handoff/runtime-state.enc.json"
+    state_handoff_lease_seconds: int = 300
+    state_handoff_sync_seconds: int = 60
 
     # Quant Platform — InfluxDB (Phase 1)
     influxdb_url: str = "http://localhost:8086"

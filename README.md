@@ -1051,6 +1051,48 @@ curl http://localhost:8080/shadow-trading/status -H "X-Read-API-Key: $READ_API_K
 curl -X POST http://localhost:8080/shadow-trading/stop -H "X-Trade-API-Key: $TRADING_API_KEY"
 ```
 
+## 11.9 Autonomer Shadow-Service und System-Handoff
+
+Der autonome Modus ist opt-in und startet ausschließlich den Shadow/Paper-Loop. Er kann
+Live-Execution nicht aktivieren und verändert den Kill Switch nicht. Beim Start wird die
+konservative Champion-Startpopulation idempotent angelegt. Voraussetzungen in `.env`:
+
+```text
+LIVE_EXECUTION_ENABLED=false
+AUTONOMOUS_SHADOW_ENABLED=true
+SHADOW_TRADING_ENABLED=true
+SHADOW_TRADING_SYMBOLS=["BTCUSDT"]
+```
+
+Für die Fortführung auf mehreren Systemen kann der Runtime-State als authentifiziert
+verschlüsseltes Bündel übertragen werden. AES-256-GCM schützt Inhalt und Integrität; der Schlüssel
+wird mit Scrypt aus `STATE_HANDOFF_PASSWORD` abgeleitet. Passwort, API-Schlüssel und `.env` werden
+nie ins Repository aufgenommen. Jeder Rechner benötigt eine eindeutige `STATE_NODE_ID`.
+
+```text
+STATE_HANDOFF_ENABLED=true
+STATE_HANDOFF_PASSWORD=<langes lokales Passwort>
+STATE_NODE_ID=research-node-a
+```
+
+Während des Betriebs erneuert der Service seine Lease und schreibt atomare verschlüsselte
+Snapshots nach `handoff/runtime-state.enc.json`. Ein zweiter Rechner kann eine aktive Lease nicht
+übernehmen. Kontrollierter Wechsel:
+
+```bash
+# Auf dem abgebenden Rechner (Service vorher kontrolliert stoppen):
+uv run python -m trading_harness.state_handoff_cli hand-off --push
+
+# Auf dem übernehmenden Rechner:
+git pull --ff-only
+uv run python -m trading_harness.state_handoff_cli hand-on
+./scripts/bootstrap.sh --docker
+```
+
+Nur das verschlüsselte Bündel darf committed werden. Klartext unter `data/`, `.env`, beschädigte
+Quarantäne-Dateien und Credentials bleiben per `.gitignore` lokal. Git-Konflikte am Bündel dürfen
+nicht manuell zusammengeführt werden; die aktive Lease muss zuerst sauber freigegeben werden.
+
 ---
 
 # 12. Grundprinzip

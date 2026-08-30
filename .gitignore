@@ -14,3 +14,6 @@ build/
 .vscode/
 data/*
 !data/.gitkeep
+handoff/*
+!handoff/.gitkeep
+!handoff/runtime-state.enc.json

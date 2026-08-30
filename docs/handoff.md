@@ -1,5 +1,24 @@
 # Development Handoff
 
+## Autonomous encrypted state handoff (2026-08-30)
+
+- Added opt-in autonomous Shadow/Paper startup with idempotent champion seeding. It preserves the
+  fail-closed boundaries: Live Execution remains disabled by configuration and the Kill Switch is
+  never changed automatically.
+- Added an authenticated encrypted runtime bundle (`AES-256-GCM`, Scrypt password derivation),
+  atomic restore/export, generation tracking and exclusive expiring node leases. The password and
+  node identity are supplied only through local environment configuration.
+- Added pre-store startup restore, periodic lease/state renewal and graceful encrypted hand-off on
+  shutdown. The portable bundle is the only runtime-state artifact allowed in Git; plaintext
+  `data/`, `.env`, credentials and corrupt-state quarantines remain excluded.
+- Added `trading_harness.state_handoff_cli` with `hand-on`, `hand-off`, `renew`, and an explicit
+  `--push` workflow for committing/pushing only the encrypted bundle.
+- Verification: `make check` -> 1391 passed, Ruff clean, Mypy clean (84 source files);
+  `docker compose config --quiet` succeeded; `smith-api` and `smith-web` images built successfully.
+- GitHub push is pending because this workstation has neither HTTPS credentials nor an authenticated
+  `gh` session. No runtime bundle was generated because the local handoff password/node ID are not
+  configured; no plaintext state was committed.
+
 ## Docker smoke-test hardening (2026-08-26)
 
 - Added the missing `web/package-lock.json`, so the web image's `npm ci` step is
