@@ -1093,6 +1093,25 @@ Nur das verschlüsselte Bündel darf committed werden. Klartext unter `data/`, `
 Quarantäne-Dateien und Credentials bleiben per `.gitignore` lokal. Git-Konflikte am Bündel dürfen
 nicht manuell zusammengeführt werden; die aktive Lease muss zuerst sauber freigegeben werden.
 
+### `.env` aus Bitwarden
+
+Die vollständige lokale `.env` wird als Secure Note unter dem Namen
+`Smith Autonomous Service Environment` in Bitwarden verwaltet. Im Repository stehen weder
+Vault-Inhalt noch Master-Passwort oder Session-Token. Nach `bw login` wird der Vault lokal
+entsperrt:
+
+```bash
+export BW_SESSION="$(bw unlock --raw)"
+./scripts/bitwarden-env.sh pull       # nur wenn .env noch nicht existiert
+./scripts/bitwarden-env.sh pull --force
+./scripts/bitwarden-env.sh push       # lokalen Stand in Bitwarden aktualisieren
+```
+
+Alternativ kann das Session-Token temporär in `.bw-session` mit Dateimodus `600` liegen; die Datei
+ist ignoriert. `./scripts/bootstrap.sh` stellt eine fehlende `.env` automatisch aus Bitwarden
+wieder her, wenn eine entsperrte Session verfügbar ist. Ohne Session verwendet ein frischer
+Checkout weiterhin die geheimnisfreie `.env.example`.
+
 ---
 
 # 12. Grundprinzip

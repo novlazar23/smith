@@ -1,4 +1,5 @@
 .env
+.bw-session
 .venv/
 __pycache__/
 *.py[cod]

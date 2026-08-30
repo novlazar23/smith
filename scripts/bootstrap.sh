@@ -19,8 +19,13 @@ EOF
 
 ensure_env() {
   if [[ ! -f .env ]]; then
-    cp .env.example .env
-    echo "Created .env from .env.example"
+    if command -v bw >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 && \
+       [[ -n "${BW_SESSION:-}" || -f .bw-session ]]; then
+      ./scripts/bitwarden-env.sh pull
+    else
+      cp .env.example .env
+      echo "Created .env from .env.example"
+    fi
   fi
 }
 

@@ -1,7 +1,7 @@
 {
-  "ciphertext": "3c1yGkkYiOGE3/7y0HVgx/EaZFlzSvQStX8RdqJ9F00a4lxiK9KEiV3saruZg0WRzq4mExmt0r3Uv/PHtElzHVZ55CsvIZ67SERdfF6U8rVXJwtOu9zzNWYw5u8Mezw6rPv2avV6IQ5RGtAkW3URAGweQwvI+uKHR34FGVGuNVpF22GBoMg29ZEeXudi/XML1oFCbp0TBk2sctnAodbpFGjPldxj0cd+caJ4ZPyOKDaesap25BFy3rAfVTnmdd3K3ZQAAVqfCfB5h+Ce5mk8zik9BTHXo/f7NwGJVOkxCX3FkK5adLoiazZcYEmgF0RzQtQZT03m+lPf2tMPUPw0Hu9ZNpW/oGG4BdNJHLmnCO1rfdKRTlEdWbHi0oKBtomwFyzqX1II9KWF9q9bVfK+bCnijTo+VfaKQ7uNOiln0EaTwqs52unCd857cUavgjEnsrP7R5vDn3y1v/8SlpCvj6MfxsugL1eb0BO9JGnyroar3LV2dXZJvd378nvkXzSmeehUk9pagXBlpcHE+Xihu3cDFU8aA7Cdhu6KNSHRsq+Smh6a+25+dlYNmv80DoAqaYL8PlO9Sv8qXNsGHSWDdQ==",
+  "ciphertext": "4MFeI3Gusy5vDtCH70LCpbKHqE6VVD0WulIWEA1QaupPKgA+IBkakjl7fVYO6+Bpop+iWt/kP43m1iipJFo9jYWMBqyks1zViTGtW26hC0KFspCIhgVmSEe14Dlm4EGFWGrbMZlkxJJStm88k3JRi+dpDtPFf7RCf4huMBbWcAfIMOT/88awsQmU7Tz9usvKCg62j5g2eV6mu6TDHWpw0h+0f4XXWa9wp12b/EiXeWYVaJ7eaVuZDwvwTp+t+TqSvtSsG0GOBEMp769+0IgsTy7icNx2TiRQ7t/n30F8fIF2udC+AZebQNfMHMLziUiUnHYqyfW/uKb/tZZnO9tY2NShkmusSE+YQvQAEjpqzaJwx/r8+aGGyk0zTsdlj0Wur/LpOcf6iirIYQkuTdUF1edJpYu/To9iX0rspxR4DvODIZBSBkTVYqSllnYkKXVDCox91jXir2X7yIxfmDJuFMn6kwugDzwuSqd70mA4YphmONNSkh8+nTvqgLxWnVCHBdhYybm3c3LmajOaZElTpCrkSggKhks2nEGI7pe8+Cy33w0Bp+zyoodAjoaJH7lKi1AJN9STe/dPKixT4zp7w1c=",
   "format": "smith-state-v1",
   "kdf": "scrypt-n16384-r8-p1",
-  "nonce": "VyGD4CC/Onfi4l1+",
-  "salt": "LXfPEt1bbuCUxznKR+5n3Q=="
+  "nonce": "ruTheI/iNsmUuldV",
+  "salt": "iegrSkjlLiF1O8S+ZUcbAw=="
 }

@@ -1,5 +1,18 @@
 # Development Handoff
 
+## Bitwarden environment bootstrap (2026-08-30)
+
+- Stored the complete local `.env` in the Bitwarden Secure Note
+  `Smith Autonomous Service Environment`; no secret values or session tokens were added to Git.
+- Added `scripts/bitwarden-env.sh` for guarded atomic `pull`, explicit `pull --force`, and
+  create/update `push`. It accepts `BW_SESSION` or a mode-600, git-ignored `.bw-session`.
+- Fresh-checkout bootstrap restores `.env` from Bitwarden when an unlocked session is available,
+  otherwise retaining the safe `.env.example` fallback.
+- Live Bitwarden verification: secure note create/update plus forced restore produced a byte-identical
+  `.env`; `make check` -> 1393 passed, Ruff clean, Mypy clean (84 source files).
+- Pytest collection now forces autonomous startup and real handoff off before importing API
+  singletons, preventing local `.env` settings from acquiring or rewriting the Git-tracked lease.
+
 ## Autonomous encrypted state handoff (2026-08-30)
 
 - Added opt-in autonomous Shadow/Paper startup with idempotent champion seeding. It preserves the
