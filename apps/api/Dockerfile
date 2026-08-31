@@ -48,10 +48,9 @@ COPY apps/ ./apps/
 COPY apps/api/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# Create non-root user
+# Create non-root user (Privilege-Drop erfolgt in /app/entrypoint.sh via setpriv)
 RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser && \
     chown -R appuser:appuser /app
-USER appuser
 
 # Expose internal API port
 EXPOSE 8000

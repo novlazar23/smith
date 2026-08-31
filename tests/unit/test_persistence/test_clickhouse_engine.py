@@ -38,16 +38,21 @@ def _make_engine(**config_overrides: Any) -> ClickHouseEngine:
 
 
 class TestExecuteUrl:
-    def test_execute_posts_to_database_path(self, captured_calls: list[dict[str, Any]]) -> None:
-        """Query wird an http://host:8123/<database>/ gesendet."""
+    def test_execute_sends_root_url_with_database_header(self, captured_calls: list[dict[str, Any]]) -> None:
+        """Query wird an die Root-URL mit X-ClickHouse-Database-Header gesendet.
+
+        (ClickHouse 24.x setzt POSTs an Datenbank-Pfade mit TCP-Reset ab.)
+        """
         engine = _make_engine(database="trading_events")
         engine._execute("SELECT 1")
-        assert captured_calls[0]["url"] == "http://localhost:8123/trading_events/"
+        assert captured_calls[0]["url"] == "http://localhost:8123/"
+        assert captured_calls[0]["headers"]["X-ClickHouse-Database"] == "trading_events"
 
     def test_execute_uses_https_when_secure(self, captured_calls: list[dict[str, Any]]) -> None:
         engine = _make_engine(database="trading_events", secure=True)
         engine._execute("SELECT 1")
-        assert captured_calls[0]["url"] == "https://localhost:8123/trading_events/"
+        assert captured_calls[0]["url"] == "https://localhost:8123/"
+        assert captured_calls[0]["headers"]["X-ClickHouse-Database"] == "trading_events"
 
 
 class TestCreateTables:

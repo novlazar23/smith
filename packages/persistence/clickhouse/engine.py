@@ -220,8 +220,9 @@ class ClickHouseEngine:
         logger = get_logger(__name__)
         logger.info("executing_query", query=query[:200])
 
-        url = f"{self._config.url}/{self._config.database}/"
+        url = f"{self._config.url}/"
         headers = self._auth_headers()
+        headers["X-ClickHouse-Database"] = self._config.database
         try:
             response = httpx.post(
                 url,

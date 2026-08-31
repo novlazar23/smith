@@ -55,6 +55,7 @@ def _ch_config() -> ClickHouseConfig:
         host=os.environ.get("CH_HOST", "clickhouse"),
         port=int(os.environ.get("CH_PORT", "8123")),
         database=os.environ.get("CH_DB", "trading_events"),
+        user="orchestra",
         password=os.environ.get("CH_PASSWORD", ""),
     )
 
@@ -77,8 +78,12 @@ def init_clickhouse() -> None:
 def init_redpanda() -> None:
     """Stellt sicher, dass das Redpanda-Topic ``market_data`` existiert."""
     admin = AdminClient({"bootstrap.servers": os.environ.get("REDPANDA_SERVERS", "redpanda:9092")})
-    topics = admin.list_topics()
-    if TOPIC_NAME in topics:
+    metadata = admin.list_topics(timeout=10)
+    # confluent-kafka >= 2.x liefert ClusterMetadata (dict in .topics), ältere
+    # Versionen ein iterables von Topic-Namen.
+    topics_attr = getattr(metadata, "topics", None)
+    topic_names = set(topics_attr) if topics_attr is not None else set(metadata)
+    if TOPIC_NAME in topic_names:
         logger.info("redpanda topic exists", extra={"topic": TOPIC_NAME})
         return
     new_topic = NewTopic(TOPIC_NAME, num_partitions=NUM_PARTITIONS, replication_factor=REPLICATION_FACTOR)
