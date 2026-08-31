@@ -162,8 +162,10 @@ ignore = [
 "apps/api/middleware.py" = ["ANN001", "ANN202"]
 "packages/governance/audit/__init__.py" = ["FBT001"]
 "packages/governance/champion_challenger/__init__.py" = ["FBT001", "FBT002"]
+"packages/rollout/**/*.py" = ["FBT001", "FBT002", "SIM102"]
 "packages/governance/quarantine/__init__.py" = ["FBT001"]
 "packages/backtesting/**/*.py" = ["ANN001", "ANN401", "FBT001", "FBT002", "E741", "PTH123", "RUF002", "RUF022"]
+"packages/live_execution/**/*.py" = ["ANN401"]
 
 [tool.ruff.format]
 quote-style = "double"

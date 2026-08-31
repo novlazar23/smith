@@ -37,10 +37,12 @@ from apps.api.middleware import (
     create_rate_limit_middleware,
 )
 
-# Live-Signal Router — optional, behind feature flag
+# Live-Router — optional, behind feature flag
 try:
-    from apps.api.routers import live_signal
+    from apps.api.routers import live_health, live_orders, live_signal
 except ImportError:
+    live_health = None  # type: ignore[assignment]
+    live_orders = None  # type: ignore[assignment]
     live_signal = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
@@ -173,8 +175,14 @@ def create_app() -> FastAPI:  # type: ignore[return-value, valid-type]
             status_code=status.HTTP_200_OK,  # type: ignore[assignment, arg-type]
         )
 
-    # Live-Signal Router — nur verfügbar wenn Router importiert werden konnte
+    # Live-Router — nur verfügbar wenn die Router importiert werden konnten
     if live_signal is not None:
         app.include_router(live_signal.router)
+
+    if live_health is not None:
+        app.include_router(live_health.router)
+
+    if live_orders is not None:
+        app.include_router(live_orders.router)
 
     return app
