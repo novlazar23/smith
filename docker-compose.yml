@@ -135,6 +135,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     ports:
       - "127.0.0.1:9090:9090"
@@ -159,6 +160,14 @@ services:
     environment:
       API_SECRET_KEY_FILE: /run/secrets/api_secret_key
       API_CORS_ORIGINS: "http://localhost:3000,http://localhost:8080,http://localhost"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: trading
+      DB_USER: orchestra
+      CH_HOST: clickhouse
+      CH_PORT: "8123"
+      CH_DB: trading_events
+      REDPANDA_SERVERS: redpanda:9092
     ports:
       - "8080:8000"
     healthcheck:
@@ -168,6 +177,8 @@ services:
       retries: 5
     secrets:
       - api_secret_key
+      - postgres_password
+      - clickhouse_password
     depends_on:
       postgres:
         condition: service_healthy
@@ -199,6 +210,134 @@ services:
         condition: service_healthy
     secrets:
       - grafana_password
+    networks:
+      - backend
+
+  # ─── db-init (One-Shot Bootstrap) ─────────────────────────────────────────
+  db-init:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["python", "-m", "apps.db_init"]
+    restart: "no"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: trading
+      DB_USER: orchestra
+      CH_HOST: clickhouse
+      CH_PORT: "8123"
+      CH_DB: trading_events
+      REDPANDA_SERVERS: redpanda:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    secrets:
+      - postgres_password
+      - clickhouse_password
+    networks:
+      - backend
+
+  # ─── News-Ingestion (RSS → PostgreSQL) ─────────────────────────────────────
+  news-ingestion:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["python", "-m", "apps.news_ingestion"]
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: trading
+      DB_USER: orchestra
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/heartbeat && [ $(( $(date +%s) - $(stat -c %Y /tmp/heartbeat) )) -lt 120 ]"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - backend
+
+  # ─── Market-Producer (Dummy-Adapter → Redpanda) ────────────────────────────
+  market-producer:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["python", "-m", "apps.market_producer"]
+    restart: unless-stopped
+    environment:
+      REDPANDA_SERVERS: redpanda:9092
+      MARKET_DATA_TOPIC: market_data
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/heartbeat && [ $(( $(date +%s) - $(stat -c %Y /tmp/heartbeat) )) -lt 180 ]"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - backend
+
+  # ─── Ingestion-Consumer (Redpanda → ClickHouse) ────────────────────────────
+  ingestion-consumer:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["python", "-m", "apps.ingestion"]
+    restart: unless-stopped
+    environment:
+      CH_HOST: clickhouse
+      CH_PORT: "8123"
+      CH_DB: trading_events
+      REDPANDA_SERVERS: redpanda:9092
+      MARKET_DATA_TOPIC: market_data
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    secrets:
+      - clickhouse_password
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/heartbeat && [ $(( $(date +%s) - $(stat -c %Y /tmp/heartbeat) )) -lt 120 ]"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - backend
+
+  # ─── Alertmanager ──────────────────────────────────────────────────────────
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./infrastructure/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9093/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - backend
 
