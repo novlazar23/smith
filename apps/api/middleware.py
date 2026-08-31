@@ -8,11 +8,11 @@ Stellt zwei FastAPI-Middleware-Funktionen bereit:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 from collections import defaultdict
 from collections.abc import Callable
-
 from pathlib import Path
 
 try:
@@ -75,7 +75,8 @@ def create_rate_limit_middleware() -> Callable:
 
 
 # Endpunkte die KEINE Authentifizierung benötigen
-_OPEN_ENDPOINTS = frozenset(["/health", "/status"])
+# /metrics: Prometheus-Scraper läuft ohne API-Key gegen den Endpunkt
+_OPEN_ENDPOINTS = frozenset(["/health", "/status", "/metrics"])
 
 
 def create_auth_middleware() -> Callable | None:
@@ -91,10 +92,8 @@ def create_auth_middleware() -> Callable | None:
 
     secret_file = os.environ.get("API_SECRET_KEY_FILE")
     if secret_file:
-        try:
+        with contextlib.suppress(FileNotFoundError, PermissionError):
             expected_key = Path(secret_file).read_text().strip()
-        except (FileNotFoundError, PermissionError):
-            pass
 
     if not expected_key:
         expected_key = os.environ.get("API_SECRET_KEY")

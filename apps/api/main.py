@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 # FastAPI import — optional dependency
 try:
     from fastapi import FastAPI, HTTPException, status
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, Response
     from pydantic import BaseModel, Field
 
     FASTAPI_AVAILABLE = True
@@ -25,6 +25,7 @@ except ImportError:
     HTTPException = None  # type: ignore[assignment,misc]
     BaseModel = None  # type: ignore[assignment,misc]
     Field = None  # type: ignore[assignment]
+    Response = None  # type: ignore[assignment,misc]
     FASTAPI_AVAILABLE = False
 
 from apps.api.endpoints import (
@@ -32,6 +33,7 @@ from apps.api.endpoints import (
     batch_analysis_endpoint,
     status_endpoint,
 )
+from apps.api.metrics import metrics_middleware, render_metrics
 from apps.api.middleware import (
     create_auth_middleware,
     create_rate_limit_middleware,
@@ -146,6 +148,10 @@ def create_app() -> FastAPI:  # type: ignore[return-value, valid-type]
     if auth_middleware is not None:
         app.middleware("http")(auth_middleware)
 
+    # Prometheus-Metrics — als letzte (äußere) Schicht, damit auch
+    # abgewiesene Anfragen (401/429) gezählt werden
+    app.middleware("http")(metrics_middleware)
+
     # Routes
     @app.post("/analyze", status_code=status.HTTP_200_OK)  # type: ignore[assignment]
     async def post_analyze(request: AnalyzeRequest) -> JSONResponse:  # type: ignore[return-value]
@@ -173,6 +179,14 @@ def create_app() -> FastAPI:  # type: ignore[return-value, valid-type]
         return JSONResponse(  # type: ignore[possibly-unbound, call-overload]
             content={"status": "healthy", "timestamp": datetime.now(UTC).isoformat()},
             status_code=status.HTTP_200_OK,  # type: ignore[assignment, arg-type]
+        )
+
+    @app.get("/metrics")
+    async def get_metrics() -> Response:  # type: ignore[type-arg, return-value, misc]
+        """Gibt Prometheus-Metriken im Textformat (Version 0.0.4) zurück."""
+        return Response(  # type: ignore[possibly-unbound, call-overload]
+            content=render_metrics(),
+            media_type="text/plain; version=0.0.4",
         )
 
     # Live-Router — nur verfügbar wenn die Router importiert werden konnten
