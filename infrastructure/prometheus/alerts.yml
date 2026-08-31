@@ -46,7 +46,7 @@ groups:
           severity: warning
         annotations:
           summary: "Max open positions reached"
-          description: "Current positions: {{ $value }}, max: {{ tracing_config_max_open_positions }}"
+          description: "Current positions: {{ $value }}, max: trading_config_max_open_positions"
 
       - alert: TradingConfidenceLow
         expr: avg(trading_signal_confidence) < 0.5
