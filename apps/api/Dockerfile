@@ -44,6 +44,10 @@ COPY pyproject.toml README.md ./
 COPY packages/ ./packages/
 COPY apps/ ./apps/
 
+# Copy secret-aware entrypoint (before chown below so appuser owns it)
+COPY apps/api/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 # Create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser && \
     chown -R appuser:appuser /app
@@ -57,6 +61,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Production entrypoint — uvicorn with workers
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["uvicorn", "apps.api.main:create_app", "--factory", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
