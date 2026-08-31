@@ -9,6 +9,7 @@ Verwaltet ClickHouse-Verbindungen und persistiert Marktdaten-Zeitreihen:
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from typing import Any
 
@@ -81,10 +82,15 @@ class ClickHouseEngine:
           - orderbook_snapshots: Orderbook-Snapshots
           - source_metadata: Quellen-Metadaten
         """
+        self._create_database()
         self._create_candles_table()
         self._create_trades_table()
         self._create_orderbook_table()
         self._create_source_metadata_table()
+
+    def _create_database(self) -> None:
+        """Stellt sicher, dass die konfigurierte Datenbank existiert."""
+        self._execute(f"CREATE DATABASE IF NOT EXISTS {self._config.database}")
 
     def _create_candles_table(self) -> None:
         """Erstellt die candles-Tabelle."""
@@ -198,6 +204,13 @@ class ClickHouseEngine:
             """
         )
 
+    def _auth_headers(self) -> dict[str, str]:
+        """Baut Basic-Auth-Header, falls ein Passwort konfiguriert ist."""
+        if not self._config.password:
+            return {}
+        token = base64.b64encode(f"{self._config.user}:{self._config.password}".encode()).decode()
+        return {"Authorization": f"Basic {token}"}
+
     def _execute(self, query: str) -> None:
         """Führt eine Query gegen ClickHouse aus.
 
@@ -207,11 +220,13 @@ class ClickHouseEngine:
         logger = get_logger(__name__)
         logger.info("executing_query", query=query[:200])
 
-        url = f"{self._config.url}/"
+        url = f"{self._config.url}/{self._config.database}/"
+        headers = self._auth_headers()
         try:
             response = httpx.post(
                 url,
                 content=query,
+                headers=headers,
                 timeout=30.0,
                 verify=self._config.verify,
             )
