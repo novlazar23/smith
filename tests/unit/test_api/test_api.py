@@ -140,12 +140,15 @@ class TestCreateApp:
         assert hasattr(app, "routes")
 
     def test_routes_defined(self, fresh_app: Callable[[], Any]) -> None:
-        """App has /analyze, /status, /health routes."""
+        """App has /analyze, /status, /health, /v1/analysis-runs/batch routes."""
         app = fresh_app()
-        route_paths = {route.path for route in app.routes}
-        assert "/analyze" in route_paths
-        assert "/status" in route_paths
-        assert "/health" in route_paths
+        # OpenAPI-Schema ist versionsstabil (im Gegensatz zu app.routes,
+        # das je nach FastAPI-Version _IncludedRouter-Objekte enthalten kann).
+        paths = set(app.openapi()["paths"].keys())
+        assert "/analyze" in paths
+        assert "/status" in paths
+        assert "/health" in paths
+        assert "/v1/analysis-runs/batch" in paths
 
 
 class TestHealthEndpoint:

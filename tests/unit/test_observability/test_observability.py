@@ -37,7 +37,7 @@ class TestStructlogConfig:
     def test_defaults(self) -> None:
         cfg = StructlogConfig()
         assert cfg.level == "INFO"
-        assert cfg.json is True
+        assert cfg.json_format is True
         assert cfg.timestamp_key == "timestamp"
 
 

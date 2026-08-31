@@ -5,13 +5,12 @@ from __future__ import annotations
 from datetime import UTC
 
 import pytest
-
 from packages.governance.state_machine import (
+    STATE_WEIGHTS,
+    VALID_TRANSITIONS,
     AgentRecord,
     AgentState,
     GovernanceStateMachine,
-    STATE_WEIGHTS,
-    VALID_TRANSITIONS,
 )
 
 
@@ -298,7 +297,7 @@ class TestGovernanceStateMachine:
         entry = sm.audit.entries[-1]
         assert entry.agent_id == "agent-1"
         assert entry.new_state == AgentState.SHADOW
-        assert entry.previous_state is None
+        assert entry.previous_state == "N/A"
         assert entry.details.get("reason") == "initial_registration"
         assert entry.details.get("version") == "2.0.0"
 

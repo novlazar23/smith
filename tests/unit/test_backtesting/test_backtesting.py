@@ -6,28 +6,11 @@ from datetime import datetime
 
 import numpy as np
 import pytest
-
 from packages.backtesting.core import BacktestConfig, Candle
-from packages.backtesting.engine import BacktestEngine
 from packages.backtesting.datafeed import MemoryDataFeed
-from packages.backtesting.strategies import MACDCrossover, SignalAction, StrategySignal
-from packages.backtesting.metrics import (
-    BacktestMetrics,
-    calculate_backtest_metrics,
-    calculate_drawdown,
-    calculate_sharpe_ratio,
-    calculate_sortino_ratio,
-)
-from packages.backtesting.validation import (
-    MonteCarloSimulator,
-    ParameterSweeper,
-    PurgedKFold,
-    WalkForwardAnalyzer,
-)
+from packages.backtesting.engine import BacktestEngine
 from packages.backtesting.execution import (
     BacktestOrder,
-    CommissionModel,
-    ExecutionModel,
     FillStatus,
     FixedCommissionModel,
     FixedSlippageModel,
@@ -37,13 +20,24 @@ from packages.backtesting.execution import (
     PercentageCommissionModel,
     PercentageSlippageModel,
     Side,
-    SimulatedFill,
-    SlippageModel,
     StopLimitExecutionModel,
     TieredCommissionModel,
     VolumeBasedSlippageModel,
 )
-
+from packages.backtesting.metrics import (
+    BacktestMetrics,
+    calculate_backtest_metrics,
+    calculate_drawdown,
+    calculate_sharpe_ratio,
+    calculate_sortino_ratio,
+)
+from packages.backtesting.strategies import MACDCrossover, SignalAction, StrategySignal
+from packages.backtesting.validation import (
+    MonteCarloSimulator,
+    ParameterSweeper,
+    PurgedKFold,
+    WalkForwardAnalyzer,
+)
 
 # ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -51,7 +45,7 @@ from packages.backtesting.execution import (
 def _make_candle(ts: datetime, close: float, symbol: str = "BTC/USD") -> Candle:
     """Helper to create a Candle with realistic values."""
     return Candle(
-        timestamp=ts.isoformat(),
+        timestamp=ts,
         symbol=symbol,
         open=close * 0.998,
         high=close * 1.002,
