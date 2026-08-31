@@ -78,6 +78,10 @@ services:
     environment:
       MINIO_ROOT_USER: orchestra
       MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_password
+    ports:
+      # 9000 ist auf dem Host belegt (anderer Container) → 19000
+      - "127.0.0.1:19000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -120,6 +124,8 @@ services:
       - mlflow_artifacts:/artifacts
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
+    ports:
+      - "127.0.0.1:5000:5000"
     networks:
       - backend
 
@@ -130,6 +136,8 @@ services:
     volumes:
       - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -178,6 +186,8 @@ services:
   grafana:
     image: grafana/grafana:11.2.0
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
