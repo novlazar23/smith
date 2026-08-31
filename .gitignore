@@ -7,3 +7,12 @@ __pycache__/
 .qwen/
 .codegraph/
 .omo/run-continuation
+
+# Secrets & Env — nie committen
+.env
+.env.*
+!.env.example
+configs/secrets/
+
+# Python
+.venv/

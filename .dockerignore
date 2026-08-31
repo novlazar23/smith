@@ -1,0 +1,19 @@
+.git
+.github
+.env
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+dist
+build
+*.egg-info
+data
+tests
+
+# Secrets (nie in den Build-Context)
+configs/secrets/
