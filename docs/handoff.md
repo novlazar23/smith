@@ -1,5 +1,104 @@
 # Development Handoff
 
+## Merge chore/consolidate-hardening in main (2026-08-31) ✅
+
+Parallele Entwicklungslinie vom anderen Gerät (5 Commits, Basis `35f3dda`, ohne meinen
+`2abf2c0`) wurde in `main` zusammengeführt. Der Merge kombiniert beide Arbeitsstränge:
+
+- **Übernommen von `chore/consolidate-hardening`:** Bitwarden-Env-Bootstrap
+  (`scripts/bitwarden-env.sh`), authentifiziert verschlüsselter Runtime-State-Handoff
+  (`AES-256-GCM`/Scrypt, `state_handoff_cli` mit `hand-on`/`hand-off`/`renew`/`--push`),
+  opt-in autonomer Shadow/Paper-Start mit idempotentem Champion-Seeding
+  (`POST /evolution/population/seed`), Quant-Router + `--extra quant` im Docker-Image,
+  Bybit-V5-Spot-Ticker-Fix (`category=spot`, `*1Price`-Felder), nginx-`/api/`-Prefix-
+  Stripping, StatCard-Klassen-Interpolation, Backtest-Sizing/Flux-Fixes.
+- **Behalten von `main`:** autonomer Shadow-Loop ohne LLM (CompositeAgentSource,
+  deterministischer SMA-Fallback, simulierter Price-Walk) und die Postgres-Persistenz
+  (Lazy-Init-Dead-Lock + JSONB-Adaption behoben; Agenten/Portfolio/Trades überleben
+  Container-Recreation).
+- **Konfliktlösung:** 6 Konflikte manuell aufgelöst — `.env.example` (beide Blöcke),
+  `Dockerfile` (curl + `--extra quant`), `config.py` (NoDecode-Symbol-Parsing **und**
+  State-Handoff-Settings), `main.py` (Lifespan: `_initialize_database()` **und**
+  Handoff/Renew/Autonomous-Start), `web/nginx.conf` (Kommentar + Prefix-Strip),
+  `web/package-lock.json` (Branch-Version, lockfileVersion 3).
+- **Wichtig zur Branch-Divergenz:** Die Branch basierte auf dem Stand VOR `2abf2c0` und
+  *revertierte* dadurch strukturell meine Loop-Fixes (`agent_source: AgentGenomeStore`,
+  `dict[str, float]` statt `dict[str, Any]`) — im Merge wurden in diesen Dateien meine
+  Versionen behalten, da die Branch sie gegenüber dem gemeinsamen Basis-Commit `35f3dda`
+  nicht geändert hatte. Nur `config.py`/`main.py`/`routes.py`/`crypto_exchange_adapter.py`
+  wurden von beiden Seiten berührt, dort sind jetzt beide Arbeitsstränge vereint.
+
+Verifikation (2026-08-31, Merge-Stand): `make check` → **1399 Tests grün**
+(1382 vor Merge + 17 neue aus der Branch), `ruff check src tests` clean, `mypy src`
+clean (84 source files), `docker compose config --quiet` OK, API-Image gebaut.
+`uv.lock`/`pyproject.toml` um `cryptography>=45,<47` ergänzt (Handoff-Abhängigkeit).
+
+## Bitwarden environment bootstrap (2026-08-30)
+
+- Stored the complete local `.env` in the Bitwarden Secure Note
+  `Smith Autonomous Service Environment`; no secret values or session tokens were added to Git.
+- Added `scripts/bitwarden-env.sh` for guarded atomic `pull`, explicit `pull --force`, and
+  create/update `push`. It accepts `BW_SESSION` or a mode-600, git-ignored `.bw-session`.
+- Fresh-checkout bootstrap restores `.env` from Bitwarden when an unlocked session is available,
+  otherwise retaining the safe `.env.example` fallback.
+- Live Bitwarden verification: secure note create/update plus forced restore produced a byte-identical
+  `.env`; `make check` -> 1393 passed, Ruff clean, Mypy clean (84 source files).
+- Pytest collection now forces autonomous startup and real handoff off before importing API
+  singletons, preventing local `.env` settings from acquiring or rewriting the Git-tracked lease.
+
+## Autonomous encrypted state handoff (2026-08-30)
+
+- Added opt-in autonomous Shadow/Paper startup with idempotent champion seeding. It preserves the
+  fail-closed boundaries: Live Execution remains disabled by configuration and the Kill Switch is
+  never changed automatically.
+- Added an authenticated encrypted runtime bundle (`AES-256-GCM`, Scrypt password derivation),
+  atomic restore/export, generation tracking and exclusive expiring node leases. The password and
+  node identity are supplied only through local environment configuration.
+- Added pre-store startup restore, periodic lease/state renewal and graceful encrypted hand-off on
+  shutdown. The portable bundle is the only runtime-state artifact allowed in Git; plaintext
+  `data/`, `.env`, credentials and corrupt-state quarantines remain excluded.
+- Added `trading_harness.state_handoff_cli` with `hand-on`, `hand-off`, `renew`, and an explicit
+  `--push` workflow for committing/pushing only the encrypted bundle.
+- Verification: `make check` -> 1391 passed, Ruff clean, Mypy clean (84 source files);
+  `docker compose config --quiet` succeeded; `smith-api` and `smith-web` images built successfully.
+- GitHub push is pending because this workstation has neither HTTPS credentials nor an authenticated
+  `gh` session. No runtime bundle was generated because the local handoff password/node ID are not
+  configured; no plaintext state was committed.
+
+## Docker smoke-test hardening (2026-08-26)
+
+- Added the missing `web/package-lock.json`, so the web image's `npm ci` step is
+  reproducible and succeeds.
+- Fixed the `StatCard` color-class interpolation that caused the strict TypeScript
+  production build to fail with unused-variable errors.
+- Replaced the API Compose healthcheck's unavailable `curl` binary with Python's
+  standard-library HTTP client. The full stack now starts successfully; API, Web,
+  PostgreSQL, Redis, and InfluxDB were smoke-tested healthy while Live Execution
+  remained disabled and the kill switch remained active.
+- Fixed the Web reverse proxy to strip the `/api/` prefix before forwarding to
+  FastAPI, and made the dashboard tolerate non-array agent responses. This prevents
+  the React runtime crash that previously left the page black after initial render.
+- Mounted the completed Quant router in the main FastAPI app and installed the
+  locked `quant` extra in the API image. The Web UI now executes Agent creation,
+  Shadow start/stop/run-once and a clearly labelled deterministic Backtest smoke
+  test, reports API errors visibly, and shows live Quant/InfluxDB status. Quick
+  Actions now navigate to their corresponding functional views.
+- Corrected the live/read-only Bybit V5 spot ticker contract: requests now include
+  the mandatory `category=spot` parameter and parse `bid1Price`, `ask1Price`, and
+  `lastPrice`. Live execution remains disabled and the kill switch remains active.
+- Corrected Quant backtest position sizing to express the risk budget in asset
+  quantity: `capital × risk / (entry_price × stop_fraction)`. The previous formula
+  omitted entry price and could report impossible losses and drawdowns above 100%.
+- Backtest persistence now initializes the lazy InfluxDB connection before checking
+  availability. Previously, the first result after an API restart was returned with
+  `stored=false` even while InfluxDB was healthy.
+- Backtest queries now use Flux's valid relative range syntax (`-30d`), so persisted
+  results can be read back instead of degrading to an empty response after a query error.
+- Added the authenticated, idempotent `POST /evolution/population/seed` bootstrap path.
+  It creates four conservative generation-0 champions (technical, market structure,
+  orderflow, statistical) in both the persistent agent registry and the evolution store,
+  closing the previous split that left the shadow loop without active champions.
+
 ## Current state
 
 **Autonomer Shadow-Trading-Loop (2026-08-28): Shadow Trading erzeugt Entscheidungen

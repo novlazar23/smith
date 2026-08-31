@@ -4,7 +4,7 @@ import json
 from functools import lru_cache
 from typing import Annotated, Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import (
     BaseSettings,
     NoDecode,
@@ -66,6 +66,16 @@ class Settings(BaseSettings):
                     return stripped
             return [s.strip() for s in stripped.split(",") if s.strip()]
         return value
+
+    # Autonomous shadow runtime + encrypted cross-system state handoff.
+    autonomous_shadow_enabled: bool = False
+    state_handoff_enabled: bool = False
+    state_handoff_password: SecretStr = SecretStr("")
+    state_node_id: str = ""
+    state_data_dir: str = "data"
+    state_bundle_path: str = "handoff/runtime-state.enc.json"
+    state_handoff_lease_seconds: int = 300
+    state_handoff_sync_seconds: int = 60
 
     # Quant Platform — InfluxDB (Phase 1)
     influxdb_url: str = "http://localhost:8086"

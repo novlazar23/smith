@@ -82,6 +82,20 @@ class TestBacktestEngine:
         # At least one trade should have exited
         assert result.total_trades >= 0
 
+    def test_position_size_limits_stop_loss_to_risk_budget(self):
+        """A 2% stop on a $10k account risks about 2%, not the full notional."""
+        prices = [100.0, 100.0, 98.0]
+        result = BacktestEngine(
+            initial_capital=10_000,
+            risk_per_trade=0.02,
+            stop_loss_pct=0.02,
+        ).run(_make_candles(prices), _always_long)
+
+        assert result.total_trades == 1
+        assert result.total_pnl == pytest.approx(-200.0)
+        assert result.total_pnl_pct == pytest.approx(-0.02)
+        assert result.max_drawdown == pytest.approx(0.02)
+
     def test_take_profit_triggers(self):
         # Price rises 5% → should trigger 4% take profit
         prices = [100.0] * 5 + [105.0] + [100.0] * 10

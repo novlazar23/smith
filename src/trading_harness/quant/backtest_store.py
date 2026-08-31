@@ -81,7 +81,7 @@ BACKTEST_INT_FIELDS: frozenset[str] = frozenset(
 )
 
 # Rückblickfenster für get_results ohne Startzeitpunkt (Flux-Dauer, keine Magie).
-_DEFAULT_LOOKBACK: str = "now() - 30d"
+_DEFAULT_LOOKBACK: str = "-30d"
 
 
 def _is_number(value: object) -> TypeGuard[int | float]:
@@ -384,7 +384,12 @@ class BacktestStore:
     ) -> BacktestStoreResult:
         """Schreibt das Lauf-Ergebnis als einen Punkt (falls Store + Trades vorliegen)."""
         stored = False
-        if self._store.is_available and result.total_trades > 0:
+        if result.total_trades > 0:
+            # InfluxDBStore verbindet sich lazy. Ohne den Health-Check wäre
+            # ``is_available`` nach jedem Prozessstart zunächst False und das
+            # erste Backtest-Ergebnis würde stillschweigend verworfen.
+            await self._store.health_check()
+        if result.total_trades > 0 and self._store.is_available:
             timestamp = (epoch if epoch is not None else int(time.time())) * _NANOSECONDS_PER_SECOND
             await self._store.write_points(
                 measurement=BACKTESTS_MEASUREMENT,

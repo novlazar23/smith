@@ -23,7 +23,13 @@ für den jeweiligen State ohne Umbindung.
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+# Never acquire real cross-system leases or start background loops during test collection.
+os.environ["STATE_HANDOFF_ENABLED"] = "false"
+os.environ["AUTONOMOUS_SHADOW_ENABLED"] = "false"
 
 from trading_harness.api import routes
 

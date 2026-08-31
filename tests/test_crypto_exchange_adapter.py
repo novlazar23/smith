@@ -868,6 +868,38 @@ class TestBybitResponseParsing:
         assert ticker["ask"] == 50001.0
         adapter.close()
 
+    def test_live_ticker_uses_spot_category_and_v5_fields(self):
+        """Bybit V5 ticker requires category=spot and returns *1Price fields."""
+        adapter = BybitExchangeAdapter(
+            api_key="test-key", api_secret="test-secret", simulated=False
+        )
+        adapter._make_signed_request = MagicMock(
+            return_value={
+                "retCode": 0,
+                "retMsg": "OK",
+                "result": {
+                    "category": "spot",
+                    "list": [
+                        {
+                            "symbol": "BTCUSDT",
+                            "bid1Price": "50000.5",
+                            "ask1Price": "50001.5",
+                            "lastPrice": "50001.0",
+                        }
+                    ],
+                },
+            }
+        )
+
+        ticker = adapter.get_ticker("BTCUSDT")
+
+        assert adapter._make_signed_request.call_args.kwargs["params"] == {
+            "category": "spot",
+            "symbol": "BTCUSDT",
+        }
+        assert ticker == {"bid": 50000.5, "ask": 50001.5, "last": 50001.0}
+        adapter.close()
+
 
 class TestBitgetResponseParsing:
     """Bitget response parsing tests."""

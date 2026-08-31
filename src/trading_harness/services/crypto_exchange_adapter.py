@@ -59,13 +59,13 @@ class BybitOrderResponse(BaseModel):
 
 class BybitTickerResponse(BaseModel):
     """Bybit V5 ticker response (category='spot')."""
-    retCode: str = ""
+    retCode: str | int = ""
     retMsg: str = ""
     result: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def success(self) -> bool:
-        return self.retCode == "0"
+        return str(self.retCode) == "0"
 
     def get_price(self, symbol: str) -> dict[str, float]:
         """Extrahiert bid/ask/last aus dem Bybit-Spot-Ticker."""
@@ -480,6 +480,22 @@ class BaseCryptoExchangeAdapter(ExchangeAdapter, ABC):
                 "result": {"walletBalance": [{"coin": "USDT", "totalBalance": "100000"}]},
             }
         if "ticker" in url or "tickers" in url:
+            if "/v5/market/tickers" in url:
+                return {
+                    "retCode": 0,
+                    "retMsg": "OK",
+                    "result": {
+                        "category": "spot",
+                        "list": [
+                            {
+                                "symbol": params.get("symbol", "BTCUSDT"),
+                                "bid1Price": "50000.0",
+                                "ask1Price": "50001.0",
+                                "lastPrice": "50000.5",
+                            }
+                        ],
+                    },
+                }
             if "/api/v4/ticker" in url:
                 return {
                     "code": "0",
@@ -675,6 +691,15 @@ class BybitExchangeAdapter(BaseCryptoExchangeAdapter):
 
     def _ticker_url(self, symbol: str) -> str:
         return f"{self.API_BASE}/v5/market/tickers"
+
+    def get_ticker(self, symbol: str) -> dict[str, float]:
+        """Read a Bybit V5 spot ticker using its required request/response shape."""
+        resp = self._make_signed_request(
+            "GET",
+            self._ticker_url(symbol),
+            params={"category": "spot", "symbol": symbol},
+        )
+        return BybitTickerResponse.model_validate(resp).get_price(symbol)
 
 
 class BitgetExchangeAdapter(BaseCryptoExchangeAdapter):

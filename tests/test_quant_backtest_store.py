@@ -53,6 +53,7 @@ def make_candles(count: int = CANDLE_COUNT, start_price: float = 100.0, step: fl
 def make_store(available: bool = True) -> MagicMock:
     store = MagicMock()
     store.is_available = available
+    store.health_check = AsyncMock(return_value=available)
     store._bucket = "quant_test"
     store.write_points = AsyncMock()
     store.query = AsyncMock(return_value=[])
@@ -173,6 +174,28 @@ async def test_run_and_store_unavailable_store_does_not_write() -> None:
     store.write_points.assert_not_awaited()
 
 
+async def test_run_and_store_connects_lazy_store_before_availability_check() -> None:
+    """Ein frischer Lazy-Store wird verbunden, bevor Persistenz verworfen wird."""
+    backtest_store, store = make_backtest_store(available=False)
+
+    async def connect_store() -> bool:
+        store.is_available = True
+        return True
+
+    store.health_check.side_effect = connect_store
+    result = BacktestEngine().run(
+        make_candles(), sma_strategy(), symbol=SYMBOL, timeframe=TIMEFRAME
+    )
+
+    store_result = await backtest_store.run_and_store(
+        SYMBOL, TIMEFRAME, result, exchange=EXCHANGE
+    )
+
+    assert store_result.stored is True
+    store.health_check.assert_awaited_once()
+    store.write_points.assert_awaited_once()
+
+
 async def test_run_and_store_precomputed_result_contract() -> None:
     """P8-3-Kontrakt: (symbol, timeframe, BacktestResult, exchange=…) → nur persistieren."""
     backtest_store, store = make_backtest_store()
@@ -255,7 +278,7 @@ async def test_get_results_defaults_to_lookback_without_start() -> None:
     await backtest_store.get_results(SYMBOL, TIMEFRAME)
 
     flux = store.query.await_args.args[0]
-    assert "now() - 30d" in flux
+    assert "range(start: -30d)" in flux
     assert "stop:" not in flux
 
 

@@ -83,6 +83,76 @@ evolution_service = EvolutionService(
     factory=evolution_factory,
 )
 
+INITIAL_CHAMPION_POPULATION: tuple[dict[str, Any], ...] = (
+    {
+        "id": "champion-technical-v1",
+        "category": "technical",
+        "indicators": ["ema", "rsi", "macd"],
+        "timeframes": ["5m", "15m", "1h"],
+        "feature_preferences": ["trend_strength", "momentum"],
+    },
+    {
+        "id": "champion-market-structure-v1",
+        "category": "market_structure",
+        "indicators": ["swing_high_low", "support_resistance", "structure_break"],
+        "timeframes": ["15m", "1h", "4h"],
+        "feature_preferences": ["trend_strength", "volatility_regime"],
+    },
+    {
+        "id": "champion-orderflow-v1",
+        "category": "orderflow",
+        "indicators": ["vwap", "volume_profile", "order_book_imbalance"],
+        "timeframes": ["1m", "5m", "15m"],
+        "feature_preferences": ["liquidity_score", "momentum"],
+    },
+    {
+        "id": "champion-statistical-v1",
+        "category": "statistical",
+        "indicators": ["z_score", "volatility", "correlation"],
+        "timeframes": ["5m", "15m", "1h"],
+        "feature_preferences": ["mean_reversion", "volatility_regime"],
+        "statistical_methods": ["z_score", "rolling_regression"],
+    },
+)
+
+
+@router.post(
+    "/evolution/population/seed",
+    dependencies=[Depends(require_trade_key)],
+)
+def seed_champion_population() -> dict[str, Any]:
+    """Legt eine kleine, deterministische und idempotente Generation-0-Population an."""
+    created = 0
+    agents: list[AgentGenome] = []
+    for template in INITIAL_CHAMPION_POPULATION:
+        agent_id = str(template["id"])
+        agent = agent_store.get(agent_id)
+        if agent is None:
+            agent = AgentGenome(
+                **template,
+                generation=0,
+                status=AgentStatus.CHAMPION,
+                prompt_version="1",
+                reasoning_style="systematic",
+                weighting_strategy="evidence_weighted",
+                confidence_calibration="conservative",
+                risk_attitude="conservative",
+                context_window_strategy="multi_timeframe_bounded",
+                output_schema="signal-v1",
+                model_profile=settings.llm_model_main,
+                temperature=0.2,
+            )
+            agent_store.add(agent)
+            created += 1
+        if evolution_genome_store.get(agent_id) is None:
+            evolution_genome_store.add(agent)
+        agents.append(agent)
+    return {
+        "created": created,
+        "existing": len(agents) - created,
+        "champions": [agent.model_dump(mode="json") for agent in agents],
+    }
+
 
 @router.get("/health")
 def health() -> dict:
