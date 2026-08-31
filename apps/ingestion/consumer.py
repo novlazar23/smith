@@ -7,11 +7,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 try:
-    from redpanda import RedpandaClient
+    from confluent_kafka import Consumer as _KafkaConsumer
 
     REDPANDA_AVAILABLE = True
 except ImportError:
-    RedpandaClient = None
+    _KafkaConsumer = None
     REDPANDA_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -138,39 +138,71 @@ class DataIngestionService:
         handler: Callable[[dict[str, Any]], None],
         max_messages: int | None = None,
     ) -> None:
-        """Consumes messages from Redpanda and calls handler for each.
+        """Verbraucht Messages vom Topic und ruft handler für jedes Event auf.
 
-        If REDPANDA_AVAILABLE the real client is used; otherwise a warning
-        is logged and no messages are processed (mock/test path).
+        Jede gültige Message wird als Candle verarbeitet (Fallback: Tick);
+        unparsierbare oder nicht unterstützte Messages werden geloggt und
+        übersprungen. Mit ``max_messages`` beendet sich der Loop nach N
+        erfolgreich verarbeiteten Events.
         """
-        if not REDPANDA_AVAILABLE:
+        if not REDPANDA_AVAILABLE or _KafkaConsumer is None:
             logger.warning(
-                "Redpanda client not available — skipping live consume. "
-                "Use process_batch for offline processing."
+                "Kafka-Client nicht verfügbar — kein Live-Consume möglich. "
+                "Nutze process_batch für die Offline-Verarbeitung."
             )
             return
 
-        client = RedpandaClient(
-            bootstrap_servers=self.bootstrap_servers,
-            auto_offset_reset="earliest",
+        servers = self.bootstrap_servers or ["redpanda:9092"]
+        bootstrap = servers if isinstance(servers, str) else ",".join(servers)
+        consumer = _KafkaConsumer(
+            {
+                "bootstrap.servers": bootstrap,
+                "group.id": "ingestion-consumer",
+                "auto.offset.reset": "earliest",
+                "enable.auto.commit": True,
+            }
         )
+        consumer.subscribe([self.topic])
 
-        for idx, message in enumerate(client.consume(self.topic)):
-            raw: dict[str, Any] = json.loads(message.value) if isinstance(message.value, bytes) else message.value
-            try:
-                processed = self.processor.process_candle(raw)
-                handler(processed)
-            except ValueError:
+        processed = 0
+        try:
+            while max_messages is None or processed < max_messages:
+                msg = consumer.poll(1.0)
+                if msg is None:
+                    continue
+                if msg.error() is not None:
+                    logger.warning("Kafka-Consumer-Fehler: %s", msg.error())
+                    continue
+
+                raw_value = msg.value()
+                if raw_value is None:
+                    logger.warning("Message ohne Payload übersprungen.")
+                    continue
                 try:
-                    processed = self.processor.process_tick(raw)
-                    handler(processed)
-                except ValueError:
-                    logger.warning("Skipping unparseable event: %s", raw.get("symbol", "unknown"))
-            else:
-                self._processed_events.append(processed)
+                    raw = json.loads(raw_value)
+                except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+                    logger.warning("Unparsierbare Message übersprungen: %s", exc)
+                    continue
+                if not isinstance(raw, dict):
+                    logger.warning("Nicht-Dict-Payload übersprungen.")
+                    continue
 
-            if max_messages is not None and idx + 1 >= max_messages:
-                break
+                try:
+                    event = self.processor.process_candle(raw)
+                except ValueError:
+                    try:
+                        event = self.processor.process_tick(raw)
+                    except ValueError:
+                        logger.warning(
+                            "Nicht unterstütztes Event übersprungen: %s",
+                            raw.get("symbol", "unknown"),
+                        )
+                        continue
+                handler(event)
+                self._processed_events.append(event)
+                processed += 1
+        finally:
+            consumer.close()
 
     def process_batch(self, raw_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Processes a batch of raw events.
