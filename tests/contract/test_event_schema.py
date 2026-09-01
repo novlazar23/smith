@@ -10,27 +10,9 @@ Verifies:
 
 from __future__ import annotations
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 import pytest
-
-from packages.schemas.market_event import (
-    Candle,
-    EventType,
-    NewsEvent,
-    OrderBookSnapshot,
-    PriceLevel,
-    Trade,
-)
-from packages.schemas import market_event as market_event_pkg
-from packages.streaming.schemas import (
-    Candle as StreamingCandle,
-    MarketEvent as StreamingMarketEvent,
-    NewsEvent as StreamingNewsEvent,
-    OrderBookSnapshot as StreamingOrderBookSnapshot,
-    SourceMetadata,
-    Trade as StreamingTrade,
-)
 from packages.domain.market_data import (
     CandleAggregation,
     FullOrderBook,
@@ -43,7 +25,33 @@ from packages.domain.market_data import (
     VolumeProfile,
 )
 from packages.domain.market_data.derivatives import LiquidationSide
-
+from packages.schemas import market_event as market_event_pkg
+from packages.schemas.market_event import (
+    Candle,
+    EventType,
+    NewsEvent,
+    OrderBookSnapshot,
+    PriceLevel,
+    Trade,
+)
+from packages.streaming.schemas import (
+    Candle as StreamingCandle,
+)
+from packages.streaming.schemas import (
+    MarketEvent as StreamingMarketEvent,
+)
+from packages.streaming.schemas import (
+    NewsEvent as StreamingNewsEvent,
+)
+from packages.streaming.schemas import (
+    OrderBookSnapshot as StreamingOrderBookSnapshot,
+)
+from packages.streaming.schemas import (
+    SourceMetadata,
+)
+from packages.streaming.schemas import (
+    Trade as StreamingTrade,
+)
 
 # ── EventType enum contract ─────────────────────────────────────────────
 
@@ -314,9 +322,15 @@ class TestMarketEventUnion:
         """All components of the MarketEvent union should be importable."""
         from packages.schemas.market_event import (
             Candle as ME_Candle,
-            OrderBookSnapshot as ME_OB,
-            Trade as ME_Trade,
+        )
+        from packages.schemas.market_event import (
             NewsEvent as ME_News,
+        )
+        from packages.schemas.market_event import (
+            OrderBookSnapshot as ME_OB,
+        )
+        from packages.schemas.market_event import (
+            Trade as ME_Trade,
         )
         # Verify classes are the correct types
         assert ME_Candle.__bases__[0].__name__ == "BaseModel"

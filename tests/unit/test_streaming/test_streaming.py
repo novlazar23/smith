@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-
 from packages.streaming.base import (
     CompressionType,
-    Consumer,
-    DeadLetterHandler,
     Envelope,
     EventPartitionKey,
-    Producer,
     StreamConfig,
 )
 from packages.streaming.redpanda import (
@@ -30,8 +26,7 @@ from packages.streaming.schemas import (
     SourceMetadata,
     Trade,
 )
-from packages.streaming.topics import TopicConfig, TopicRegistry
-
+from packages.streaming.topics import TopicRegistry
 
 # ── StreamConfig ────────────────────────────────────────────────────
 
@@ -98,44 +93,44 @@ class TestEnvelope:
 
 class TestSourceMetadata:
     def test_valid_metadata(self) -> None:
-        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ts = datetime(2024, 1, 1, tzinfo=UTC)
         sm = SourceMetadata(source="binance", venue="binance", event_time=ts)
         assert sm.source == "binance"
         assert sm.quality == 1.0
         assert sm.revision == 1
 
     def test_quality_validation_high(self) -> None:
-        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ts = datetime(2024, 1, 1, tzinfo=UTC)
         sm = SourceMetadata(source="test", venue="test", event_time=ts, quality=0.95)
         assert sm.quality == 0.95
 
     def test_quality_validation_zero(self) -> None:
-        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ts = datetime(2024, 1, 1, tzinfo=UTC)
         sm = SourceMetadata(source="test", venue="test", event_time=ts, quality=0.0)
         assert sm.quality == 0.0
 
     def test_quality_out_of_range_high(self) -> None:
-        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ts = datetime(2024, 1, 1, tzinfo=UTC)
         with pytest.raises(ValueError, match="quality must be in"):
             SourceMetadata(source="test", venue="test", event_time=ts, quality=1.1)
 
     def test_quality_out_of_range_low(self) -> None:
-        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ts = datetime(2024, 1, 1, tzinfo=UTC)
         with pytest.raises(ValueError, match="quality must be in"):
             SourceMetadata(source="test", venue="test", event_time=ts, quality=-0.1)
 
     def test_negative_sequence(self) -> None:
-        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ts = datetime(2024, 1, 1, tzinfo=UTC)
         with pytest.raises(ValueError, match="sequence must be"):
             SourceMetadata(source="test", venue="test", event_time=ts, sequence=-1)
 
     def test_revision_less_than_one(self) -> None:
-        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ts = datetime(2024, 1, 1, tzinfo=UTC)
         with pytest.raises(ValueError, match="revision must be"):
             SourceMetadata(source="test", venue="test", event_time=ts, revision=0)
 
     def test_to_dict(self) -> None:
-        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ts = datetime(2024, 1, 1, tzinfo=UTC)
         sm = SourceMetadata(source="binance", venue="binance", event_time=ts)
         d = sm.to_dict()
         assert d["source"] == "binance"
@@ -163,8 +158,8 @@ class TestSourceMetadata:
 
 class TestCandle:
     def test_valid_candle(self) -> None:
-        open_t = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        close_t = datetime(2024, 1, 2, tzinfo=timezone.utc)
+        open_t = datetime(2024, 1, 1, tzinfo=UTC)
+        close_t = datetime(2024, 1, 2, tzinfo=UTC)
         c = Candle(
             instrument="BTC", venue="binance", timeframe="15m",
             open_time=open_t, close_time=close_t,
@@ -175,32 +170,32 @@ class TestCandle:
         assert c.low == 49000
 
     def test_high_below_low(self) -> None:
-        open_t = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        close_t = datetime(2024, 1, 2, tzinfo=timezone.utc)
+        open_t = datetime(2024, 1, 1, tzinfo=UTC)
+        close_t = datetime(2024, 1, 2, tzinfo=UTC)
         with pytest.raises(ValueError, match="high.*<.*low"):
             Candle(instrument="BTC", venue="binance", timeframe="15m",
                    open_time=open_t, close_time=close_t,
                    open=50000, high=49000, low=51000, close=50000, volume=100.0)
 
     def test_negative_price(self) -> None:
-        open_t = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        close_t = datetime(2024, 1, 2, tzinfo=timezone.utc)
+        open_t = datetime(2024, 1, 1, tzinfo=UTC)
+        close_t = datetime(2024, 1, 2, tzinfo=UTC)
         with pytest.raises(ValueError, match="OHLC values must be"):
             Candle(instrument="BTC", venue="binance", timeframe="15m",
                    open_time=open_t, close_time=close_t,
                    open=-100, high=51000, low=49000, close=50000, volume=100.0)
 
     def test_negative_volume(self) -> None:
-        open_t = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        close_t = datetime(2024, 1, 2, tzinfo=timezone.utc)
+        open_t = datetime(2024, 1, 1, tzinfo=UTC)
+        close_t = datetime(2024, 1, 2, tzinfo=UTC)
         with pytest.raises(ValueError, match="volume must be"):
             Candle(instrument="BTC", venue="binance", timeframe="15m",
                    open_time=open_t, close_time=close_t,
                    open=50000, high=51000, low=49000, close=50000, volume=-1.0)
 
     def test_to_dict(self) -> None:
-        open_t = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        close_t = datetime(2024, 1, 2, tzinfo=timezone.utc)
+        open_t = datetime(2024, 1, 1, tzinfo=UTC)
+        close_t = datetime(2024, 1, 2, tzinfo=UTC)
         c = Candle(instrument="BTC", venue="binance", timeframe="15m",
                    open_time=open_t, close_time=close_t,
                    open=50000, high=51000, low=49000, close=50000, volume=100.0)
@@ -283,8 +278,8 @@ class TestOrderBookSnapshot:
 
 class TestNewsEvent:
     def test_valid_news(self) -> None:
-        pub = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        rec = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        pub = datetime(2024, 1, 1, tzinfo=UTC)
+        rec = datetime(2024, 1, 1, tzinfo=UTC)
         ne = NewsEvent(
             news_id="n1", event_identity="e1", title="Test",
             body="Body text", source_name="Bloomberg",
@@ -303,8 +298,8 @@ class TestNewsEvent:
             )
 
     def test_to_dict(self) -> None:
-        pub = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        rec = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        pub = datetime(2024, 1, 1, tzinfo=UTC)
+        rec = datetime(2024, 1, 1, tzinfo=UTC)
         ne = NewsEvent(
             news_id="n1", event_identity="e1", title="Test", body="",
             source_name="test", source_type="web", url_hash="x",
@@ -320,8 +315,8 @@ class TestNewsEvent:
 
 class TestMarketEvent:
     def test_candle_event(self) -> None:
-        open_t = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        close_t = datetime(2024, 1, 2, tzinfo=timezone.utc)
+        open_t = datetime(2024, 1, 1, tzinfo=UTC)
+        close_t = datetime(2024, 1, 2, tzinfo=UTC)
         sm = SourceMetadata(source="binance", venue="binance", event_time=open_t)
         candle = Candle(
             instrument="BTC", venue="binance", timeframe="15m",
@@ -338,7 +333,7 @@ class TestMarketEvent:
         assert "metadata" in d
 
     def test_from_dict(self) -> None:
-        open_t = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        open_t = datetime(2024, 1, 1, tzinfo=UTC)
         data = {
             "event_id": "e1", "event_type": "candle", "instrument": "BTC",
             "metadata": {
@@ -356,8 +351,8 @@ class TestMarketEvent:
 
 class TestEventSerializer:
     def test_serialize_candle(self) -> None:
-        open_t = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        close_t = datetime(2024, 1, 2, tzinfo=timezone.utc)
+        open_t = datetime(2024, 1, 1, tzinfo=UTC)
+        close_t = datetime(2024, 1, 2, tzinfo=UTC)
         c = Candle(instrument="BTC", venue="binance", timeframe="15m",
                    open_time=open_t, close_time=close_t,
                    open=50000, high=51000, low=49000, close=50000, volume=100.0)
@@ -370,8 +365,8 @@ class TestEventSerializer:
         assert d == {"key": "value"}
 
     def test_deserialize_known_type(self) -> None:
-        open_t = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        close_t = datetime(2024, 1, 2, tzinfo=timezone.utc)
+        open_t = datetime(2024, 1, 1, tzinfo=UTC)
+        close_t = datetime(2024, 1, 2, tzinfo=UTC)
         data = {
             "instrument": "BTC", "venue": "binance", "timeframe": "15m",
             "open_time": open_t.isoformat(), "close_time": close_t.isoformat(),
@@ -503,7 +498,7 @@ class TestRedpandaConsumer:
     @pytest.mark.asyncio
     async def test_seek_to_timestamp(self) -> None:
         consumer = RedpandaConsumer()
-        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        ts = datetime(2024, 1, 1, tzinfo=UTC)
         result = await consumer.seek_to_timestamp("trading-events", ts)
         assert result is True
 

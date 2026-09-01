@@ -11,11 +11,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import pytest
 import numpy as np
-
-from packages.domain.market_data import CandleAggregation, MultiTimeframeAggregator
-
+import pytest
+from packages.domain.market_data import MultiTimeframeAggregator
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -11,10 +11,9 @@ Verifies:
 
 from __future__ import annotations
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 import pytest
-
 from packages.domain.news import (
     Deduplicator,
     NewsEvent,
@@ -25,7 +24,6 @@ from packages.domain.news import (
     score_source,
 )
 from packages.schemas.market_event import NewsEvent as SchemaNewsEvent
-
 
 # ── Domain NewsEvent contract ───────────────────────────────────────────
 

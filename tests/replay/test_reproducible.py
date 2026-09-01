@@ -7,16 +7,12 @@ produces deterministic, identical results across runs.
 from __future__ import annotations
 
 import json
-import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from apps.ingestion.replay_engine import ReplayConfig, ReplayEngine
-from packages.domain.market_data import CandleAggregation, MultiTimeframeAggregator
-
+from packages.domain.market_data import MultiTimeframeAggregator
 
 # ---------------------------------------------------------------------------
 # Helpers

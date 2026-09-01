@@ -7,11 +7,9 @@ consistent, and direction flags match the sign of the contribution.
 
 from __future__ import annotations
 
-from hypothesis import assume, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
-
 from packages.validation import AblationResult
-
 
 # ---------------------------------------------------------------------------
 # Helper strategies

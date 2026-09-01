@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from packages.uncertainty.confidence import (
     BayesianConfidence,
     bootstrap_confidence_interval,

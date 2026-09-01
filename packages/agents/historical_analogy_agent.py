@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import datetime
 import uuid
-from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray

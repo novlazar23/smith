@@ -10,17 +10,12 @@ References:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
-
-from packages.streaming.schemas import (
-    SourceMetadata,
-)
 
 from .base import (
     ConnectionConfig,

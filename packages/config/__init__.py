@@ -9,9 +9,9 @@ from __future__ import annotations
 from .app_config import AppConfig
 from .base import ConfigLoader
 from .database import ClickHouseConfig, DatabaseConfig, PostgreSQLConfig, RedisConfig
+from .instrument_pool import InstrumentPool
 from .observability import ObservabilityConfig
 from .streaming import RedpandaConfig, StreamingConfig
-from .instrument_pool import InstrumentPool
 from .trading import RiskConfig, TradingConfig
 
 __all__ = [

@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 from apps.evaluation_worker.worker import (
     AgentEvaluator,
-    BacktestEvaluator,
     ResolutionEngine,
     ScoringEngine,
 )

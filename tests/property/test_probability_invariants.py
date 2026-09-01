@@ -9,11 +9,9 @@ from __future__ import annotations
 
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-
-from packages.consensus import ConsensusResult, ConsensusDecision, VoteDirection
+from packages.consensus import ConsensusDecision, ConsensusResult, VoteDirection
 from packages.consensus.weighted import WeightedConsensusEngine
-from packages.schemas.agent_report import AgentReport, EvidenceReference, AgentStatus
-
+from packages.schemas.agent_report import AgentReport, AgentStatus, EvidenceReference
 
 # ---------------------------------------------------------------------------
 # Helper strategies
@@ -53,7 +51,7 @@ def _evidence_reference() -> st.SearchStrategy[EvidenceReference]:
 
 def _valid_report() -> st.SearchStrategy[AgentReport]:
     """Generate AgentReport instances with valid probability dicts and evidence."""
-    from datetime import datetime, UTC
+    from datetime import UTC, datetime
 
     prob_strategy = _valid_probabilities()
     evidence_strategy = st.lists(_evidence_reference(), min_size=1, max_size=3)

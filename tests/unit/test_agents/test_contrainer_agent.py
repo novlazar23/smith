@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
-
-from datetime import datetime, timezone
-
 from packages.agents.contrainer.agent import ContrarianAgent
 from packages.agents.contrainer.models import (
     ContrarianConfig,
@@ -32,7 +31,7 @@ def _make_report(
         agent_version="0.1.0",
         instrument="BTC/USDT",
         horizon="1h",
-        as_of=datetime.now(timezone.utc),
+        as_of=datetime.now(UTC),
         hypothesis="Test hypothesis",
         probabilities=probabilities or {"up": 0.6, "down": 0.2, "range": 0.2},
         evidence=[

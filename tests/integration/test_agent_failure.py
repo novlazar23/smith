@@ -11,17 +11,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-import numpy as np
 import pytest
-
-from packages.agents.indicator_agent import IndicatorAgent
 from packages.consensus import (
     ConsensusDecision,
-    ConsensusResult,
-    WeightConfig,
     WeightedConsensusEngine,
 )
-from packages.paper.base import PaperAccount, TradeDirection
+from packages.paper.base import TradeDirection
 from packages.paper.executor import PaperExecutor as Executor
 from packages.schemas.agent_report import (
     AgentReport,
@@ -34,7 +29,6 @@ from packages.strategy.models import (
     StrategyDirection,
     StrategyProposal,
 )
-
 
 # ── helpers ──────────────────────────────────────────────────────────
 

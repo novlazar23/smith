@@ -7,13 +7,12 @@ and funding rates fall within expected bounds.
 
 from __future__ import annotations
 
-from datetime import datetime, UTC, timedelta
+from datetime import UTC, datetime, timedelta
+
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-
 from packages.domain.market_data import FundingRate, Liquidation, OpenInterest
 from packages.domain.market_data.derivatives import LiquidationSide
-
 
 # ---------------------------------------------------------------------------
 # Helper strategies

@@ -8,24 +8,20 @@ generation, portfolio sizing, risk checks, and paper-trading execution.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
-
 from packages.consensus import (
     CalibratedConsensusAggregator,
     ConsensusDecision,
     ConsensusResult,
-    VoteDirection,
     WeightConfig,
 )
 from packages.domain.market_data import CandleAggregation
 from packages.paper import Fill
 from packages.paper.base import (
     OrderType,
-    PaperAccount,
-    PaperPosition,
     TradeDirection,
 )
 from packages.paper.executor import PaperExecutor
@@ -35,7 +31,7 @@ from packages.risk.base import (
     RiskGateType,
 )
 from packages.risk.drawdown import DrawdownMonitor
-from packages.risk.position_sizing import KellyPositionSizer, ATRPositionSizer
+from packages.risk.position_sizing import ATRPositionSizer, KellyPositionSizer
 from packages.schemas.agent_report import (
     AgentReport,
     AgentStatus,
@@ -47,7 +43,6 @@ from packages.strategy.models import (
     StrategyDirection,
     StrategyProposal,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures — shared across test cases

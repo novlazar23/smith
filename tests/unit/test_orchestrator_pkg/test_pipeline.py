@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from packages.consensus import ConsensusDecision
 from packages.orchestrator.pipeline import (
     OrchestratorPipeline,

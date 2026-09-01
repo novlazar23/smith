@@ -42,7 +42,7 @@ class TestMarketDataValidator:
         base.update(overrides)
         return base
 
-    def _make_orderbook(self, **overrides: Any) -> dict:  # noqa: ANN401
+    def _make_orderbook(self, **overrides: Any) -> dict:
         base = {
             "type": "orderbook_snapshot",
             "instrument": "BTC/USDT",

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
-from packages.consensus import ConsensusDecision, ConsensusResult
+from packages.consensus import ConsensusDecision
 from packages.orchestrator.graph import (
     OrchestratorGraph,
     PipelineStage,
@@ -17,7 +19,6 @@ from packages.orchestrator.second_round import (
     run_second_round,
 )
 from packages.schemas.agent_report import AgentReport, AgentStatus, EvidenceReference
-from datetime import UTC, datetime
 
 
 def _make_report(
@@ -133,7 +134,6 @@ class TestRunSecondRound:
 
     def test_raises_no_seal_records(self) -> None:
         from tests.unit.test_orchestrator_pkg.conftest import MockAgent
-        from packages.orchestrator.seal import seal_first_round
         state = create_initial_state("r1", "BTC/USD")
         graph = OrchestratorGraph()
         graph.transition(PipelineStage.REQUEST)
@@ -155,8 +155,8 @@ class TestRunSecondRound:
             run_second_round(state, graph, [], {})
 
     def test_stores_second_round_reports(self) -> None:
-        from tests.unit.test_orchestrator_pkg.conftest import MockAgent
         from packages.orchestrator.seal import seal_first_round
+        from tests.unit.test_orchestrator_pkg.conftest import MockAgent
         state = create_initial_state("r1", "BTC/USD")
         graph = OrchestratorGraph()
         graph.transition(PipelineStage.REQUEST)
@@ -172,8 +172,8 @@ class TestRunSecondRound:
 
     def test_reports_have_context(self) -> None:
         """Second-Round-Reports sollten mit analyze_with_context erstellt werden."""
-        from tests.unit.test_orchestrator_pkg.conftest import MockAgent
         from packages.orchestrator.seal import seal_first_round
+        from tests.unit.test_orchestrator_pkg.conftest import MockAgent
         state = create_initial_state("r1", "BTC/USD")
         graph = OrchestratorGraph()
         graph.transition(PipelineStage.REQUEST)
@@ -186,8 +186,8 @@ class TestRunSecondRound:
         assert reports[0].report_id == "a1-r2"
 
     def test_round_summary_stored(self) -> None:
-        from tests.unit.test_orchestrator_pkg.conftest import MockAgent
         from packages.orchestrator.seal import seal_first_round
+        from tests.unit.test_orchestrator_pkg.conftest import MockAgent
         state = create_initial_state("r1", "BTC/USD")
         graph = OrchestratorGraph()
         graph.transition(PipelineStage.REQUEST)
@@ -200,8 +200,8 @@ class TestRunSecondRound:
         assert state.round_summary["agent_count"] == 1
 
     def test_audit_event_created(self) -> None:
-        from tests.unit.test_orchestrator_pkg.conftest import MockAgent
         from packages.orchestrator.seal import seal_first_round
+        from tests.unit.test_orchestrator_pkg.conftest import MockAgent
         state = create_initial_state("r1", "BTC/USD")
         graph = OrchestratorGraph()
         graph.transition(PipelineStage.REQUEST)

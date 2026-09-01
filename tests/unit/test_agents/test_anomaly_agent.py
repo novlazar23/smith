@@ -10,7 +10,6 @@ from packages.agents import AgentType, AnomalyAgent
 from packages.agents.base import AgentConfig
 from packages.schemas.agent_report import AgentReport
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 @pytest.fixture

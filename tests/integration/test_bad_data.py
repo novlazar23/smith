@@ -13,17 +13,14 @@ from datetime import datetime
 
 import numpy as np
 import pytest
-
 from packages.agents.indicator_agent import IndicatorAgent
 from packages.consensus import (
     ConsensusDecision,
-    WeightConfig,
     WeightedConsensusEngine,
 )
 from packages.domain.market_data.orderbook import (
     FullOrderBook,
     OrderBookReconstructor,
-    PriceLevel,
 )
 from packages.indicators.momentum import MACD, RSI
 from packages.indicators.trend import SMA
@@ -32,11 +29,9 @@ from packages.schemas.agent_report import (
     AgentStatus,
     EvidenceReference,
 )
-from packages.schemas.market_event import Candle, MarketEvent
-from packages.schemas.source_metadata import SourceMetadata
+from packages.schemas.market_event import Candle
 from packages.strategy.engine import StrategyEngine
 from packages.strategy.models import StrategyConfig, StrategyDirection
-
 
 # ── helpers ──────────────────────────────────────────────────────────
 

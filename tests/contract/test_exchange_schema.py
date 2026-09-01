@@ -10,26 +10,20 @@ Verifies:
 
 from __future__ import annotations
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 import pytest
-
 from apps.ingestion.base_adapter import (
     ConnectionConfig,
-    ConnectionState,
     ExchangeAdapterBase,
 )
 from packages.schemas.market_event import (
     Candle,
-    EventType,
     NewsEvent,
     OrderBookSnapshot,
     PriceLevel,
     Trade,
 )
-from packages.streaming.schemas import MarketEvent as StreamingMarketEvent
-from packages.streaming.schemas import SourceMetadata as StreamingSourceMetadata
-
 
 # ── Fixture: concrete adapter for inspection ────────────────────────────
 
@@ -92,8 +86,8 @@ class TestExchangeAdapterInterface:
 
     def test_concrete_subclasses_exist(self) -> None:
         """Known concrete implementations must be importable."""
-        from apps.ingestion.binance_spot import SpotAdapter
         from apps.ingestion.binance_futures import FuturesAdapter
+        from apps.ingestion.binance_spot import SpotAdapter
 
         assert SpotAdapter is not None
         assert FuturesAdapter is not None

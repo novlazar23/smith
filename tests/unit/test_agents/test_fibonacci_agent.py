@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import uuid as uuid_mod
-
 import numpy as np
 import pytest
 from packages.agents import (
@@ -12,17 +10,12 @@ from packages.agents import (
     FibonacciAgent,
 )
 from packages.chart_structure.base import SupportResistanceLevel
-from packages.fibonacci import (
-    FibonacciArea,
-    FibonacciPivot,
-)
 from packages.schemas.agent_report import (
     AgentReport,
     AgentStatus,
     EvidenceReference,
     InvalidationCondition,
 )
-
 
 # ── fixtures ──────────────────────────────────────────────────────────────
 

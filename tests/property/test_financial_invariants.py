@@ -10,16 +10,12 @@ from __future__ import annotations
 
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-
 from packages.paper.base import (
     OrderType,
-    PaperAccount,
     PaperPosition,
-    Trade,
     TradeDirection,
 )
 from packages.paper.executor import PaperExecutor
-
 
 # ---------------------------------------------------------------------------
 # Helper strategies

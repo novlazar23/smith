@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import pytest
-
-from datetime import datetime, timezone
-
 from packages.agents.multi_timeframe.agent import MultiTimeframeAgent
 from packages.agents.multi_timeframe.models import (
-    MultiTimeframeConfig,
     MultiTimeframeReport,
     TimeframeSignal,
 )

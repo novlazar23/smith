@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-
 from packages.governance.audit import AuditEntry, AuditTrail
 from packages.governance.state_machine import AgentState
 

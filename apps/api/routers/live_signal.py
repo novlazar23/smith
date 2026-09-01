@@ -11,9 +11,8 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
-
 from packages.governance.feature_flags import feature_flags
+from pydantic import BaseModel, ConfigDict, Field
 
 router = APIRouter(prefix="/v1/live-signal", tags=["live-signal"])
 

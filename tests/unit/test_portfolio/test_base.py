@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, UTC
 import pytest
 from packages.portfolio.base import (
     ExposureLimits,

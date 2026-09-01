@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from packages.orchestrator.graph import (
     OrchestratorGraph,
@@ -16,7 +18,6 @@ from packages.orchestrator.seal import (
     verify_seal,
 )
 from packages.schemas.agent_report import AgentReport, EvidenceReference
-from datetime import UTC, datetime
 
 
 def _make_report(report_id: str = "r1", agent_id: str = "agent-1") -> AgentReport:

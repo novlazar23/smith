@@ -10,7 +10,6 @@ import hashlib
 import logging
 import time
 import tracemalloc
-from datetime import UTC, datetime
 from typing import Any
 
 from packages.config.instrument_pool import InstrumentPool

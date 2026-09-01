@@ -12,14 +12,14 @@ Verifies:
 from __future__ import annotations
 
 import uuid as uuid_mod
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 import numpy as np
 import pytest
-
 from packages.agents import (
     AgentConfig,
     AgentType,
+    AnomalyAgent,
     BaseAgent,
     ChartAgent,
     ContrarianAgent,
@@ -32,7 +32,6 @@ from packages.agents import (
     OrderFlowAgent,
     PatternAgent,
     RegimeAgent,
-    AnomalyAgent,
 )
 from packages.agents.contrainer.models import ContrarianConfig
 from packages.schemas.agent_report import (
@@ -41,7 +40,6 @@ from packages.schemas.agent_report import (
     EvidenceReference,
     InvalidationCondition,
 )
-
 
 # ── AgentConfig contract ────────────────────────────────────────────────
 

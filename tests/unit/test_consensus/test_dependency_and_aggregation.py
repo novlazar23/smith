@@ -16,7 +16,6 @@ from packages.consensus import (
     WeightConfig,
 )
 from packages.consensus.dependency_analysis import AgentDependency
-from packages.consensus.weighted import WeightedConsensusEngine
 from packages.schemas.agent_report import AgentReport, AgentStatus, EvidenceReference
 
 

@@ -97,7 +97,9 @@ class TracingRegistry:
             try:
                 import importlib.util
                 if importlib.util.find_spec("opentelemetry.exporter.otlp.proto.grpc.trace_exporter") is not None:
-                    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter  # type: ignore[import-not-found,unused-ignore]
+                    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+                        OTLPSpanExporter,  # type: ignore[import-not-found,unused-ignore]
+                    )
                     exporter = OTLPSpanExporter(endpoint=self._config.otlp_endpoint)
                     processor = BatchSpanProcessor(exporter)
                     self._tracer_provider.add_span_processor(processor)

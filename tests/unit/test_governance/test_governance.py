@@ -6,13 +6,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 from packages.governance.decision_engine import (
+    BlockingRules,
+    DecisionEngine,
     DecisionRule,
     FinalDecisionData,
     FinalDecisionType,
     GovernanceConfig,
 )
-from packages.governance.decision_engine import BlockingRules
-from packages.governance.decision_engine import DecisionEngine
 
 # ---------------------------------------------------------------------------
 # Base types

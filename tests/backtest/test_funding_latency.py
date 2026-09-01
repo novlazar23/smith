@@ -10,20 +10,15 @@ Properties verified:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pytest
-
-from packages.domain.market_data import FundingRate, OpenInterest
+from packages.domain.market_data import FundingRate
 from packages.paper import (
     OrderType,
-    PaperAccount,
     PaperExecutor,
-    PaperPosition,
     TradeDirection,
 )
 from packages.paper.position_lifecycle import Fill, PositionLifecycle, PositionStatus
-
 
 # ---------------------------------------------------------------------------
 # Helper: create a FundingRate

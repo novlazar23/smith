@@ -12,10 +12,6 @@ from __future__ import annotations
 from datetime import datetime
 
 import numpy as np
-import pytest
-
-from packages.agents.indicator_agent import IndicatorAgent
-from packages.agents.regime_agent import RegimeAgent
 from packages.consensus import (
     ConsensusDecision,
     ConsensusResult,
@@ -23,16 +19,11 @@ from packages.consensus import (
     WeightedConsensusEngine,
 )
 from packages.domain.market_data.orderbook import (
-    FullOrderBook,
     OrderBookReconstructor,
-    PriceLevel,
 )
-from packages.domain.models import Trade as DomainTrade
-from packages.indicators.momentum import RSI, MACD
+from packages.indicators.momentum import MACD, RSI
 from packages.indicators.trend import SMA
 from packages.paper.base import (
-    OrderType,
-    PaperAccount,
     TradeDirection,
 )
 from packages.paper.executor import PaperExecutor as Executor
@@ -40,7 +31,6 @@ from packages.schemas.agent_report import (
     AgentReport,
     AgentStatus,
     EvidenceReference,
-    InvalidationCondition,
 )
 from packages.strategy.engine import StrategyEngine
 from packages.strategy.models import (
@@ -48,7 +38,6 @@ from packages.strategy.models import (
     StrategyDirection,
     StrategyProposal,
 )
-
 
 # ── helpers ──────────────────────────────────────────────────────────
 

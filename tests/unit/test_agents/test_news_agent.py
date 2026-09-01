@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import datetime
-import uuid
 
-import numpy as np
 import pytest
-from numpy.typing import NDArray
 from packages.agents import AgentType, NewsAgent
 from packages.agents.base import AgentConfig
 from packages.domain.news import (
     Deduplicator,
     EntityMatch,
-    NewsCluster,
     NewsEvent,
     NewsStatus,
     normalize_raw_news,
@@ -26,7 +22,6 @@ from packages.schemas.agent_report import (
     EvidenceReference,
     InvalidationCondition,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 
 import pytest
-
 from packages.validation.calibration.base import (
     CalibrationResult,
     CalibrationSample,

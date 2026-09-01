@@ -12,17 +12,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-
 from packages.paper import (
     OrderType,
-    PaperAccount,
     PaperExecutor,
-    PaperPosition,
-    Trade,
     TradeDirection,
 )
 from packages.paper.position_lifecycle import Fill, PositionLifecycle, PositionStatus
-
 
 # ---------------------------------------------------------------------------
 # Property 1: final balance = initial + realized_pnl - fees
