@@ -94,13 +94,8 @@ class DummyMarketDataProducer:
         produced = 0
         for symbol in self._symbols:
             adapter = self._adapters[symbol]
-            candles = await adapter._fetch_candles_raw(symbol, interval="1m", limit=1)
+            candles = await adapter.fetch_candles(symbol, "1m", 1)
             for candle in candles:
-                # Der Base-Validator lehnt Roh-Kerzen ohne "type" ab — daher
-                # Metadaten selbst stempeln (identisch zu fetch_candles).
-                candle.setdefault("type", "candle")
-                candle.setdefault("instrument", symbol)
-                candle.setdefault("venue", adapter.venue)
                 event = self._build_event(symbol, candle)
                 self._producer.produce(
                     self._topic,

@@ -77,14 +77,14 @@ def _candle() -> dict[str, Any]:
 async def _fetch_one(
     self: DummyAdapter, symbol: str, interval: str = "1m", limit: int = 100
 ) -> list[dict[str, Any]]:
-    """Stellvertreter fuer DummyAdapter._fetch_candles_raw — liefert genau eine Kerze."""
+    """Stellvertreter fuer DummyAdapter.fetch_candles — liefert genau eine Kerze."""
     return [_candle()]
 
 
 async def _fetch_none(
     self: DummyAdapter, symbol: str, interval: str = "1m", limit: int = 100
 ) -> list[dict[str, Any]]:
-    """Stellvertreter fuer DummyAdapter._fetch_candles_raw — liefert keine Kerzen."""
+    """Stellvertreter fuer DummyAdapter.fetch_candles — liefert keine Kerzen."""
     return []
 
 
@@ -98,8 +98,8 @@ def fake_producer() -> FakeProducer:
 def producer(
     fake_producer: FakeProducer, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> DummyMarketDataProducer:
-    """Producer mit gestubtem _fetch_candles_raw, Fake-Producer und isolierter Heartbeat."""
-    monkeypatch.setattr(DummyAdapter, "_fetch_candles_raw", _fetch_one)
+    """Producer mit gestubtem fetch_candles, Fake-Producer und isolierter Heartbeat."""
+    monkeypatch.setattr(DummyAdapter, "fetch_candles", _fetch_one)
     monkeypatch.setattr(producer_module, "HEARTBEAT_PATH", str(tmp_path / "heartbeat"))
     p = DummyMarketDataProducer([SYMBOL], bootstrap_servers="localhost:9092", topic="market_data")
     p._producer = fake_producer
@@ -139,7 +139,7 @@ async def test_unknown_symbol_falls_back_to_base_price_100(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
     """Unbekanntes Symbol bekommt Basispreis 100.0 und crasht nicht."""
-    monkeypatch.setattr(DummyAdapter, "_fetch_candles_raw", _fetch_one)
+    monkeypatch.setattr(DummyAdapter, "fetch_candles", _fetch_one)
     monkeypatch.setattr(producer_module, "HEARTBEAT_PATH", str(tmp_path / "heartbeat"))
     fake = FakeProducer()
     p = DummyMarketDataProducer(["DOGE/USDT"], bootstrap_servers="localhost:9092")
@@ -163,7 +163,7 @@ async def test_empty_fetch_produces_nothing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
     """Leeres Fetch-Ergebnis → keine produce-Aufrufe, Rueckgabe 0."""
-    monkeypatch.setattr(DummyAdapter, "_fetch_candles_raw", _fetch_none)
+    monkeypatch.setattr(DummyAdapter, "fetch_candles", _fetch_none)
     monkeypatch.setattr(producer_module, "HEARTBEAT_PATH", str(tmp_path / "heartbeat"))
     fake = FakeProducer()
     p = DummyMarketDataProducer([SYMBOL], bootstrap_servers="localhost:9092")

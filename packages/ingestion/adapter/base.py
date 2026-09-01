@@ -95,7 +95,7 @@ class ConnectionConfig:
     ))
 
 
-class ConnectionError(Exception):
+class ConnectionError(Exception):  # noqa: A001
     """Wird geworfen wenn die Verbindung fehl schlägt."""
 
 
@@ -183,11 +183,14 @@ class ExchangeAdapterBase(ABC):
         raw_candles = await self._fetch_candles_raw(symbol, interval, limit)
         validated: list[dict[str, Any]] = []
         for raw in raw_candles:
+            # Metadaten vor der Validierung stempeln — der Validator
+            # dispatcht auf "type" und würde Roh-Kerzen sonst als
+            # "Unknown event type" ablehnen.
+            raw["type"] = "candle"
+            raw.setdefault("instrument", symbol)
+            raw["venue"] = self.config.venue
             result = self._validator.validate(raw)
             if result.is_valid:
-                raw["type"] = "candle"
-                raw.setdefault("instrument", symbol)
-                raw["venue"] = self.config.venue
                 validated.append(raw)
             else:
                 self.logger.warning(
@@ -214,11 +217,14 @@ class ExchangeAdapterBase(ABC):
         raw_trades = await self._fetch_trades_raw(symbol, limit)
         validated: list[dict[str, Any]] = []
         for raw in raw_trades:
+            # Metadaten vor der Validierung stempeln — der Validator
+            # dispatcht auf "type" und würde Roh-Trades sonst als
+            # "Unknown event type" ablehnen.
+            raw["type"] = "trade"
+            raw.setdefault("instrument", symbol)
+            raw["venue"] = self.config.venue
             result = self._validator.validate(raw)
             if result.is_valid:
-                raw["type"] = "trade"
-                raw.setdefault("instrument", symbol)
-                raw["venue"] = self.config.venue
                 validated.append(raw)
             else:
                 self.logger.warning(
