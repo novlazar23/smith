@@ -101,7 +101,7 @@ class TestAgentTypeEnum:
         assert AgentType.NEWS == "news"
 
     def test_news_enum_unique(self) -> None:
-        types = [t for t in AgentType]
+        types = list(AgentType)
         assert len(types) == len(set(types))
 
 
@@ -129,54 +129,54 @@ class TestNewsAgentInit:
 # ── NewsAgent basic analysis ────────────────────────────────────────────
 
 class TestNewsAgentBasic:
-    def test_produces_agent_report(self, agent, news_data) -> None:
+    def test_produces_agent_report(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         assert isinstance(report, AgentReport)
         assert report.agent_id == "news"
 
-    def test_probabilities_sum_to_one(self, agent, news_data) -> None:
+    def test_probabilities_sum_to_one(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         prob_sum = sum(report.probabilities.values())
         assert abs(prob_sum - 1.0) <= 0.0001
 
-    def test_probabilities_have_required_keys(self, agent, news_data) -> None:
+    def test_probabilities_have_required_keys(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         assert "up" in report.probabilities
         assert "down" in report.probabilities
         assert "range" in report.probabilities
 
-    def test_evidence_present(self, agent, news_data) -> None:
+    def test_evidence_present(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         assert len(report.evidence) >= 1
 
-    def test_evidence_is_evidence_reference(self, agent, news_data) -> None:
+    def test_evidence_is_evidence_reference(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         for ev in report.evidence:
             assert isinstance(ev, EvidenceReference)
 
-    def test_counter_evidence_required(self, agent, news_data) -> None:
+    def test_counter_evidence_required(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         assert len(report.counter_evidence) >= 1
 
-    def test_invalidations_present(self, agent, news_data) -> None:
+    def test_invalidations_present(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         assert len(report.invalidations) >= 1
 
-    def test_invalidations_are_proper_type(self, agent, news_data) -> None:
+    def test_invalidations_are_proper_type(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         for inv in report.invalidations:
             assert isinstance(inv, InvalidationCondition)
 
-    def test_status_shadow(self, agent, news_data) -> None:
+    def test_status_shadow(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         assert report.status.value == "shadow"
 
-    def test_report_id_is_unique(self, agent, news_data) -> None:
+    def test_report_id_is_unique(self, agent: NewsAgent, news_data: dict) -> None:
         r1 = agent.analyze(news_data)
         r2 = agent.analyze(news_data)
         assert r1.report_id != r2.report_id
 
-    def test_agent_version(self, agent, news_data) -> None:
+    def test_agent_version(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         assert report.agent_version == "0.1.0"
 
@@ -184,15 +184,15 @@ class TestNewsAgentBasic:
 # ── NewsAgent validation ─────────────────────────────────────────────────
 
 class TestNewsAgentValidation:
-    def test_missing_news_raises(self, agent) -> None:
+    def test_missing_news_raises(self, agent: NewsAgent) -> None:
         with pytest.raises(ValueError, match="news"):
             agent.analyze({})
 
-    def test_empty_news_list_raises(self, agent) -> None:
+    def test_empty_news_list_raises(self, agent: NewsAgent) -> None:
         with pytest.raises(ValueError, match="non-empty"):
             agent.analyze({"news": []})
 
-    def test_valid_single_news(self, agent, single_news_data) -> None:
+    def test_valid_single_news(self, agent: NewsAgent, single_news_data: dict) -> None:
         report = agent.analyze(single_news_data)
         assert isinstance(report, AgentReport)
 
@@ -527,18 +527,18 @@ class TestSourceScoring:
 # ── Evidence structure ──────────────────────────────────────────────────
 
 class TestEvidenceStructure:
-    def test_evidence_has_source_info(self, agent, news_data) -> None:
+    def test_evidence_has_source_info(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         for ev in report.evidence:
             assert ev.feature  # feature should be set
             assert ev.relevance > 0
 
-    def test_counter_evidence_direction(self, agent, news_data) -> None:
+    def test_counter_evidence_direction(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         for ev in report.counter_evidence:
             assert ev.direction == "negative"
 
-    def test_invalidations_structure(self, agent, news_data) -> None:
+    def test_invalidations_structure(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         for inv in report.invalidations:
             assert inv.condition
@@ -549,7 +549,7 @@ class TestEvidenceStructure:
 # ── Probability distribution ────────────────────────────────────────────
 
 class TestProbabilityDistribution:
-    def test_balanced_news_near_equal(self, agent) -> None:
+    def test_balanced_news_near_equal(self, agent: NewsAgent) -> None:
         data = {
             "news": [
                 {"title": "Bitcoin Goes Up", "body": "BTC rises", "source_name": "R"},
@@ -562,7 +562,7 @@ class TestProbabilityDistribution:
         # At least one direction should have weight
         assert (up + down) > 0.01
 
-    def test_bullish_bias_increases_up(self, agent) -> None:
+    def test_bullish_bias_increases_up(self, agent: NewsAgent) -> None:
         data = {
             "news": [
                 {"title": "Bitcoin Surges Past 100K", "body": "BTC reaches record", "source_name": "Reuters"},
@@ -573,7 +573,7 @@ class TestProbabilityDistribution:
         report = agent.analyze(data)
         assert report.probabilities["up"] > report.probabilities["down"]
 
-    def test_bearish_bias_increases_down(self, agent) -> None:
+    def test_bearish_bias_increases_down(self, agent: NewsAgent) -> None:
         data = {
             "news": [
                 {"title": "Bitcoin Crash Below 50K", "body": "BTC plummets", "source_name": "Reuters"},
@@ -587,11 +587,11 @@ class TestProbabilityDistribution:
 # ── Confidence score ────────────────────────────────────────────────────
 
 class TestConfidenceScore:
-    def test_confidence_in_range(self, agent, news_data) -> None:
+    def test_confidence_in_range(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         assert 0.0 <= report.raw_confidence <= 0.9
 
-    def test_more_events_increase_confidence(self, agent) -> None:
+    def test_more_events_increase_confidence(self, agent: NewsAgent) -> None:
         few = {"news": [
             {"title": "BTC Up", "body": "Bitcoin rises", "source_name": "R"},
         ]}
@@ -604,7 +604,7 @@ class TestConfidenceScore:
         conf_many = agent.analyze(many).raw_confidence
         assert conf_many >= conf_few
 
-    def test_high_source_score_boosts_confidence(self, agent) -> None:
+    def test_high_source_score_boosts_confidence(self, agent: NewsAgent) -> None:
         low = {"news": [
             {"title": "BTC Up", "body": "Bitcoin rises", "source_name": "Twitter"},
         ]}
@@ -619,18 +619,17 @@ class TestConfidenceScore:
 # ── NewsAgent with conflicting signals ──────────────────────────────────
 
 class TestConflictingSignals:
-    def test_counter_evidence_for_conflict(self, agent, conflicting_news_data) -> None:
+    def test_counter_evidence_for_conflict(
+        self, agent: NewsAgent, conflicting_news_data: dict
+    ) -> None:
         report = agent.analyze(conflicting_news_data)
         assert len(report.counter_evidence) >= 1
-        # Counter evidence should mention conflict
-        has_conflict_kw = any(
-            "conflict" in ev.value.lower() or "conflicting" in ev.value.lower()
-            for ev in report.counter_evidence
-        )
         # Or at least has a counter with negative direction
         assert any(ev.direction == "negative" for ev in report.counter_evidence)
 
-    def test_conflict_probabilities_more_balanced(self, agent, conflicting_news_data) -> None:
+    def test_conflict_probabilities_more_balanced(
+        self, agent: NewsAgent, conflicting_news_data: dict
+    ) -> None:
         report = agent.analyze(conflicting_news_data)
         up = report.probabilities["up"]
         down = report.probabilities["down"]
@@ -641,7 +640,7 @@ class TestConflictingSignals:
 # ── AgentReport compliance ──────────────────────────────────────────────
 
 class TestAgentReportCompliance:
-    def test_report_has_required_fields(self, agent, news_data) -> None:
+    def test_report_has_required_fields(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         assert report.report_id
         assert report.run_id
@@ -650,27 +649,27 @@ class TestAgentReportCompliance:
         assert isinstance(report.as_of, datetime.datetime)
         assert isinstance(report.probabilities, dict)
 
-    def test_report_id_is_uuid(self, agent, news_data) -> None:
+    def test_report_id_is_uuid(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         # UUID hex is 32 chars
         assert len(report.report_id) == 32
 
-    def test_run_id_is_uuid(self, agent, news_data) -> None:
+    def test_run_id_is_uuid(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         assert len(report.run_id) == 32
 
-    def test_evidence_direction_values(self, agent, news_data) -> None:
+    def test_evidence_direction_values(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         for ev in report.evidence:
             assert ev.value
             assert ev.direction in ("positive", "neutral", "negative")
 
-    def test_counter_evidence_direction(self, agent, news_data) -> None:
+    def test_counter_evidence_direction(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         for ev in report.counter_evidence:
             assert ev.direction == "negative"
 
-    def test_invalidations_structure(self, agent, news_data) -> None:
+    def test_invalidations_structure(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         for inv in report.invalidations:
             assert inv.condition
@@ -682,7 +681,7 @@ class TestAgentReportCompliance:
 # ── Integration: full pipeline ──────────────────────────────────────────
 
 class TestNewsIntegration:
-    def test_full_analysis_pipeline(self, agent, news_data) -> None:
+    def test_full_analysis_pipeline(self, agent: NewsAgent, news_data: dict) -> None:
         """Test the complete news analysis pipeline."""
         report = agent.analyze(news_data)
 
@@ -702,16 +701,16 @@ class TestNewsIntegration:
         # Status
         assert report.status.value == "shadow"
 
-    def test_report_as_of_is_datetime(self, agent, news_data) -> None:
+    def test_report_as_of_is_datetime(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         assert isinstance(report.as_of, datetime.datetime)
 
-    def test_news_status_in_hypothesis(self, agent, news_data) -> None:
+    def test_news_status_in_hypothesis(self, agent: NewsAgent, news_data: dict) -> None:
         report = agent.analyze(news_data)
         # At least one initial status event
         assert "initial" in report.hypothesis.lower() or "status" in report.hypothesis.lower()
 
-    def test_no_llm_probabilities(self, agent) -> None:
+    def test_no_llm_probabilities(self, agent: NewsAgent) -> None:
         """Verify probabilities are rule-based, not from LLM."""
         now = datetime.datetime(2024, 1, 1, 12, 0, 0)
         data = {
@@ -730,7 +729,7 @@ class TestNewsIntegration:
 # ── Edge cases ──────────────────────────────────────────────────────────
 
 class TestEdgeCases:
-    def test_news_without_url(self, agent) -> None:
+    def test_news_without_url(self, agent: NewsAgent) -> None:
         data = {
             "news": [
                 {"title": "No URL News", "body": "Body text", "source_name": "Test"},
@@ -739,7 +738,7 @@ class TestEdgeCases:
         report = agent.analyze(data)
         assert isinstance(report, AgentReport)
 
-    def test_news_with_all_sources(self, agent) -> None:
+    def test_news_with_all_sources(self, agent: NewsAgent) -> None:
         data = {
             "news": [
                 {"title": "Wire", "body": "b", "source_name": "Reuters", "source_type": "wire_service"},
@@ -750,7 +749,7 @@ class TestEdgeCases:
         report = agent.analyze(data)
         assert len(report.evidence) == 3
 
-    def test_news_with_empty_title(self, agent) -> None:
+    def test_news_with_empty_title(self, agent: NewsAgent) -> None:
         data = {
             "news": [
                 {"title": "", "body": "Has body but no title", "source_name": "Test"},
@@ -759,7 +758,7 @@ class TestEdgeCases:
         report = agent.analyze(data)
         assert isinstance(report, AgentReport)
 
-    def test_news_with_long_body(self, agent) -> None:
+    def test_news_with_long_body(self, agent: NewsAgent) -> None:
         long_body = "Bitcoin " * 500
         data = {
             "news": [
@@ -769,7 +768,7 @@ class TestEdgeCases:
         report = agent.analyze(data)
         assert isinstance(report, AgentReport)
 
-    def test_multiple_same_source(self, agent) -> None:
+    def test_multiple_same_source(self, agent: NewsAgent) -> None:
         data = {
             "news": [
                 {"title": "BTC Up", "body": "x", "source_name": "Reuters"},
@@ -780,7 +779,7 @@ class TestEdgeCases:
         report = agent.analyze(data)
         assert len(report.evidence) == 3
 
-    def test_dedup_preserves_entity_order(self, agent) -> None:
+    def test_dedup_preserves_entity_order(self, agent: NewsAgent) -> None:
         """Events with same URL get merged, latest entities preserved."""
         dedup = Deduplicator()
         evt1 = normalize_raw_news(

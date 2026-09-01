@@ -7,6 +7,9 @@ consistent, and direction flags match the sign of the contribution.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from packages.validation import AblationResult
@@ -272,8 +275,5 @@ class TestAblationResultImmutability:
             ablated_score=ablated_score,
             marginal_contribution=full_score - ablated_score,
         )
-        try:
+        with pytest.raises(FrozenInstanceError):
             result.full_score = 999.0  # pyright: ignore[reportAttributeAccessIssue]  # Intentionally tries to mutate frozen dataclass
-            assert False, "Frozen dataclass should raise FrozenInstanceError"
-        except Exception:
-            pass  # expected

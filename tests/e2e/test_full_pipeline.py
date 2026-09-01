@@ -226,7 +226,7 @@ class TestFullPipeline:
             vote_distribution=consensus_result.vote_distribution,
             agent_weights=consensus_result.agent_weights,
             agent_agreements=list(
-                set(r.agent_id for r in agent_reports)
+                {r.agent_id for r in agent_reports}
             ),
             agent_disagreements=[],
             confidence=consensus_result.confidence,
@@ -247,7 +247,7 @@ class TestFullPipeline:
 
         # ---- Step 7: Portfolio sizing ----
         kelly_sizer = KellyPositionSizer()
-        fraction = kelly_sizer.calculate_fraction(
+        kelly_sizer.calculate_fraction(
             win_rate=0.6,
             avg_win=1500.0,
             avg_loss=800.0,
@@ -354,7 +354,7 @@ class TestFullPipeline:
         assert fill.total_cost > 0
 
         # ---- Step 11: Verify final state ----
-        account_summary = executor.get_account_summary(account)
+        executor.get_account_summary(account)
 
         # Position should exist
         assert "BTC/USD" in account.positions or account.total_trades > 0
@@ -480,7 +480,7 @@ class TestPipelineEdgeCases:
     def test_risk_veto_stops_execution(self):
         """A hard risk veto should prevent order submission."""
         executor = PaperExecutor(initial_cash=100000.0)
-        account = executor.create_account("veto-test")
+        executor.create_account("veto-test")
 
         # Simulate existing position that would breach max drawdown
         monitor = DrawdownMonitor(max_drawdown_pct=0.05)  # very tight limit

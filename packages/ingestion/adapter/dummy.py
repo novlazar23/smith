@@ -161,7 +161,7 @@ class DummyAdapter(ExchangeAdapterBase):
         candles: list[dict[str, Any]] = []
         price = self._base_price
 
-        for i in range(limit):
+        for _ in range(limit):
             close_time = open_time + candle_duration
             volatility = price * 0.002  # 0.2% per candle
             change = rng.gauss(0, volatility)

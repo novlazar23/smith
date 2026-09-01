@@ -142,22 +142,22 @@ class TestAuditTrail:
     # --- log_review ---
 
     def test_log_review_creates_entry(self, trail: AuditTrail) -> None:
-        entry = trail.log_review("a1", "reviewer-1", True)
+        entry = trail.log_review("a1", "reviewer-1", approved=True)
         assert entry.event_type == "review"
         assert entry.agent_id == "a1"
         assert entry.actor == "reviewer-1"
         assert entry.approved is True
 
     def test_log_review_rejected(self, trail: AuditTrail) -> None:
-        entry = trail.log_review("a1", "reviewer-2", False)
+        entry = trail.log_review("a1", "reviewer-2", approved=False)
         assert entry.approved is False
 
     def test_log_review_with_details(self, trail: AuditTrail) -> None:
-        entry = trail.log_review("a1", "reviewer-1", True, details={"score": 0.90})
+        entry = trail.log_review("a1", "reviewer-1", approved=True, details={"score": 0.90})
         assert entry.details == {"score": 0.90}
 
     def test_log_review_default_details_empty(self, trail: AuditTrail) -> None:
-        entry = trail.log_review("a1", "reviewer-1", True)
+        entry = trail.log_review("a1", "reviewer-1", approved=True)
         assert entry.details == {}
 
     # --- log_promotion ---
@@ -215,7 +215,7 @@ class TestAuditTrail:
     def test_total_entries_across_agents(self, trail: AuditTrail) -> None:
         trail.log_state_transition("a1", None, AgentState.SHADOW)
         trail.log_decision("a1", "LONG_BIAS")
-        trail.log_review("a1", "reviewer-1", True)
+        trail.log_review("a1", "reviewer-1", approved=True)
         trail.log_state_transition("a2", None, AgentState.SHADOW)
         assert trail.total_entries == 4
 
@@ -224,7 +224,7 @@ class TestAuditTrail:
     def test_mixed_event_types_preserved(self, trail: AuditTrail) -> None:
         trail.log_state_transition("a1", None, AgentState.SHADOW)
         trail.log_decision("a1", "SHORT_BIAS")
-        trail.log_review("a1", "reviewer-1", True)
+        trail.log_review("a1", "reviewer-1", approved=True)
         trail.log_promotion("a1", AgentState.SHADOW, AgentState.ACTIVE)
         trail.log_quarantine("a1", "drift")
         assert trail.total_entries == 5
@@ -238,7 +238,7 @@ class TestAuditTrail:
     def test_entries_ordered_by_creation(self, trail: AuditTrail) -> None:
         trail.log_state_transition("a1", None, AgentState.SHADOW)
         trail.log_decision("a1", "LONG_BIAS")
-        trail.log_review("a1", "reviewer-1", True)
+        trail.log_review("a1", "reviewer-1", approved=True)
         assert trail.entries[0].entry_id == "AUDIT-000001"
         assert trail.entries[1].entry_id == "AUDIT-000002"
         assert trail.entries[2].entry_id == "AUDIT-000003"

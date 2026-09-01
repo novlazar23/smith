@@ -9,7 +9,7 @@ Enthält Adapter für den Echtzeit-Datenimport von Kryptowährungsbörsen:
 
 from .base_adapter import (
     ConnectionConfig,
-    ConnectionError,
+    ConnectionError,  # noqa: A004  # Etablierter Name, wie in base_adapter
     ExchangeAdapterBase,
     RateLimitError,
 )

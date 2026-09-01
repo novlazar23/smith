@@ -56,7 +56,7 @@ class TestHiddenMarkovModelDetect:
         return {"close": close, "high": high, "low": low}
 
     @pytest.fixture
-    def choppY_market_data(self) -> dict[str, np.ndarray]:
+    def chopy_market_data(self) -> dict[str, np.ndarray]:
         """Choppy-Markt-Daten."""
         n = 100
         rng = np.random.RandomState(200)
@@ -140,10 +140,10 @@ class TestHiddenMarkovModelDetect:
         # Bull-Market sollte mindestens ein Regime sein
         assert result.regime in (MarketRegime.BULL, MarketRegime.CHOPPY, MarketRegime.BEAR)
 
-    def test_detect_choppy_market(self, choppY_market_data: dict[str, np.ndarray]) -> None:
+    def test_detect_choppy_market(self, chopy_market_data: dict[str, np.ndarray]) -> None:
         """Choppy-Markt wird erkannt."""
         hmm = HiddenMarkovModel()
-        result = hmm.detect(choppY_market_data)
+        result = hmm.detect(chopy_market_data)
         assert result.regime in (MarketRegime.BULL, MarketRegime.CHOPPY, MarketRegime.BEAR)
 
     def test_different_n_components(self, bull_market_data: dict[str, np.ndarray]) -> None:

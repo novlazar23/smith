@@ -1,13 +1,13 @@
 """Risk-Gates und finale Entscheidung: Risk-Gates, Publish, Schedule.
 
-§11.16–11.18
+§11.16-11.18
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from apps.orchestrator.graph import StageManager, TradingGraphState
 from apps.orchestrator.stages_enum import AnalysisStage
@@ -18,6 +18,18 @@ from packages.schemas.final_decision import (
     FinalDecision,
     FinalDecisionType,
 )
+
+
+class RiskManager(Protocol):
+    """Protokoll für den Risk-Manager in Stage 11.16.
+
+    Definiert nur die Methode, die von apply_risk_gates aufgerufen
+    wird.
+    """
+
+    def evaluate(self, state: TradingGraphState) -> BaseRiskDecision:
+        """Führt die Risikogate-Prüfung aus."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -40,7 +52,7 @@ class Decision:
 def apply_risk_gates(
     state: TradingGraphState,
     manager: StageManager,
-    risk_manager: Any | None = None,
+    risk_manager: RiskManager | None = None,
 ) -> tuple[TradingGraphState, StageManager]:
     """11.16 apply_risk_gates — Harte/weiche Grenzen.
 

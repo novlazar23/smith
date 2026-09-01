@@ -169,7 +169,7 @@ class TestPartialFillsInLifecycle:
         lc.add_fill(Fill(fill_id="b1", quantity=5.0, price=50_000.0, timestamp=datetime.now(UTC)))
         assert lc.current_quantity == pytest.approx(5.0, abs=0.0001)
 
-        close_fill = lc.close_position(52_000.0)
+        lc.close_position(52_000.0)
         assert lc.current_quantity == pytest.approx(0.0, abs=0.0001)
         assert lc.status == PositionStatus.CLOSED_PROFIT
         # PnL = (52000 - 50000) * 5 = 10000

@@ -202,7 +202,7 @@ class TestMissingPriceData:
         # The indicator processes what it can; NaN may propagate
         assert rsi_result is not None
         # At least some valid RSI values should exist
-        valid = rsi_result.values[~np.isnan(rsi_result.values)]
+        rsi_result.values[~np.isnan(rsi_result.values)]
         # May or may not have valid values depending on implementation
         # The key is: no crash
 

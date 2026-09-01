@@ -85,59 +85,83 @@ class TestHistoricalAnalogyAgentConfig:
 # ── Basic Analysis ────────────────────────────────────────────────────────
 
 class TestHistoricalAnalogyAgentBasic:
-    def test_produces_agent_report(self, agent, trend_data) -> None:
+    def test_produces_agent_report(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         assert isinstance(report, AgentReport)
         assert report.agent_id == "historical_analogy"
 
-    def test_probabilities_sum_to_one(self, agent, trend_data) -> None:
+    def test_probabilities_sum_to_one(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         prob_sum = sum(report.probabilities.values())
         assert abs(prob_sum - 1.0) <= 0.0001
 
-    def test_probabilities_have_required_keys(self, agent, trend_data) -> None:
+    def test_probabilities_have_required_keys(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         assert "up" in report.probabilities
         assert "down" in report.probabilities
         assert "range" in report.probabilities
 
-    def test_evidence_present(self, agent, trend_data) -> None:
+    def test_evidence_present(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         assert len(report.evidence) >= 1
 
-    def test_evidence_is_evidence_reference(self, agent, trend_data) -> None:
+    def test_evidence_is_evidence_reference(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         for ev in report.evidence:
             assert isinstance(ev, EvidenceReference)
 
-    def test_counter_evidence_required(self, agent, trend_data) -> None:
+    def test_counter_evidence_required(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         assert len(report.counter_evidence) >= 1
 
-    def test_invalidations_present(self, agent, trend_data) -> None:
+    def test_invalidations_present(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         assert len(report.invalidations) >= 1
 
-    def test_status_shadow(self, agent, trend_data) -> None:
+    def test_status_shadow(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         assert report.status.value == "shadow"
 
-    def test_report_id_is_unique(self, agent, trend_data) -> None:
+    def test_report_id_is_unique(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         r1 = agent.analyze(trend_data)
         r2 = agent.analyze(trend_data)
         assert r1.report_id != r2.report_id
 
-    def test_sample_size_set(self, agent, trend_data) -> None:
+    def test_sample_size_set(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         assert report.sample_size is not None
         assert isinstance(report.sample_size, int)
         assert report.sample_size > 0
 
-    def test_raw_confidence_valid(self, agent, trend_data) -> None:
+    def test_raw_confidence_valid(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         assert 0.0 <= report.raw_confidence <= 0.9
 
-    def test_hypothesis_non_empty(self, agent, trend_data) -> None:
+    def test_hypothesis_non_empty(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         assert len(report.hypothesis) > 0
         assert "Historical analogy" in report.hypothesis
@@ -203,11 +227,11 @@ class TestRegimeDetection:
 # ── Data Validation ───────────────────────────────────────────────────────
 
 class TestHistoricalAnalogyValidation:
-    def test_missing_close_raises(self, agent) -> None:
+    def test_missing_close_raises(self, agent: HistoricalAnalogyAgent) -> None:
         with pytest.raises(ValueError, match="Missing required data keys"):
             agent.analyze({"high": np.array([1.0, 2.0]), "low": np.array([0.5, 1.5])})
 
-    def test_too_few_points_raises(self, agent) -> None:
+    def test_too_few_points_raises(self, agent: HistoricalAnalogyAgent) -> None:
         data = {
             "close": np.array([100.0, 101.0]),
             "high": np.array([100.5, 101.5]),
@@ -216,7 +240,9 @@ class TestHistoricalAnalogyValidation:
         with pytest.raises(ValueError, match="Need at least"):
             agent.analyze(data)
 
-    def test_valid_minimal_data(self, agent, minimal_data) -> None:
+    def test_valid_minimal_data(
+        self, agent: HistoricalAnalogyAgent, minimal_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(minimal_data)
         assert isinstance(report, AgentReport)
 
@@ -258,7 +284,9 @@ class TestHistoricalDataOverride:
 # ── Evidence Structure ────────────────────────────────────────────────────
 
 class TestEvidenceStructure:
-    def test_evidence_direction_values(self, agent, trend_data) -> None:
+    def test_evidence_direction_values(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         for ev in report.evidence:
             assert ev.direction in ("positive", "negative", "neutral")
@@ -266,12 +294,16 @@ class TestEvidenceStructure:
             assert ev.feature
             assert ev.value
 
-    def test_counter_evidence_direction(self, agent, trend_data) -> None:
+    def test_counter_evidence_direction(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         for ev in report.counter_evidence:
             assert ev.direction == "negative"
 
-    def test_invalidations_structure(self, agent, trend_data) -> None:
+    def test_invalidations_structure(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         for inv in report.invalidations:
             assert isinstance(inv, InvalidationCondition)
@@ -354,7 +386,9 @@ class TestConfidenceScore:
 # ── Integration Tests ─────────────────────────────────────────────────────
 
 class TestHistoricalAnalogyIntegration:
-    def test_full_analysis_pipeline(self, agent, trend_data) -> None:
+    def test_full_analysis_pipeline(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
 
         # All required fields present
@@ -374,6 +408,8 @@ class TestHistoricalAnalogyIntegration:
         assert len(report.counter_evidence) >= 1
         assert len(report.invalidations) >= 1
 
-    def test_report_as_of_is_datetime(self, agent, trend_data) -> None:
+    def test_report_as_of_is_datetime(
+        self, agent: HistoricalAnalogyAgent, trend_data: dict[str, NDArray[np.float64]]
+    ) -> None:
         report = agent.analyze(trend_data)
         assert isinstance(report.as_of, datetime.datetime)

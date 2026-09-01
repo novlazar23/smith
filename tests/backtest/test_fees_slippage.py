@@ -61,9 +61,9 @@ class TestBalanceIdentity:
         final_cash = summary["cash"]
         fees = summary["total_commission"]
 
-        # Cash-flow identity:
-        #   final_cash = initial_cash - (buy_filled * buy_qty + buy_commission)
-        #              + (sell_filled * sell_qty - sell_commission)
+        # Cash-flow identity: final_cash is initial_cash reduced by the buy
+        # cost (filled price times quantity plus commission) and increased by
+        # the sell proceeds (filled price times quantity minus commission).
         buy_cost = buy_trade.filled_price * buy_trade.quantity + buy_trade.commission
         sell_proceeds = sell_trade.filled_price * sell_trade.quantity - sell_trade.commission
         expected_final = initial_cash - buy_cost + sell_proceeds
@@ -329,7 +329,7 @@ class TestFillAndLifecycle:
     def test_lifecycle_add_fill_updates_position(self) -> None:
         lc = PositionLifecycle(symbol="BTC/USDT", target_quantity=10.0)
         fill = Fill(fill_id="f1", quantity=5.0, price=50_000.0, timestamp=datetime.now(UTC))
-        state = lc.add_fill(fill)
+        lc.add_fill(fill)
         assert lc.current_quantity == pytest.approx(5.0, abs=0.0001)
         assert lc.status == PositionStatus.PARTIAL_FILL
         assert len(lc.fills) == 1

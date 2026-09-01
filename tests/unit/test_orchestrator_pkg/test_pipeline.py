@@ -172,8 +172,8 @@ class TestOrchestratorPipeline:
             market_data={},
         )
         # Die Reports sollten verschiedene report_ids haben
-        ids1 = {r.report_id for r in result1.first_round_reports}
-        ids2 = {r.report_id for r in result2.first_round_reports}
+        _ids1 = {r.report_id for r in result1.first_round_reports}
+        _ids2 = {r.report_id for r in result2.first_round_reports}
         # Mindestens einige Reports sind unterschiedlich
         assert result1.first_round_reports[0].report_id == result2.first_round_reports[0].report_id
         # Beide Pipelines waren erfolgreich

@@ -172,7 +172,7 @@ class TestCandle:
     def test_high_below_low(self) -> None:
         open_t = datetime(2024, 1, 1, tzinfo=UTC)
         close_t = datetime(2024, 1, 2, tzinfo=UTC)
-        with pytest.raises(ValueError, match="high.*<.*low"):
+        with pytest.raises(ValueError, match=r"high.*<.*low"):
             Candle(instrument="BTC", venue="binance", timeframe="15m",
                    open_time=open_t, close_time=close_t,
                    open=50000, high=49000, low=51000, close=50000, volume=100.0)
@@ -260,7 +260,7 @@ class TestOrderBookSnapshot:
         assert len(ob.asks) == 2
 
     def test_inverted_spread(self) -> None:
-        with pytest.raises(ValueError, match="Best bid.*>=.*best ask"):
+        with pytest.raises(ValueError, match=r"Best bid.*>=.*best ask"):
             OrderBookSnapshot(
                 instrument="BTC", venue="binance", sequence=1,
                 bids=[[50001, 1.0]],
@@ -333,7 +333,6 @@ class TestMarketEvent:
         assert "metadata" in d
 
     def test_from_dict(self) -> None:
-        open_t = datetime(2024, 1, 1, tzinfo=UTC)
         data = {
             "event_id": "e1", "event_type": "candle", "instrument": "BTC",
             "metadata": {

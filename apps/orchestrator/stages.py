@@ -5,10 +5,46 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from apps.orchestrator.graph import StageManager, TradingGraphState
 from apps.orchestrator.stages_enum import AnalysisStage
+
+
+class MarketDataProvider(Protocol):
+    """Protokoll für den Datenprovider in Stage 11.2.
+
+    Liefert Kerzen, Trades und Orderbook als Snapshot bis zum
+    angegebenen Zeitpunkt (Availability Time).
+    """
+
+    def fetch_candles(self, instrument: str, as_of: datetime) -> list[Any]:
+        """Kerzen bis as_of."""
+        ...
+
+    def fetch_trades(self, instrument: str, as_of: datetime) -> list[Any]:
+        """Trades bis as_of."""
+        ...
+
+    def fetch_orderbook(self, instrument: str, as_of: datetime) -> dict[str, Any]:
+        """Orderbook-Snapshot bis as_of."""
+        ...
+
+
+class FeatureProvider(Protocol):
+    """Protokoll für den Feature-Provider in Stage 11.4."""
+
+    def compute(self, state: TradingGraphState) -> dict[str, Any]:
+        """Berechnet die Features für den aktuellen Graphzustand."""
+        ...
+
+
+class RegimeProvider(Protocol):
+    """Protokoll für den Regime-Provider in Stage 11.5."""
+
+    def classify(self, state: TradingGraphState) -> dict[str, Any]:
+        """Klassifiziert das Markt-Regime für den aktuellen Graphzustand."""
+        ...
 
 
 def create_run(
@@ -53,7 +89,7 @@ def create_run(
 def build_market_snapshot(
     state: TradingGraphState,
     manager: StageManager,
-    data_provider: Any | None = None,
+    data_provider: MarketDataProvider | None = None,
 ) -> tuple[TradingGraphState, StageManager]:
     """11.2 build_market_snapshot — Daten bis analysis_time laden.
 
@@ -176,7 +212,7 @@ def validate_data(
 def compute_features(
     state: TradingGraphState,
     manager: StageManager,
-    feature_provider: Any | None = None,
+    feature_provider: FeatureProvider | None = None,
 ) -> tuple[TradingGraphState, StageManager]:
     """11.4 compute_features — Indikatoren, Struktur, Orderflow.
 
@@ -226,7 +262,7 @@ def compute_features(
 def classify_regime(
     state: TradingGraphState,
     manager: StageManager,
-    regime_provider: Any | None = None,
+    regime_provider: RegimeProvider | None = None,
 ) -> tuple[TradingGraphState, StageManager]:
     """11.5 classify_regime — Regime-Wahrscheinlichkeiten.
 

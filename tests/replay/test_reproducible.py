@@ -69,7 +69,7 @@ class TestReplayDeterminism:
         result2 = engine2.run()
 
         assert len(result1) == len(result2)
-        for a, b in zip(result1, result2):
+        for a, b in zip(result1, result2, strict=True):
             assert a == b, "Replay results differ across runs"
 
     def test_run_twice_identical_with_validation(self, tmp_path: Path) -> None:
@@ -110,7 +110,7 @@ class TestReplayDeterminism:
 
 
 # ---------------------------------------------------------------------------
-# Test: MultiTimeframeAggregator is deterministic
+# Tests: MultiTimeframeAggregator determinism
 # ---------------------------------------------------------------------------
 
 class TestAggregatorDeterminism:

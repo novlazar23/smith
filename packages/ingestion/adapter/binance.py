@@ -19,7 +19,7 @@ import aiohttp
 
 from .base import (
     ConnectionConfig,
-    ConnectionError,
+    ConnectionError,  # noqa: A004  # Etablierter Name, wie in base
     ConnectionState,
     ExchangeAdapterBase,
     VenueFees,
@@ -65,6 +65,7 @@ class BinanceAdapter(ExchangeAdapterBase):
     def __init__(
         self,
         config: ConnectionConfig | None = None,
+        *,
         use_futures: bool = True,
     ) -> None:
         venue = BINANCE_FUTURES_VENUE if use_futures else "BINANCE_SPOT"

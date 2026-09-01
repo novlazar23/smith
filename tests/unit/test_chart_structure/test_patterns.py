@@ -42,8 +42,8 @@ def reversal_data() -> dict[str, np.ndarray]:
     """Abwärtstrend mit Umkehr zum Bullen-Markt (CHoCH-Szenario)."""
     n = 60
     rng = np.random.RandomState(200)
-    # Phase 1: Abwärtstrend (bars 0–30)
-    # Phase 2: Umkehr (bars 30–60)
+    # Phase 1: Abwärtstrend (bars 0-30)
+    # Phase 2: Umkehr (bars 30-60)
     d1 = np.array([50.0 - i * 2.0 for i in range(30)])
     d2 = np.array([
         50.0 - (i + 30) * 2.0 + (i + 30) * 0.7 * (1 if (i + 30) < 45 else 0)
@@ -151,7 +151,6 @@ class TestPatternDetectorDetectCHoCH:
 
     def test_choch_no_swing_lows(self) -> None:
         """Keine Swing Lows → kein CHoCH."""
-        rng = np.random.RandomState(333)
         close = np.array([100.0 + i * 3.0 for i in range(50)])
         high = close + 1.0
         low = close - 1.0

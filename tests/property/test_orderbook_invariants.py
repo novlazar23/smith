@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from packages.domain.market_data import FundingRate, Liquidation, OpenInterest
@@ -64,11 +65,13 @@ class TestOpenInterestNonNegative:
         event_time: datetime,
     ) -> None:
         """OpenInterest with oi < 0 should raise ValueError."""
-        try:
-            OpenInterest(instrument=instrument, venue=venue, open_interest=negative_oi, event_time=event_time)
-            assert False, "Should have raised ValueError"
-        except ValueError:
-            pass  # expected
+        with pytest.raises(ValueError):
+            OpenInterest(
+                instrument=instrument,
+                venue=venue,
+                open_interest=negative_oi,
+                event_time=event_time,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -123,8 +126,8 @@ class TestFundingRateBounds:
         event_time: datetime,
     ) -> None:
         """FundingRate > 1.0 should raise ValueError."""
-        try:
-            next_funding = event_time + timedelta(hours=8)
+        next_funding = event_time + timedelta(hours=8)
+        with pytest.raises(ValueError):
             FundingRate(
                 instrument=instrument,
                 venue=venue,
@@ -133,9 +136,6 @@ class TestFundingRateBounds:
                 next_funding_time=next_funding,
                 event_time=event_time,
             )
-            assert False, "Should have raised ValueError"
-        except ValueError:
-            pass  # expected
 
     @given(
         _instrument,
@@ -154,8 +154,8 @@ class TestFundingRateBounds:
         event_time: datetime,
     ) -> None:
         """FundingRate < -1.0 should raise ValueError."""
-        try:
-            next_funding = event_time + timedelta(hours=8)
+        next_funding = event_time + timedelta(hours=8)
+        with pytest.raises(ValueError):
             FundingRate(
                 instrument=instrument,
                 venue=venue,
@@ -164,9 +164,6 @@ class TestFundingRateBounds:
                 next_funding_time=next_funding,
                 event_time=event_time,
             )
-            assert False, "Should have raised ValueError"
-        except ValueError:
-            pass  # expected
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +229,7 @@ class TestLiquidationReasonableness:
     ) -> None:
         """Liquidation value should be proportional to quantity * price."""
         assume(value >= 0)
-        obj = Liquidation(
+        Liquidation(
             instrument=instrument,
             venue=venue,
             side=side,

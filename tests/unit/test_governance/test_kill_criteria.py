@@ -90,7 +90,7 @@ class TestKillCriteriaResult:
 class TestKillCriteriaEngineIndividual:
     """Testet einzelne Kill Criteria."""
 
-    def _engine(self, **overrides) -> KillCriteriaEngine:
+    def _engine(self, **overrides: object) -> KillCriteriaEngine:
         cfg = KillCriteriaConfig(**overrides)
         return KillCriteriaEngine(cfg)
 
@@ -281,7 +281,7 @@ class TestKillCriteriaEngineIndividual:
 class TestKillCriteriaEngineCombined:
     """Testet kombinierte Szenarien."""
 
-    def _engine(self, **overrides) -> KillCriteriaEngine:
+    def _engine(self, **overrides: object) -> KillCriteriaEngine:
         cfg = KillCriteriaConfig(**overrides)
         return KillCriteriaEngine(cfg)
 
@@ -383,7 +383,7 @@ class TestKillCriteriaEngineCombined:
 class TestKillCriteriaEngineRecommendation:
     """Testet get_recommendation-Methode."""
 
-    def _engine(self, **overrides) -> KillCriteriaEngine:
+    def _engine(self, **overrides: object) -> KillCriteriaEngine:
         cfg = KillCriteriaConfig(**overrides)
         return KillCriteriaEngine(cfg)
 

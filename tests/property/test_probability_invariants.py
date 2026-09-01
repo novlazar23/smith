@@ -7,6 +7,7 @@ values, and stay within the valid [0, 1] range.
 
 from __future__ import annotations
 
+import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from packages.consensus import ConsensusDecision, ConsensusResult, VoteDirection
@@ -123,7 +124,7 @@ class TestConsensusProbabilitiesValid:
     @settings(max_examples=100)
     def test_all_probability_keys_are_at_most_one(self, probs: dict[str, float]) -> None:
         """Every individual probability in the dict must be <= 1."""
-        for key, value in probs.items():
+        for value in probs.values():
             assert value <= 1.0
 
 
@@ -230,11 +231,8 @@ class TestWeightedConsensusEngine:
     def test_consensus_engine_validates_input(self, reports: list[AgentReport]) -> None:
         """Empty reports must raise ValueError."""
         engine = WeightedConsensusEngine()
-        try:
+        with pytest.raises(ValueError):
             engine.validate_input([])
-            assert False, "Should have raised ValueError"
-        except ValueError:
-            pass  # expected
 
     @given(st.lists(_valid_report(), min_size=1, max_size=10))
     @settings(max_examples=50)

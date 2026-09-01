@@ -327,7 +327,7 @@ class TestMarketEventUnion:
             NewsEvent as ME_News,
         )
         from packages.schemas.market_event import (
-            OrderBookSnapshot as ME_OB,
+            OrderBookSnapshot as ME_OrderBookSnapshot,
         )
         from packages.schemas.market_event import (
             Trade as ME_Trade,
@@ -336,7 +336,7 @@ class TestMarketEventUnion:
         assert ME_Candle.__bases__[0].__name__ == "BaseModel"
         assert ME_Trade.__bases__[0].__name__ == "BaseModel"
         assert ME_News.__bases__[0].__name__ == "BaseModel"
-        assert ME_OB.__bases__[0].__name__ == "BaseModel"
+        assert ME_OrderBookSnapshot.__bases__[0].__name__ == "BaseModel"
 
 
 # ── Domain market_data models contract ──────────────────────────────────

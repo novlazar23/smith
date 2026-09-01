@@ -172,7 +172,7 @@ class TestBacktestEngine:
         engine = BacktestEngine(config=BacktestConfig(symbol="BTC/USD"))
 
         class NoSignalStrategy(MACDCrossover):
-            def on_bar(self, candle):
+            def on_bar(self, candle: Candle) -> None:
                 return None
 
         strategy = NoSignalStrategy(name="noop")

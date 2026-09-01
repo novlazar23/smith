@@ -115,7 +115,7 @@ class TestGapDetection:
             "asks": [[101.0, 1.0]],
         }, event_time=datetime.now())
 
-        # Regression: 190 < 200
+        # Regression: sequence 190 is below the snapshot sequence 200
         delta = {
             "sequence": 190,
             "bids": [],

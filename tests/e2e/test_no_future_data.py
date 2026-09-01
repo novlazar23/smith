@@ -98,12 +98,12 @@ class TestNoFutureData:
         mta = MultiTimeframeAggregator(base_timeframe="1m")
 
         # Pre-compute all features from the full dataset
-        all_closes = np.array([c["close"] for c in candles], dtype=np.float64)
+        _all_closes = np.array([c["close"] for c in candles], dtype=np.float64)
 
         for t in range(25, len(candles)):  # start at t=25 to have enough data
             # Data available at time t
             available = candles[: t + 1]
-            available_closes = np.array([c["close"] for c in available], dtype=np.float64)
+            _available_closes = np.array([c["close"] for c in available], dtype=np.float64)
 
             # Compute features from available-only data
             sma_5 = mta.compute_simple_moving_average(available, window=5, price_key="close")
@@ -125,9 +125,9 @@ class TestNoFutureData:
             )
 
             # Verify no future candle was used
-            last_available_close = available[-1]["close"]
+            _last_available_close = available[-1]["close"]
             if t + 1 < len(candles):
-                next_close = candles[t + 1]["close"]
+                _next_close = candles[t + 1]["close"]
                 # If the next candle has a very different price, our features
                 # should NOT be influenced by it
                 # (This is implicitly verified by the stream vs full match above.)

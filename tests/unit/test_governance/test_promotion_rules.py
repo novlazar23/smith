@@ -94,13 +94,13 @@ class TestPromotionRuleEngine:
     def test_promotion_review_not_approved(self) -> None:
         engine = PromotionRuleEngine()
         agent = self._shadow_agent()
-        can_promote, reasons = engine.evaluate_promotion(agent, "rejected")
+        can_promote, _reasons = engine.evaluate_promotion(agent, "rejected")
         assert can_promote is False
 
     def test_promotion_review_pending(self) -> None:
         engine = PromotionRuleEngine()
         agent = self._shadow_agent()
-        can_promote, reasons = engine.evaluate_promotion(agent, "pending")
+        can_promote, _reasons = engine.evaluate_promotion(agent, "pending")
         assert can_promote is False
 
     def test_promotion_all_criteria_fail(self) -> None:
@@ -118,7 +118,7 @@ class TestPromotionRuleEngine:
         )
         engine = PromotionRuleEngine(criteria)
         agent = self._shadow_agent(oos=0.55, calibration=0.65)
-        can_promote, reasons = engine.evaluate_promotion(agent, "approved")
+        can_promote, _reasons = engine.evaluate_promotion(agent, "approved")
         assert can_promote is True
 
     def test_promotion_returns_tuple(self) -> None:
@@ -133,33 +133,33 @@ class TestPromotionRuleEngine:
     def test_promotion_reasons_include_passed(self) -> None:
         engine = PromotionRuleEngine()
         agent = self._shadow_agent()
-        can_promote, reasons = engine.evaluate_promotion(agent, "approved")
+        _can_promote, reasons = engine.evaluate_promotion(agent, "approved")
         passed = [r for r in reasons if "✅" in r]
         assert len(passed) == 4
 
     def test_promotion_reasons_include_failed(self) -> None:
         engine = PromotionRuleEngine()
         agent = self._shadow_agent(oos=0.40)
-        can_promote, reasons = engine.evaluate_promotion(agent, "approved")
+        _can_promote, reasons = engine.evaluate_promotion(agent, "approved")
         failed = [r for r in reasons if "✅" not in r and r.strip()]
         assert len(failed) >= 1
 
     def test_promotion_oos_exactly_at_threshold(self) -> None:
         engine = PromotionRuleEngine()
         agent = self._shadow_agent(oos=0.60)  # exactly at default threshold
-        can_promote, reasons = engine.evaluate_promotion(agent, "approved")
+        can_promote, _reasons = engine.evaluate_promotion(agent, "approved")
         assert can_promote is True
 
     def test_promotion_calibration_exactly_at_threshold(self) -> None:
         engine = PromotionRuleEngine()
         agent = self._shadow_agent(calibration=0.70)  # exactly at default threshold
-        can_promote, reasons = engine.evaluate_promotion(agent, "approved")
+        can_promote, _reasons = engine.evaluate_promotion(agent, "approved")
         assert can_promote is True
 
     def test_promotion_marginal_exactly_at_threshold(self) -> None:
         engine = PromotionRuleEngine()
         agent = self._shadow_agent(marginal=0.01)  # exactly at default threshold
-        can_promote, reasons = engine.evaluate_promotion(agent, "approved")
+        can_promote, _reasons = engine.evaluate_promotion(agent, "approved")
         assert can_promote is True
 
     def test_promotion_reasons_format_includes_values(self) -> None:
@@ -181,10 +181,9 @@ class TestPromotionRuleEngine:
         criteria = PromotionCriteria(min_shadow_days=20)
         engine = PromotionRuleEngine(criteria)
         agent = self._shadow_agent()
-        can_promote, reasons = engine.evaluate_promotion(agent, "approved")
+        can_promote, _reasons = engine.evaluate_promotion(agent, "approved")
         assert can_promote is True
 
     def test_shadow_agent_has_started_at(self) -> None:
-        engine = PromotionRuleEngine()
         agent = self._shadow_agent()
         assert agent.started_at.tzinfo is not None

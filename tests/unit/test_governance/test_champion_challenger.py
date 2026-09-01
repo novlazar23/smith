@@ -83,7 +83,7 @@ class TestChampionChallengerConfig:
 class TestChampionChallengerEngine:
     """Testet Champion-Challenger-Promotion-Logik."""
 
-    def _champion(self, **overrides) -> AgentVersion:
+    def _champion(self, **overrides: object) -> AgentVersion:
         defaults = {
             "agent_id": "a1",
             "version": "champion",
@@ -97,7 +97,7 @@ class TestChampionChallengerEngine:
         defaults.update(overrides)
         return AgentVersion(**defaults)
 
-    def _challenger(self, **overrides) -> AgentVersion:
+    def _challenger(self, **overrides: object) -> AgentVersion:
         defaults = {
             "agent_id": "a1",
             "version": "challenger",

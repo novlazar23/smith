@@ -8,6 +8,8 @@ initial deposit and realized gains.
 
 from __future__ import annotations
 
+import contextlib
+
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from packages.paper.base import (
@@ -55,10 +57,9 @@ class TestTradeInvariants:
         account = executor.create_account("test")
         # Reduce quantity to fit within cash
         safe_quantity = min(quantity, initial_cash * 0.05 / price)
-        try:
+        # May fail on insufficient cash, but not on quantity itself
+        with contextlib.suppress(ValueError):
             executor.submit_order(account, "BTC/USDT", TradeDirection.BUY, safe_quantity, price, OrderType.MARKET)
-        except ValueError:
-            pass  # May fail on insufficient cash, but not on quantity itself
 
 
 # ---------------------------------------------------------------------------
@@ -131,8 +132,6 @@ class TestCashBalanceInvariant:
         buy_qty = min(0.5, initial_cash * 0.05 / buy_price)
         executor.submit_order(account, "BTC/USDT", TradeDirection.BUY, buy_qty, buy_price, OrderType.MARKET)
 
-        current_cash_buy = account.cash
-
         # Sell
         executor.submit_order(account, "BTC/USDT", TradeDirection.SELL, buy_qty, sell_price, OrderType.MARKET)
 
@@ -153,7 +152,6 @@ class TestCashBalanceInvariant:
 
         qty = min(0.1, initial_cash * 0.02 / price)
         executor.submit_order(account, "BTC/USDT", TradeDirection.BUY, qty, price, OrderType.MARKET)
-        cash_before_close = account.cash
 
         # Close position (sell at same price — may be slightly different due to slippage)
         executor.close_position(account, "BTC/USDT")

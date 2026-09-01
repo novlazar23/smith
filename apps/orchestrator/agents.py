@@ -1,22 +1,38 @@
 """Agenten-Ausführung: First/Second Round, Contrarian, Multi-Timeframe.
 
-§11.6–11.11
+§11.6-11.11
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from apps.orchestrator.graph import StageManager, TradingGraphState
 from apps.orchestrator.stages_enum import AnalysisStage
 from packages.consensus import ConsensusResult
 
 
+class AgentRegistry(Protocol):
+    """Protokoll für eine Agenten-Registry mit Runden-Ausführung.
+
+    Definiert nur die Methoden, die von den Stage-Funktionen dieses
+    Moduls aufgerufen werden.
+    """
+
+    def execute_first_round(self, state: TradingGraphState) -> list[dict[str, Any]]:
+        """Führt die erste Agenten-Runde aus."""
+        ...
+
+    def execute_second_round(self, state: TradingGraphState) -> list[dict[str, Any]]:
+        """Führt die zweite Agenten-Runde aus."""
+        ...
+
+
 def run_first_round(
     state: TradingGraphState,
     manager: StageManager,
-    agent_registry: Any | None = None,
+    agent_registry: AgentRegistry | None = None,
 ) -> tuple[TradingGraphState, StageManager]:
     """11.6 run_first_round — Parallel, keine Peer-Ergebnisse.
 
@@ -31,13 +47,9 @@ def run_first_round(
     Returns:
         (TradingGraphState, StageManager) — mit first_round_reports.
     """
-    reports: list[dict[str, Any]] = []
-
-    if agent_registry is not None:
-        reports = agent_registry.execute_first_round(state)
-    else:
-        # Default: leere Reports
-        reports = []
+    reports: list[dict[str, Any]] = (
+        agent_registry.execute_first_round(state) if agent_registry is not None else []
+    )
 
     state = state.model_copy(update={
         "current_stage": AnalysisStage.RUN_FIRST_ROUND.value,
@@ -98,7 +110,7 @@ def seal_first_round(
 def run_second_round(
     state: TradingGraphState,
     manager: StageManager,
-    agent_registry: Any | None = None,
+    agent_registry: AgentRegistry | None = None,
 ) -> tuple[TradingGraphState, StageManager]:
     """11.10 run_second_round — Bei Widersprüchen, Peer-Reports erlaubt.
 
@@ -113,12 +125,9 @@ def run_second_round(
     Returns:
         (TradingGraphState, StageManager) — mit second_round_reports.
     """
-    reports: list[dict[str, Any]] = []
-
-    if agent_registry is not None:
-        reports = agent_registry.execute_second_round(state)
-    else:
-        reports = []
+    reports: list[dict[str, Any]] = (
+        agent_registry.execute_second_round(state) if agent_registry is not None else []
+    )
 
     state = state.model_copy(update={
         "current_stage": AnalysisStage.RUN_SECOND_ROUND.value,
@@ -139,7 +148,7 @@ def run_contrarian_review(
     state: TradingGraphState,
     manager: StageManager,
     consensus_result: ConsensusResult | None = None,
-    agent_registry: Any | None = None,
+    agent_registry: AgentRegistry | None = None,
 ) -> tuple[TradingGraphState, StageManager]:
     """11.11 run_contrarian_review — Stärkste Hypothese widerlegen.
 

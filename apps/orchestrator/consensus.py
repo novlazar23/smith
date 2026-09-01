@@ -1,12 +1,12 @@
 """Konsens und Entscheidungsfindung: Gewichtung, Strategie, Portfolio.
 
-§11.13–11.15
+§11.13-11.15
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from apps.orchestrator.graph import StageManager, TradingGraphState
 from apps.orchestrator.stages_enum import AnalysisStage
@@ -19,6 +19,26 @@ from packages.strategy.engine import StrategyEngine
 from packages.strategy.models import (
     StrategyDirection,
 )
+
+
+class PortfolioManager(Protocol):
+    """Protokoll für den Portfolio-Manager in Stage 11.15.
+
+    Definiert nur die Methoden, die von evaluate_portfolio_step
+    aufgerufen werden.
+    """
+
+    def get_exposures(self, state: TradingGraphState) -> list[dict[str, Any]]:
+        """Liefert die bestehenden Exposure-Positionen."""
+        ...
+
+    def correlation_score(self, state: TradingGraphState) -> float:
+        """Korrelations-Score der bestehenden Exposures."""
+        ...
+
+    def concentration_score(self, state: TradingGraphState) -> float:
+        """Konzentrations-Score des Portfolios."""
+        ...
 
 
 def calculate_consensus(
@@ -187,7 +207,7 @@ def generate_strategy_step(
 def evaluate_portfolio_step(
     state: TradingGraphState,
     manager: StageManager,
-    portfolio_manager: Any | None = None,
+    portfolio_manager: PortfolioManager | None = None,
 ) -> tuple[TradingGraphState, StageManager]:
     """11.15 evaluate_portfolio — Bestehende Exposures prüfen.
 

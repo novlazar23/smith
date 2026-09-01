@@ -130,19 +130,22 @@ class TestRSI:
         rsi = RSI(period=14)
         result = rsi.compute(sample_data)
         valid = result.values[~np.isnan(result.values)]
-        assert np.all(valid >= 0) and np.all(valid <= 100)
+        assert np.all(valid >= 0)
+        assert np.all(valid <= 100)
 
     def test_uptrend(self) -> None:
         close = np.array([100.0 + i * 0.5 for i in range(50)])
         result = RSI().compute({"close": close, "volume": np.ones(50)})
         valid = result.values[~np.isnan(result.values)]
-        assert len(valid) > 0 and valid[-1] > 50
+        assert len(valid) > 0
+        assert valid[-1] > 50
 
     def test_downtrend(self) -> None:
         close = np.array([100.0 - i * 0.5 for i in range(50)])
         result = RSI().compute({"close": close, "volume": np.ones(50)})
         valid = result.values[~np.isnan(result.values)]
-        assert len(valid) > 0 and valid[-1] < 50
+        assert len(valid) > 0
+        assert valid[-1] < 50
 
     def test_too_short(self) -> None:
         close = np.array([100.0] * 10)
@@ -218,7 +221,8 @@ class TestADX:
         adx = ADX()
         result = adx.compute(sample_data)
         valid = result.values[~np.isnan(result.values)]
-        assert np.all(valid >= 0) and np.all(valid <= 100)
+        assert np.all(valid >= 0)
+        assert np.all(valid <= 100)
 
     def test_too_short(self) -> None:
         n = 10
@@ -242,7 +246,8 @@ class TestStochasticOscillator:
         stoch = StochasticOscillator()
         result = stoch.compute(sample_data)
         valid = result.values[~np.isnan(result.values)]
-        assert np.all(valid >= 0) and np.all(valid <= 100)
+        assert np.all(valid >= 0)
+        assert np.all(valid <= 100)
 
 
 class TestATR:

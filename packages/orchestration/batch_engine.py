@@ -111,7 +111,7 @@ class BatchEngine:
 
     def _get_memory_mb(self) -> float:
         """Gibt den aktuellen Speicherverbrauch in MB zurueck."""
-        current, peak = tracemalloc.get_traced_memory()
+        _current, peak = tracemalloc.get_traced_memory()
         return peak / (1024 * 1024)
 
     def _compute_features(

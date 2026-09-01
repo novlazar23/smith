@@ -16,7 +16,7 @@ class TestPipelineStage:
     """Testet PipelineStage Enum."""
 
     def test_all_stages_present(self) -> None:
-        stages = [s for s in PipelineStage]
+        stages = list(PipelineStage)
         assert len(stages) == 7
 
     def test_stage_values(self) -> None:

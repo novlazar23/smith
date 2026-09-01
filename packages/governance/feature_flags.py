@@ -59,7 +59,7 @@ class FeatureFlags:
 
         return self._flags.get(flag, False)
 
-    def set_flag(self, flag: str, enabled: bool) -> None:
+    def set_flag(self, flag: str, *, enabled: bool) -> None:
         """Setzt ein Feature-Flag und protokolliert die Änderung."""
         old_value = self._flags.get(flag, False)
         if old_value == enabled:
@@ -85,6 +85,7 @@ class FeatureFlags:
     def log_flag_change(
         self,
         flag: str,
+        *,
         old_value: bool,
         new_value: bool,
         actor: str,

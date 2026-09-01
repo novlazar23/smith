@@ -68,7 +68,8 @@ class TestTimestampOrder:
 
     def test_aggregation_with_gaps_preserves_order(self) -> None:
         """Candles with intentional gaps should still produce valid aggregates."""
-        candles = _raw_candles(10) + [
+        candles = [
+            *_raw_candles(10),
             {
                 "open_time": _make_candle_ts(100),
                 "close_time": _make_candle_ts(101),

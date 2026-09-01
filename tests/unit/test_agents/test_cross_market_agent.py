@@ -140,7 +140,7 @@ class TestValidation:
         with pytest.raises(ValueError, match="Missing required"):
             CrossMarketAgent().analyze({})
 
-    def test_news_only_valid(self, news_data) -> None:
+    def test_news_only_valid(self, news_data: dict) -> None:
         report = CrossMarketAgent().analyze(news_data)
         assert report is not None
         assert report.agent_id == "cross_market"
@@ -261,7 +261,7 @@ class TestScalarAnalysis:
         assert len(evidence) == 1
         assert "neutral" in evidence[0].value
 
-    def test_all_scalar_evidence_count(self, full_market_data) -> None:
+    def test_all_scalar_evidence_count(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         assert len(report.evidence) == 7
 
@@ -333,19 +333,19 @@ class TestCorrelation:
 # ── Signal Aggregation ──────────────────────────────────────────────────
 
 class TestSignalAggregation:
-    def test_bullish_all_up(self, bullish_data) -> None:
+    def test_bullish_all_up(self, bullish_data: dict) -> None:
         report = CrossMarketAgent().analyze(bullish_data)
         assert report.probabilities["up"] > 0.5
 
-    def test_bearish_all_down(self, bearish_data) -> None:
+    def test_bearish_all_down(self, bearish_data: dict) -> None:
         report = CrossMarketAgent().analyze(bearish_data)
         assert report.probabilities["down"] > 0.5
 
-    def test_conflicting_probabilities(self, conflicting_data) -> None:
+    def test_conflicting_probabilities(self, conflicting_data: dict) -> None:
         report = CrossMarketAgent().analyze(conflicting_data)
         assert report.probabilities["range"] >= 0.15
 
-    def test_probability_sum_close_to_1(self, full_market_data) -> None:
+    def test_probability_sum_close_to_1(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         total = (
             report.probabilities["up"]
@@ -354,22 +354,22 @@ class TestSignalAggregation:
         )
         assert abs(total - 1.0) < 0.0001
 
-    def test_probability_sum_scalar_only(self, scalar_only_data) -> None:
+    def test_probability_sum_scalar_only(self, scalar_only_data: dict) -> None:
         report = CrossMarketAgent().analyze(scalar_only_data)
         total = sum(report.probabilities.values())
         assert abs(total - 1.0) < 0.0001
 
-    def test_probability_sum_bullish(self, bullish_data) -> None:
+    def test_probability_sum_bullish(self, bullish_data: dict) -> None:
         report = CrossMarketAgent().analyze(bullish_data)
         total = sum(report.probabilities.values())
         assert abs(total - 1.0) < 0.0001
 
-    def test_probability_sum_bearish(self, bearish_data) -> None:
+    def test_probability_sum_bearish(self, bearish_data: dict) -> None:
         report = CrossMarketAgent().analyze(bearish_data)
         total = sum(report.probabilities.values())
         assert abs(total - 1.0) < 0.0001
 
-    def test_probability_sum_conflicting(self, conflicting_data) -> None:
+    def test_probability_sum_conflicting(self, conflicting_data: dict) -> None:
         report = CrossMarketAgent().analyze(conflicting_data)
         total = sum(report.probabilities.values())
         assert abs(total - 1.0) < 0.0001
@@ -387,15 +387,15 @@ class TestSignalAggregation:
         report = CrossMarketAgent().analyze(data)
         assert report.probabilities["range"] > 0.30
 
-    def test_probability_up_positive(self, bullish_data) -> None:
+    def test_probability_up_positive(self, bullish_data: dict) -> None:
         report = CrossMarketAgent().analyze(bullish_data)
         assert report.probabilities["up"] > 0
 
-    def test_probability_down_positive(self, bearish_data) -> None:
+    def test_probability_down_positive(self, bearish_data: dict) -> None:
         report = CrossMarketAgent().analyze(bearish_data)
         assert report.probabilities["down"] > 0
 
-    def test_probability_range_positive(self, full_market_data) -> None:
+    def test_probability_range_positive(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         assert report.probabilities["range"] > 0
 
@@ -403,23 +403,23 @@ class TestSignalAggregation:
 # ── Evidence ─────────────────────────────────────────────────────────────
 
 class TestEvidence:
-    def test_evidence_min_1(self, full_market_data) -> None:
+    def test_evidence_min_1(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         assert len(report.evidence) >= 1
 
-    def test_evidence_min_1_scalar_only(self, scalar_only_data) -> None:
+    def test_evidence_min_1_scalar_only(self, scalar_only_data: dict) -> None:
         report = CrossMarketAgent().analyze(scalar_only_data)
         assert len(report.evidence) >= 1
 
-    def test_evidence_min_1_bullish(self, bullish_data) -> None:
+    def test_evidence_min_1_bullish(self, bullish_data: dict) -> None:
         report = CrossMarketAgent().analyze(bullish_data)
         assert len(report.evidence) >= 1
 
-    def test_evidence_min_1_bearish(self, bearish_data) -> None:
+    def test_evidence_min_1_bearish(self, bearish_data: dict) -> None:
         report = CrossMarketAgent().analyze(bearish_data)
         assert len(report.evidence) >= 1
 
-    def test_evidence_min_1_conflicting(self, conflicting_data) -> None:
+    def test_evidence_min_1_conflicting(self, conflicting_data: dict) -> None:
         report = CrossMarketAgent().analyze(conflicting_data)
         assert len(report.evidence) >= 1
 
@@ -429,12 +429,12 @@ class TestEvidence:
         evidence = [e for e in report.evidence if "btc_dominance" in e.reference]
         assert "corr=" in evidence[0].value
 
-    def test_evidence_time_referenced(self, full_market_data) -> None:
+    def test_evidence_time_referenced(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         for e in report.evidence:
             assert "t=" in e.value
 
-    def test_evidence_market_display_names(self, full_market_data) -> None:
+    def test_evidence_market_display_names(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         values = [e.value for e in report.evidence]
         full_str = " ".join(values)
@@ -444,27 +444,27 @@ class TestEvidence:
         assert "Nasdaq" in full_str
         assert "DXY" in full_str or "USD Index" in full_str
 
-    def test_evidence_has_direction(self, full_market_data) -> None:
+    def test_evidence_has_direction(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         for e in report.evidence:
             assert any(d in e.value for d in ["up", "down", "neutral"])
 
-    def test_evidence_has_magnitude(self, full_market_data) -> None:
+    def test_evidence_has_magnitude(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         for e in report.evidence:
             assert "mag=" in e.value
 
-    def test_evidence_has_weight(self, full_market_data) -> None:
+    def test_evidence_has_weight(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         for e in report.evidence:
             assert "w=" in e.value
 
-    def test_evidence_reference_format(self, full_market_data) -> None:
+    def test_evidence_reference_format(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         for e in report.evidence:
             assert e.reference.startswith("cross_market:")
 
-    def test_evidence_no_array_no_correlation(self, scalar_only_data) -> None:
+    def test_evidence_no_array_no_correlation(self, scalar_only_data: dict) -> None:
         report = CrossMarketAgent().analyze(scalar_only_data)
         for e in report.evidence:
             if "no_market_data" not in e.reference:
@@ -479,23 +479,23 @@ class TestEvidence:
 # ── Counter Evidence ─────────────────────────────────────────────────────
 
 class TestCounterEvidence:
-    def test_counter_evidence_required(self, full_market_data) -> None:
+    def test_counter_evidence_required(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         assert len(report.counter_evidence) >= 1
 
-    def test_counter_evidence_scalar_only(self, scalar_only_data) -> None:
+    def test_counter_evidence_scalar_only(self, scalar_only_data: dict) -> None:
         report = CrossMarketAgent().analyze(scalar_only_data)
         assert len(report.counter_evidence) >= 1
 
-    def test_counter_evidence_bullish(self, bullish_data) -> None:
+    def test_counter_evidence_bullish(self, bullish_data: dict) -> None:
         report = CrossMarketAgent().analyze(bullish_data)
         assert len(report.counter_evidence) >= 1
 
-    def test_counter_evidence_bearish(self, bearish_data) -> None:
+    def test_counter_evidence_bearish(self, bearish_data: dict) -> None:
         report = CrossMarketAgent().analyze(bearish_data)
         assert len(report.counter_evidence) >= 1
 
-    def test_counter_evidence_conflicting(self, conflicting_data) -> None:
+    def test_counter_evidence_conflicting(self, conflicting_data: dict) -> None:
         report = CrossMarketAgent().analyze(conflicting_data)
         counter = report.counter_evidence[0]
         assert "conflict" in counter.reference.lower() or "conflicting" in counter.value.lower()
@@ -526,16 +526,16 @@ class TestCounterEvidence:
 # ── Invalidation ─────────────────────────────────────────────────────────
 
 class TestInvalidations:
-    def test_invalidations_present(self, full_market_data) -> None:
+    def test_invalidations_present(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         assert len(report.invalidations) >= 1
 
-    def test_invalidations_no_data_condition(self, full_market_data) -> None:
+    def test_invalidations_no_data_condition(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         conditions = [inv.condition for inv in report.invalidations]
         assert any("No cross-market data" in c for c in conditions)
 
-    def test_invalidations_staleness_condition(self, full_market_data) -> None:
+    def test_invalidations_staleness_condition(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         conditions = [inv.condition for inv in report.invalidations]
         assert any("stale" in c.lower() or "24h" in c for c in conditions)
@@ -554,19 +554,19 @@ class TestInvalidations:
 # ── Hypothesis ───────────────────────────────────────────────────────────
 
 class TestHypothesis:
-    def test_hypothesis_non_empty(self, full_market_data) -> None:
+    def test_hypothesis_non_empty(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         assert len(report.hypothesis) > 0
 
-    def test_hypothesis_mentions_markets(self, full_market_data) -> None:
+    def test_hypothesis_mentions_markets(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         assert "market" in report.hypothesis.lower() or "7" in report.hypothesis
 
-    def test_hypothesis_mentions_bearish_bullish(self, bullish_data) -> None:
+    def test_hypothesis_mentions_bearish_bullish(self, bullish_data: dict) -> None:
         report = CrossMarketAgent().analyze(bullish_data)
         assert "bullish" in report.hypothesis.lower() or "bearish" in report.hypothesis.lower()
 
-    def test_hypothesis_no_data(self, news_data) -> None:
+    def test_hypothesis_no_data(self, news_data: dict) -> None:
         report = CrossMarketAgent().analyze(news_data)
         assert "no cross-market data" in report.hypothesis.lower() or "news" in report.hypothesis.lower()
 
@@ -574,23 +574,25 @@ class TestHypothesis:
 # ── Confidence ───────────────────────────────────────────────────────────
 
 class TestConfidence:
-    def test_confidence_positive(self, full_market_data) -> None:
+    def test_confidence_positive(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         assert report.raw_confidence > 0
 
-    def test_confidence_max_capped_at_0_9(self, full_market_data) -> None:
+    def test_confidence_max_capped_at_0_9(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         assert report.raw_confidence <= 0.9
 
-    def test_confidence_high_agreement(self, bullish_data) -> None:
+    def test_confidence_high_agreement(self, bullish_data: dict) -> None:
         report = CrossMarketAgent().analyze(bullish_data)
         assert report.raw_confidence > 0.5
 
-    def test_confidence_low_agreement(self, conflicting_data) -> None:
+    def test_confidence_low_agreement(self, conflicting_data: dict) -> None:
         report = CrossMarketAgent().analyze(conflicting_data)
         assert report.raw_confidence < 0.7
 
-    def test_confidence_with_correlation_coverage(self, scalar_only_data, full_market_data) -> None:
+    def test_confidence_with_correlation_coverage(
+        self, scalar_only_data: dict, full_market_data: dict
+    ) -> None:
         report_no_corr = CrossMarketAgent().analyze(scalar_only_data)
         report_with_corr = CrossMarketAgent().analyze(full_market_data)
         assert report_with_corr.raw_confidence >= report_no_corr.raw_confidence
@@ -604,7 +606,7 @@ class TestConfidence:
 # ── Report Structure ─────────────────────────────────────────────────────
 
 class TestReportStructure:
-    def test_report_has_all_fields(self, full_market_data) -> None:
+    def test_report_has_all_fields(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         assert report.report_id is not None
         assert report.run_id is not None
@@ -622,32 +624,32 @@ class TestReportStructure:
         assert report.raw_confidence is not None
         assert report.as_of is not None
 
-    def test_report_as_of_datetime(self, full_market_data) -> None:
+    def test_report_as_of_datetime(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         assert isinstance(report.as_of, datetime.datetime)
 
-    def test_report_agent_id_match(self, full_market_data) -> None:
+    def test_report_agent_id_match(self, full_market_data: dict) -> None:
         a = CrossMarketAgent()
         report = a.analyze(full_market_data)
         assert report.agent_id == a.agent_id
 
-    def test_report_agent_version(self, full_market_data) -> None:
+    def test_report_agent_version(self, full_market_data: dict) -> None:
         a = CrossMarketAgent()
         report = a.analyze(full_market_data)
         assert report.agent_version == a.config.agent_version
 
-    def test_report_status(self, full_market_data) -> None:
+    def test_report_status(self, full_market_data: dict) -> None:
         a = CrossMarketAgent()
         report = a.analyze(full_market_data)
         assert report.status == a.config.status
 
-    def test_report_run_id_unique(self, full_market_data, bullish_data) -> None:
+    def test_report_run_id_unique(self, full_market_data: dict, bullish_data: dict) -> None:
         a = CrossMarketAgent()
         report1 = a.analyze(full_market_data)
         report2 = a.analyze(bullish_data)
         assert report1.run_id != report2.run_id
 
-    def test_report_agent_version_format(self, full_market_data) -> None:
+    def test_report_agent_version_format(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
         assert isinstance(report.agent_version, str)
         assert "." in report.agent_version
@@ -773,7 +775,7 @@ class TestSignalWeights:
 # ── Integration ──────────────────────────────────────────────────────────
 
 class TestIntegration:
-    def test_full_pipeline(self, full_market_data) -> None:
+    def test_full_pipeline(self, full_market_data: dict) -> None:
         report = CrossMarketAgent().analyze(full_market_data)
 
         assert isinstance(report, AgentReport)

@@ -110,7 +110,7 @@ class TestValidation:
 # ── Score computation ─────────────────────────────────────────────────────
 
 class TestAnomalyScore:
-    def test_normal_data_low_anomaly_score(self, normal_ohlcv) -> None:
+    def test_normal_data_low_anomaly_score(self, normal_ohlcv: dict) -> None:
         """Normal data should not produce high anomaly scores."""
         agent = AnomalyAgent(threshold=0.6)
         report = agent.analyze(normal_ohlcv)
@@ -119,7 +119,7 @@ class TestAnomalyScore:
         assert report.raw_confidence >= 0.0
         assert isinstance(report.raw_confidence, float)
 
-    def test_volume_spike_elevates_anomaly_score(self, volume_spike_data) -> None:
+    def test_volume_spike_elevates_anomaly_score(self, volume_spike_data: dict) -> None:
         """Large volume spike should produce elevated anomaly score."""
         agent = AnomalyAgent(threshold=0.3)
         report = agent.analyze(volume_spike_data)
@@ -133,7 +133,7 @@ class TestAnomalyScore:
 
 
 class TestSpoofingScore:
-    def test_spoofing_score_normal(self, normal_ohlcv) -> None:
+    def test_spoofing_score_normal(self, normal_ohlcv: dict) -> None:
         """Normal data should have non-negative spoofing score."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -143,7 +143,7 @@ class TestSpoofingScore:
         assert len(spoofing_evidence) >= 1
         assert any(float(v.split(":")[1].split()[0]) >= 0.0 for e in spoofing_evidence for v in [e.value])
 
-    def test_spoofing_score_float(self, normal_ohlcv) -> None:
+    def test_spoofing_score_float(self, normal_ohlcv: dict) -> None:
         """All scores must be native Python floats."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -154,7 +154,7 @@ class TestSpoofingScore:
 
 
 class TestLiquidityScore:
-    def test_liquidity_score_non_negative(self, normal_ohlcv) -> None:
+    def test_liquidity_score_non_negative(self, normal_ohlcv: dict) -> None:
         """Liquidity score should be non-negative."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -163,7 +163,7 @@ class TestLiquidityScore:
 
 
 class TestCrossVenueScore:
-    def test_cross_venue_score_float(self, normal_ohlcv) -> None:
+    def test_cross_venue_score_float(self, normal_ohlcv: dict) -> None:
         """Cross-venue score must be a native float."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -174,7 +174,7 @@ class TestCrossVenueScore:
 # ── Thresholding ──────────────────────────────────────────────────────────
 
 class TestThresholding:
-    def test_conservative_scoring(self, normal_ohlcv) -> None:
+    def test_conservative_scoring(self, normal_ohlcv: dict) -> None:
         """Normal data should not flag anomalies at 0.6 threshold."""
         agent = AnomalyAgent(threshold=0.6)
         report = agent.analyze(normal_ohlcv)
@@ -182,7 +182,7 @@ class TestThresholding:
         # May have flagged if data is pathological, but shouldn't have many
         assert len(flagged) < 3
 
-    def test_higher_threshold_stricter(self, normal_ohlcv) -> None:
+    def test_higher_threshold_stricter(self, normal_ohlcv: dict) -> None:
         """Higher threshold should flag fewer anomalies."""
         agent = AnomalyAgent(threshold=0.9)
         report = agent.analyze(normal_ohlcv)
@@ -194,35 +194,35 @@ class TestThresholding:
 # ── Probability computation ───────────────────────────────────────────────
 
 class TestProbabilities:
-    def test_probabilities_sum_to_one(self, normal_ohlcv) -> None:
+    def test_probabilities_sum_to_one(self, normal_ohlcv: dict) -> None:
         """Probabilities must sum to 1.0 ± 0.0001."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         total = sum(report.probabilities.values())
         assert abs(total - 1.0) <= 0.0001
 
-    def test_probabilities_all_non_negative(self, normal_ohlcv) -> None:
+    def test_probabilities_all_non_negative(self, normal_ohlcv: dict) -> None:
         """All probabilities must be >= 0."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         for v in report.probabilities.values():
             assert v >= 0.0
 
-    def test_probabilities_all_native_float(self, normal_ohlcv) -> None:
+    def test_probabilities_all_native_float(self, normal_ohlcv: dict) -> None:
         """Probabilities must be native Python floats, not np.float64."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         for k, v in report.probabilities.items():
             assert isinstance(v, float), f"{k} is {type(v)}, expected float"
 
-    def test_no_data_uniform_distribution(self, short_ohlcv) -> None:
+    def test_no_data_uniform_distribution(self, short_ohlcv: dict) -> None:
         """Short data should produce uniform probabilities."""
         agent = AnomalyAgent()
         report = agent.analyze(short_ohlcv)
         total = sum(report.probabilities.values())
         assert abs(total - 1.0) <= 0.0001
 
-    def test_up_down_range_keys_present(self, normal_ohlcv) -> None:
+    def test_up_down_range_keys_present(self, normal_ohlcv: dict) -> None:
         """Report must have up, down, and range keys."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -234,13 +234,13 @@ class TestProbabilities:
 # ── Evidence ──────────────────────────────────────────────────────────────
 
 class TestEvidence:
-    def test_evidence_min_one(self, normal_ohlcv) -> None:
+    def test_evidence_min_one(self, normal_ohlcv: dict) -> None:
         """Must have at least one evidence entry (AT-004)."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         assert len(report.evidence) >= 1
 
-    def test_evidence_all_scored_not_claimed(self, normal_ohlcv) -> None:
+    def test_evidence_all_scored_not_claimed(self, normal_ohlcv: dict) -> None:
         """Evidence must reference scores, not definitive statements."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -248,7 +248,7 @@ class TestEvidence:
             # Evidence value should reference a score or data point
             assert "score" in e.value.lower() or "t=" in e.value or "bar" in e.value.lower()
 
-    def test_evidence_has_correct_structure(self, normal_ohlcv) -> None:
+    def test_evidence_has_correct_structure(self, normal_ohlcv: dict) -> None:
         """Each evidence must have reference, feature, value, direction, relevance."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -259,7 +259,7 @@ class TestEvidence:
             assert e.direction in ("positive", "negative", "neutral")
             assert 0.0 <= e.relevance <= 1.0
 
-    def test_evidence_count_for_normal_data(self, normal_ohlcv) -> None:
+    def test_evidence_count_for_normal_data(self, normal_ohlcv: dict) -> None:
         """Normal data should have evidence for all 4 anomaly types."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -269,24 +269,24 @@ class TestEvidence:
 
 
 class TestEvidenceTypes:
-    def test_anomaly_evidence(self, normal_ohlcv) -> None:
+    def test_anomaly_evidence(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         assert any(e.feature == "anomaly" for e in report.evidence)
 
-    def test_spoofing_evidence(self, normal_ohlcv) -> None:
+    def test_spoofing_evidence(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         features = {e.feature for e in report.evidence}
         assert "spoofing_like" in features
 
-    def test_liquidity_evidence(self, normal_ohlcv) -> None:
+    def test_liquidity_evidence(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         features = {e.feature for e in report.evidence}
         assert "liquidity_withdrawal" in features
 
-    def test_cross_venue_evidence(self, normal_ohlcv) -> None:
+    def test_cross_venue_evidence(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         features = {e.feature for e in report.evidence}
@@ -296,13 +296,13 @@ class TestEvidenceTypes:
 # ── Counter-evidence ──────────────────────────────────────────────────────
 
 class TestCounterEvidence:
-    def test_counter_evidence_present(self, normal_ohlcv) -> None:
+    def test_counter_evidence_present(self, normal_ohlcv: dict) -> None:
         """Counter-evidence must be present (spec requirement)."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         assert len(report.counter_evidence) >= 1
 
-    def test_counter_evidence_alternative_explanations(self, volume_spike_data) -> None:
+    def test_counter_evidence_alternative_explanations(self, volume_spike_data: dict) -> None:
         """With flagged anomalies, counter-evidence provides alternatives."""
         agent = AnomalyAgent(threshold=0.3)
         report = agent.analyze(volume_spike_data)
@@ -312,7 +312,7 @@ class TestCounterEvidence:
             assert len(ce.value) > 0
             assert ce.direction == "negative"
 
-    def test_counter_evidence_normal_data(self, normal_ohlcv) -> None:
+    def test_counter_evidence_normal_data(self, normal_ohlcv: dict) -> None:
         """Normal data counter-evidence confirms normal conditions."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -321,7 +321,7 @@ class TestCounterEvidence:
         any_ce = " ".join(ce.value.lower() for ce in report.counter_evidence)
         assert "normal" in any_ce or "insufficient" in any_ce or "no anomaly" in any_ce
 
-    def test_counter_evidence_not_empty_list(self, normal_ohlcv) -> None:
+    def test_counter_evidence_not_empty_list(self, normal_ohlcv: dict) -> None:
         """Counter-evidence must never be an empty list."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -331,22 +331,22 @@ class TestCounterEvidence:
 # ── Invalidations ─────────────────────────────────────────────────────────
 
 class TestInvalidations:
-    def test_invalidation_regime_change(self, normal_ohlcv) -> None:
+    def test_invalidation_regime_change(self, normal_ohlcv: dict) -> None:
         report = AnomalyAgent().analyze(normal_ohlcv)
         conditions = [i.condition for i in report.invalidations]
         assert any("regime" in c.lower() for c in conditions)
 
-    def test_invalidation_data_quality(self, normal_ohlcv) -> None:
+    def test_invalidation_data_quality(self, normal_ohlcv: dict) -> None:
         report = AnomalyAgent().analyze(normal_ohlcv)
         conditions = [i.condition for i in report.invalidations]
         assert any("data quality" in c.lower() or "quality" in c.lower() for c in conditions)
 
-    def test_invalidation_sample_size(self, normal_ohlcv) -> None:
+    def test_invalidation_sample_size(self, normal_ohlcv: dict) -> None:
         report = AnomalyAgent().analyze(normal_ohlcv)
         indicators = [i.indicator for i in report.invalidations]
         assert "sample_size" in indicators
 
-    def test_invalidation_structure(self, normal_ohlcv) -> None:
+    def test_invalidation_structure(self, normal_ohlcv: dict) -> None:
         report = AnomalyAgent().analyze(normal_ohlcv)
         for inv in report.invalidations:
             assert len(inv.condition) > 0
@@ -358,17 +358,17 @@ class TestInvalidations:
 # ── Hypothesis ────────────────────────────────────────────────────────────
 
 class TestHypothesis:
-    def test_hypothesis_no_anomaly_normal_data(self, normal_ohlcv) -> None:
+    def test_hypothesis_no_anomaly_normal_data(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         assert "no anomalies" in report.hypothesis.lower() or "below threshold" in report.hypothesis.lower()
 
-    def test_hypothesis_scores_included(self, volume_spike_data) -> None:
+    def test_hypothesis_scores_included(self, volume_spike_data: dict) -> None:
         agent = AnomalyAgent(threshold=0.3)
         report = agent.analyze(volume_spike_data)
         assert "score" in report.hypothesis.lower()
 
-    def test_hypothesis_short_data(self, short_ohlcv) -> None:
+    def test_hypothesis_short_data(self, short_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         report = agent.analyze(short_ohlcv)
         assert "insufficient" in report.hypothesis.lower() or "minimum" in report.hypothesis.lower()
@@ -377,24 +377,24 @@ class TestHypothesis:
 # ── Confidence ────────────────────────────────────────────────────────────
 
 class TestConfidence:
-    def test_confidence_in_valid_range(self, normal_ohlcv) -> None:
+    def test_confidence_in_valid_range(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         assert 0.1 <= report.raw_confidence <= 0.9
 
-    def test_confidence_is_native_float(self, normal_ohlcv) -> None:
+    def test_confidence_is_native_float(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         assert isinstance(report.raw_confidence, float)
 
-    def test_confidence_low_for_normal_data(self, normal_ohlcv) -> None:
+    def test_confidence_low_for_normal_data(self, normal_ohlcv: dict) -> None:
         """Normal data should have low confidence in anomalies."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         # Low confidence because no anomalies flagged
         assert report.raw_confidence < 0.5
 
-    def test_confidence_higher_with_flagged(self, volume_spike_data) -> None:
+    def test_confidence_higher_with_flagged(self, volume_spike_data: dict) -> None:
         """More anomaly signals should increase confidence."""
         agent = AnomalyAgent(threshold=0.3)
         report = agent.analyze(volume_spike_data)
@@ -404,39 +404,39 @@ class TestConfidence:
 # ── Report Structure ──────────────────────────────────────────────────────
 
 class TestReportStructure:
-    def test_report_has_required_fields(self, normal_ohlcv) -> None:
+    def test_report_has_required_fields(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         assert isinstance(report, AgentReport)
         assert report.agent_id == "anomaly"
         assert report.agent_version == "0.1.0"
 
-    def test_report_as_of_datetime(self, normal_ohlcv) -> None:
+    def test_report_as_of_datetime(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         before = datetime.datetime.now()
         report = agent.analyze(normal_ohlcv)
         after = datetime.datetime.now()
         assert before <= report.as_of <= after
 
-    def test_report_status_shadow(self, normal_ohlcv) -> None:
+    def test_report_status_shadow(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         assert report.status == "shadow"
 
-    def test_report_run_id_unique(self, normal_ohlcv) -> None:
+    def test_report_run_id_unique(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         r1 = agent.analyze(normal_ohlcv)
         r2 = agent.analyze(normal_ohlcv)
         assert r1.run_id != r2.run_id
         assert r1.report_id != r2.report_id
 
-    def test_report_frozen(self, normal_ohlcv) -> None:
+    def test_report_frozen(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         with pytest.raises((ValueError, TypeError)):
             report.__setattr__("agent_id", "changed")
 
-    def test_agent_id_anomaly(self, normal_ohlcv) -> None:
+    def test_agent_id_anomaly(self, normal_ohlcv: dict) -> None:
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         assert report.agent_id == "anomaly"
@@ -531,7 +531,7 @@ class TestEdgeCases:
 # ── Score Weights ─────────────────────────────────────────────────────────
 
 class TestScoreWeights:
-    def test_anomaly_type_score_range(self, normal_ohlcv) -> None:
+    def test_anomaly_type_score_range(self, normal_ohlcv: dict) -> None:
         """Each anomaly type score must be in [0.0, 1.0]."""
         agent = AnomalyAgent()
         for evidence in agent.analyze(normal_ohlcv).evidence:
@@ -540,7 +540,7 @@ class TestScoreWeights:
                 val = float(val_str)
                 assert 0.0 <= val <= 1.0, f"{evidence.feature} score {val} out of range"
 
-    def test_all_four_types_reported(self, normal_ohlcv) -> None:
+    def test_all_four_types_reported(self, normal_ohlcv: dict) -> None:
         """All four anomaly types should appear in evidence."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -554,7 +554,7 @@ class TestScoreWeights:
 # ── Integration ───────────────────────────────────────────────────────────
 
 class TestIntegration:
-    def test_full_pipeline_normal(self, normal_ohlcv) -> None:
+    def test_full_pipeline_normal(self, normal_ohlcv: dict) -> None:
         """Full pipeline: validation → scores → report."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -567,7 +567,7 @@ class TestIntegration:
         assert abs(sum(report.probabilities.values()) - 1.0) <= 0.0001
         assert 0.0 <= report.raw_confidence <= 0.9
 
-    def test_full_pipeline_with_spike(self, volume_spike_data) -> None:
+    def test_full_pipeline_with_spike(self, volume_spike_data: dict) -> None:
         """Full pipeline with anomalous data."""
         agent = AnomalyAgent(threshold=0.3)
         report = agent.analyze(volume_spike_data)
@@ -582,7 +582,7 @@ class TestIntegration:
         for ce in report.counter_evidence:
             assert ce.direction == "negative"
 
-    def test_full_pipeline_custom_threshold(self, normal_ohlcv) -> None:
+    def test_full_pipeline_custom_threshold(self, normal_ohlcv: dict) -> None:
         """Custom threshold changes sensitivity."""
         agent_low = AnomalyAgent(threshold=0.9)
         agent_high = AnomalyAgent(threshold=0.3)
@@ -600,7 +600,7 @@ class TestIntegration:
 # ── Spec Compliance ───────────────────────────────────────────────────────
 
 class TestSpecCompliance:
-    def test_only_scores_no_factual_claims(self, normal_ohlcv) -> None:
+    def test_only_scores_no_factual_claims(self, normal_ohlcv: dict) -> None:
         """Evidence must be phrased as scores, not definitive statements."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
@@ -613,7 +613,7 @@ class TestSpecCompliance:
                 f"Evidence {e.reference} makes a factual claim: {e.value[:80]}"
             )
 
-    def test_probabilities_sum_to_one(self, normal_ohlcv) -> None:
+    def test_probabilities_sum_to_one(self, normal_ohlcv: dict) -> None:
         """AT-005: Probabilities must sum to 1.0 ± 0.0001."""
         agent = AnomalyAgent()
         for _ in range(10):
@@ -621,25 +621,25 @@ class TestSpecCompliance:
             total = sum(report.probabilities.values())
             assert abs(total - 1.0) <= 0.0001
 
-    def test_counter_evidence_required(self, normal_ohlcv) -> None:
+    def test_counter_evidence_required(self, normal_ohlcv: dict) -> None:
         """Spec: Counter-hypothesis required."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         assert len(report.counter_evidence) >= 1
 
-    def test_evidence_min_one(self, normal_ohlcv) -> None:
+    def test_evidence_min_one(self, normal_ohlcv: dict) -> None:
         """AT-004: At least one evidence required."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         assert len(report.evidence) >= 1
 
-    def test_initial_status_shadow(self, normal_ohlcv) -> None:
+    def test_initial_status_shadow(self, normal_ohlcv: dict) -> None:
         """Spec: Initial status must be SHADOW."""
         agent = AnomalyAgent()
         report = agent.analyze(normal_ohlcv)
         assert report.status == "shadow"
 
-    def test_conservative_scoring(self, normal_ohlcv) -> None:
+    def test_conservative_scoring(self, normal_ohlcv: dict) -> None:
         """Spec: Conservative scoring — only flag when score > 0.6."""
         agent = AnomalyAgent(threshold=0.6)
         report = agent.analyze(normal_ohlcv)

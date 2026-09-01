@@ -14,7 +14,7 @@ import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from packages.config.instrument_pool import InstrumentPool
@@ -33,6 +33,9 @@ try:
 except ImportError:
     HTTPException = None  # type: ignore[assignment]
     http_status = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:
+    from apps.api.routers.live_signal import LiveSignalRequest
 
 
 async def analyze_endpoint(request: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -244,7 +247,7 @@ async def health_endpoint() -> dict[str, Any]:
     }
 
 
-async def live_signal_endpoint(request: Any) -> dict[str, Any]:
+async def live_signal_endpoint(request: LiveSignalRequest) -> dict[str, Any]:
     """Generiert einen Live-Signal-Vorschlag ohne reale Order-Ausführung.
 
     Prüft das Feature-Flag und generiert ein Order-Vorschlags-Dictionary.

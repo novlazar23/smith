@@ -53,7 +53,7 @@ class TestQuarantineConfig:
 class TestQuarantineEngineChecks:
     """Testet einzelne Quarantäne-Kriterien."""
 
-    def _engine(self, **overrides) -> QuarantineEngine:
+    def _engine(self, **overrides: object) -> QuarantineEngine:
         cfg = QuarantineConfig(**overrides)
         return QuarantineEngine(cfg)
 
@@ -73,14 +73,14 @@ class TestQuarantineEngineChecks:
 
     def test_calibration_regression_threshold_custom(self) -> None:
         engine = self._engine(calibration_regression_threshold=0.30)
-        needed, events = engine.check("a1", calibration_score=0.55, prev_calibration_score=0.75)
+        needed, _events = engine.check("a1", calibration_score=0.55, prev_calibration_score=0.75)
         assert needed is False
 
     # --- DRIFT_DETECTED ---
 
     def test_no_drift_when_below_threshold(self) -> None:
         engine = self._engine()
-        needed, events = engine.check("a1", drift_score=0.15)
+        needed, _events = engine.check("a1", drift_score=0.15)
         assert needed is False
 
     def test_drift_triggers_when_above_threshold(self) -> None:
@@ -91,14 +91,14 @@ class TestQuarantineEngineChecks:
 
     def test_drift_custom_threshold(self) -> None:
         engine = self._engine(drift_threshold=0.30)
-        needed, events = engine.check("a1", drift_score=0.25)
+        needed, _events = engine.check("a1", drift_score=0.25)
         assert needed is False
 
     # --- MISSING_EVIDENCE ---
 
     def test_no_missing_evidence_when_sufficient(self) -> None:
         engine = self._engine()
-        needed, events = engine.check("a1", evidence_count=5)
+        needed, _events = engine.check("a1", evidence_count=5)
         assert needed is False
 
     def test_missing_evidence_triggers(self) -> None:
@@ -110,7 +110,7 @@ class TestQuarantineEngineChecks:
 
     def test_missing_evidence_custom_threshold(self) -> None:
         engine = self._engine(min_evidence_count=10)
-        needed, events = engine.check("a1", evidence_count=5)
+        _needed, events = engine.check("a1", evidence_count=5)
         assert any(e.reason == QuarantineReason.MISSING_EVIDENCE for e in events)
 
     # --- DISRUPTED_SOURCE ---
@@ -138,7 +138,7 @@ class TestQuarantineEngineChecks:
 
     def test_source_connected_true_no_gap_check(self) -> None:
         engine = self._engine()
-        needed, events = engine.check("a1", source_connected=True)
+        needed, _events = engine.check("a1", source_connected=True)
         assert needed is False
 
     # --- UNVERIFIED_DISTRIBUTION ---
@@ -151,12 +151,12 @@ class TestQuarantineEngineChecks:
 
     def test_verified_distribution_no_trigger(self) -> None:
         engine = self._engine()
-        needed, events = engine.check("a1", distribution_verified=True)
+        needed, _events = engine.check("a1", distribution_verified=True)
         assert needed is False
 
     def test_distribution_not_specified_no_trigger(self) -> None:
         engine = self._engine()
-        needed, events = engine.check("a1")
+        needed, _events = engine.check("a1")
         assert needed is False
 
     # --- TIMEOUT ---
@@ -169,12 +169,12 @@ class TestQuarantineEngineChecks:
 
     def test_timeout_not_triggers(self) -> None:
         engine = self._engine()
-        needed, events = engine.check("a1", age_days=10)
+        needed, _events = engine.check("a1", age_days=10)
         assert needed is False
 
     def test_timeout_custom_threshold(self) -> None:
         engine = self._engine(max_age_days=20)
-        needed, events = engine.check("a1", age_days=25)
+        _needed, events = engine.check("a1", age_days=25)
         assert any(e.reason == QuarantineReason.TIMEOUT for e in events)
 
     # --- NO CHECKS SPECIFIED ---
@@ -189,7 +189,7 @@ class TestQuarantineEngineChecks:
 class TestQuarantineEngineCombined:
     """Testet kombinierte Szenarien und Metriken."""
 
-    def _engine(self, **overrides) -> QuarantineEngine:
+    def _engine(self, **overrides: object) -> QuarantineEngine:
         cfg = QuarantineConfig(**overrides)
         return QuarantineEngine(cfg)
 
@@ -259,32 +259,32 @@ class TestQuarantineEngineCombined:
 
     def test_event_has_details(self) -> None:
         engine = self._engine()
-        needed, events = engine.check("a1", source_connected=False)
+        _needed, events = engine.check("a1", source_connected=False)
         assert events[0].details == "Source disconnected"
 
     def test_event_has_correct_agent_id(self) -> None:
         engine = self._engine()
-        needed, events = engine.check("my-agent-123", source_connected=False)
+        _needed, events = engine.check("my-agent-123", source_connected=False)
         assert events[0].agent_id == "my-agent-123"
 
 
 class TestQuarantineEventResolved:
     """Testet resolved-Status."""
 
-    def _engine(self, **overrides) -> QuarantineEngine:
+    def _engine(self, **overrides: object) -> QuarantineEngine:
         cfg = QuarantineConfig(**overrides)
         return QuarantineEngine(cfg)
 
     def test_event_not_resolved_initially(self) -> None:
         engine = self._engine()
-        needed, events = engine.check("a1", source_connected=False)
+        _needed, events = engine.check("a1", source_connected=False)
         ev = events[0]
         assert ev.resolved is False
         assert ev.resolved_at is None
 
     def test_resolve_event(self) -> None:
         engine = self._engine()
-        needed, events = engine.check("a1", source_connected=False)
+        _needed, events = engine.check("a1", source_connected=False)
         ev = events[0]
         ev.resolved = True
         ev.resolved_at = datetime.now(UTC)

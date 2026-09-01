@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import uuid as uuid_mod
 from datetime import UTC, datetime
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -33,7 +34,7 @@ from packages.agents import (
     PatternAgent,
     RegimeAgent,
 )
-from packages.agents.contrainer.models import ContrarianConfig
+from packages.agents.contrainer.models import ContrarianConfig, ContrarianHypothesis
 from packages.schemas.agent_report import (
     AgentReport,
     AgentStatus,
@@ -323,7 +324,7 @@ _TUPLE_RETURN_AGENTS = {"contrarian"}
 class TestConcreteAgentsReportContract:
     """All concrete agents must produce valid AgentReport from analyze()."""
 
-    _AGENTS = [
+    _AGENTS: ClassVar[tuple[tuple[str, type[BaseAgent]], ...]] = (
         ("indicator", IndicatorAgent),
         ("chart", ChartAgent),
         ("regime", RegimeAgent),
@@ -336,7 +337,7 @@ class TestConcreteAgentsReportContract:
         ("anomaly", AnomalyAgent),
         ("historical_analogy", HistoricalAnalogyAgent),
         ("contrarian", ContrarianAgent),
-    ]
+    )
 
     def _make_ohlcv_for_agent(self, agent_name: str) -> dict:
         """Return OHLCV data sized appropriately for each agent."""
@@ -379,7 +380,11 @@ class TestConcreteAgentsReportContract:
         ]
         return reports
 
-    def _extract_report(self, agent_name: str, result) -> AgentReport:
+    def _extract_report(
+        self,
+        agent_name: str,
+        result: AgentReport | tuple[ContrarianHypothesis, AgentReport],
+    ) -> AgentReport:
         """Extract AgentReport from analyze result (handles tuple returns)."""
         if agent_name in _TUPLE_RETURN_AGENTS:
             assert isinstance(result, tuple), (
@@ -398,7 +403,7 @@ class TestConcreteAgentsReportContract:
         )
         return report
 
-    @pytest.mark.parametrize("agent_name,agent_cls", _AGENTS)
+    @pytest.mark.parametrize(("agent_name", "agent_cls"), _AGENTS)
     def test_agent_analyze_returns_agent_report(self, agent_name: str,
                                                   agent_cls: type) -> None:
         """Every concrete agent must return AgentReport from analyze()."""
@@ -424,7 +429,7 @@ class TestConcreteAgentsReportContract:
             f"expected AgentReport"
         )
 
-    @pytest.mark.parametrize("agent_name,agent_cls", _AGENTS)
+    @pytest.mark.parametrize(("agent_name", "agent_cls"), _AGENTS)
     def test_agent_report_has_direction_data(self, agent_name: str,
                                                agent_cls: type) -> None:
         """AgentReport probabilities encode direction (up/down/range)."""
@@ -450,7 +455,7 @@ class TestConcreteAgentsReportContract:
                 f"{agent_name}: probabilities missing '{key}'"
             )
 
-    @pytest.mark.parametrize("agent_name,agent_cls", _AGENTS)
+    @pytest.mark.parametrize(("agent_name", "agent_cls"), _AGENTS)
     def test_agent_report_has_evidence(self, agent_name: str,
                                          agent_cls: type) -> None:
         """AgentReport must include at least one evidence reference."""
@@ -475,7 +480,7 @@ class TestConcreteAgentsReportContract:
             f"{agent_name}: evidence must have at least 1 entry"
         )
 
-    @pytest.mark.parametrize("agent_name,agent_cls", _AGENTS)
+    @pytest.mark.parametrize(("agent_name", "agent_cls"), _AGENTS)
     def test_agent_report_has_hypothesis(self, agent_name: str,
                                           agent_cls: type) -> None:
         """AgentReport must include a hypothesis string."""

@@ -257,7 +257,7 @@ class TestAnalysisStage:
     """Testet AnalysisStage Enum und Sequenzen."""
 
     def test_all_18_stages_present(self) -> None:
-        stages = [s for s in AnalysisStage]
+        stages = list(AnalysisStage)
         assert len(stages) == 18
 
     def test_stage_values_match_spec(self) -> None:
@@ -464,7 +464,7 @@ class TestStageManager:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  TESTS: stages.py
+#  Tests for stages.py
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -618,7 +618,7 @@ class TestClassifyRegime:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  TESTS: agents.py
+#  Tests for agents.py
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -856,7 +856,7 @@ class TestBuildMultiTimeframe:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  TESTS: consensus.py
+#  Tests for consensus.py
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -1034,7 +1034,7 @@ class TestEvaluatePortfolio:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  TESTS: decision.py
+#  Tests for decision.py
 # ═══════════════════════════════════════════════════════════════════
 
 
