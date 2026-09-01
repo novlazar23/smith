@@ -45,6 +45,7 @@ DEFAULT_INSTRUMENTS = "BTC/USDT,ETH/USDT"
 DEFAULT_CANDLE_LIMIT = 200
 DEFAULT_MIN_CANDLES = 30
 DEFAULT_HORIZON = "15m"
+DEFAULT_CANDLE_VENUE = "BINANCE_FUTURES"
 HEARTBEAT_PATH = Path("/tmp/orchestrator_heartbeat")
 
 INSERT_SHADOW_DECISION = text(
@@ -108,11 +109,25 @@ class CandleProvider(Protocol):
 
 
 class ClickHouseCandleProvider:
-    """Liest OHLCV-Kerzen aus der ClickHouse-Tabelle ``candles``."""
+    """Liest OHLCV-Kerzen aus der ClickHouse-Tabelle ``candles``.
 
-    def __init__(self, engine: ClickHouseEngine) -> None:
-        """Initialisiert den Provider mit einer ClickHouse-Engine."""
+    Die Abfrage filtert zusätzlich auf eine Venue (Default: Env
+    ``CANDLE_VENUE``, sonst ``BINANCE_FUTURES``), damit der Shadow-Zyklus
+    nur Kerzen der konfigurierten Datenquelle liest.
+    """
+
+    def __init__(self, engine: ClickHouseEngine, venue: str | None = None) -> None:
+        """Initialisiert den Provider mit einer ClickHouse-Engine.
+
+        Args:
+            engine: ClickHouse-Engine.
+            venue: Venue-Filter für die Kerzenabfrage; Default ist der
+                Env-Wert ``CANDLE_VENUE`` (sonst ``BINANCE_FUTURES``).
+        """
         self._engine = engine
+        self._venue = (
+            venue if venue is not None else os.environ.get("CANDLE_VENUE", DEFAULT_CANDLE_VENUE)
+        )
 
     def fetch_candles(self, instrument: str, limit: int) -> CandleWindow | None:
         """Holt die letzten ``limit`` Kerzen aufsteigend nach open_time.
@@ -125,10 +140,11 @@ class ClickHouseCandleProvider:
             CandleWindow oder None, wenn keine Kerzen abrufbar sind.
         """
         escaped = self._escape(instrument)
+        escaped_venue = self._escape(self._venue)
         query = (
             f"SELECT open, high, low, close, volume "
             f"FROM candles "
-            f"WHERE instrument = '{escaped}' "
+            f"WHERE instrument = '{escaped}' AND venue = '{escaped_venue}' "
             f"ORDER BY open_time DESC "
             f"LIMIT {int(limit)}"
         )
@@ -456,7 +472,11 @@ def build_db_engine() -> SQLAlchemyEngine:
 
 
 def build_ch_provider() -> ClickHouseCandleProvider:
-    """Erzeugt den ClickHouse-Kerzen-Provider aus CH_*-Umgebungsvariablen."""
+    """Erzeugt den ClickHouse-Kerzen-Provider aus CH_*-Umgebungsvariablen.
+
+    Der Venue-Filter stammt aus ``CANDLE_VENUE`` (Default
+    ``BINANCE_FUTURES``) und wird beim Provider-Setup eingelesen.
+    """
     engine = create_ch_engine(
         ClickHouseConfig(
             host=os.environ.get("CH_HOST", "clickhouse"),

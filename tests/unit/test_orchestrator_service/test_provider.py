@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from apps.orchestrator_service.service import ClickHouseCandleProvider
 
 NAMES = ["open", "high", "low", "close", "volume"]
@@ -89,3 +90,33 @@ class TestClickHouseCandleProvider:
         assert window is not None
         np.testing.assert_array_equal(window.close, np.array([101.0]))
         np.testing.assert_array_equal(window.volume, np.array([1000.0]))
+
+    def test_query_filters_by_default_venue(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Die Query filtert ohne Konfiguration auf venue='BINANCE_FUTURES'."""
+        monkeypatch.delenv("CANDLE_VENUE", raising=False)
+        engine = FakeCHEngine(NAMES, _descending_rows())
+        provider = ClickHouseCandleProvider(engine)
+
+        provider.fetch_candles("BTC/USDT", 200)
+
+        assert "AND venue = 'BINANCE_FUTURES'" in engine.queries[0]
+
+    def test_venue_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """CANDLE_VENUE aus der Umgebung wird in die Query uebernommen."""
+        monkeypatch.setenv("CANDLE_VENUE", "DUMMY_EXCHANGE")
+        engine = FakeCHEngine(NAMES, [])
+        provider = ClickHouseCandleProvider(engine)
+
+        provider.fetch_candles("BTC/USDT", 10)
+
+        assert "AND venue = 'DUMMY_EXCHANGE'" in engine.queries[0]
+
+    def test_explicit_venue_overrides_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ein explizit uebergebener Venue-Wert gewinnt gegen CANDLE_VENUE."""
+        monkeypatch.setenv("CANDLE_VENUE", "DUMMY_EXCHANGE")
+        engine = FakeCHEngine(NAMES, [])
+        provider = ClickHouseCandleProvider(engine, venue="BINANCE_SPOT")
+
+        provider.fetch_candles("BTC/USDT", 10)
+
+        assert "AND venue = 'BINANCE_SPOT'" in engine.queries[0]

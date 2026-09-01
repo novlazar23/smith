@@ -270,7 +270,7 @@ services:
     networks:
       - backend
 
-  # ─── Market-Producer (Dummy-Adapter → Redpanda) ────────────────────────────
+  # ─── Market-Producer (Binance-Live/Dummy → Redpanda) ───────────────────────
   market-producer:
     build:
       context: .
@@ -280,6 +280,7 @@ services:
     environment:
       REDPANDA_SERVERS: redpanda:9092
       MARKET_DATA_TOPIC: market_data
+      MARKET_DATA_SOURCE: "binance"
     depends_on:
       redpanda:
         condition: service_healthy
@@ -342,6 +343,7 @@ services:
       CH_HOST: clickhouse
       CH_PORT: "8123"
       CH_DB: trading_events
+      CANDLE_VENUE: "BINANCE_FUTURES"
       ORCHESTRATOR_INTERVAL_SECONDS: "900"
       ORCHESTRATOR_INSTRUMENTS: "BTC/USDT,ETH/USDT"
     depends_on:

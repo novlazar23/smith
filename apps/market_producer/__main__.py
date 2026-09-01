@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SYMBOLS = "BTC/USDT,ETH/USDT"
 DEFAULT_SERVERS = "redpanda:9092"
+DEFAULT_SOURCE = "binance"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -63,6 +64,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Log-Level (default: INFO)",
     )
+    parser.add_argument(
+        "--source",
+        default=os.environ.get("MARKET_DATA_SOURCE", DEFAULT_SOURCE),
+        help="Marktdaten-Quelle: 'binance' (Live) oder 'dummy' (default: binance)",
+    )
     return parser.parse_args(argv)
 
 
@@ -89,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         bootstrap_servers=args.servers,
         topic=args.topic,
         interval_seconds=args.interval,
+        source=args.source,
     )
     try:
         asyncio.run(producer.run())

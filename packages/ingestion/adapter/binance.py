@@ -30,8 +30,10 @@ logger = logging.getLogger(__name__)
 # ── Binance venue constants ──────────────────────────────────────────
 
 BINANCE_FUTURES_VENUE = "BINANCE_FUTURES"
-BINANCE_FUTURES_BASE_URL = "https://fapi.binance.com"
-BINANCE_SPOT_BASE_URL = "https://api.binance.com"
+# Inkl. API-Pfad: Futures-Endpunkte unter ``/fapi/v1/*``, Spot unter
+# ``/api/v3/*`` — ohne Pfadsegment antwortet Binance mit HTTP 403.
+BINANCE_FUTURES_BASE_URL = "https://fapi.binance.com/fapi/v1"
+BINANCE_SPOT_BASE_URL = "https://api.binance.com/api/v3"
 
 BINANCE_FEES = VenueFees(
     taker_rate=0.0004,
