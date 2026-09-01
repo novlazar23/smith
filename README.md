@@ -21,6 +21,7 @@ Redpanda-Topic `market_data`. Die App-Services starten erst danach.
 | `market-producer` | Synthetische Candles (Dummy-Adapter, BTC/ETH, 60 s Ticks) | Redpanda `market_data` |
 | `ingestion-consumer` | Konsument von `market_data`, validiert Candles | ClickHouse `trading_events.candles` |
 | `news-ingestion` | RSS-Zyklen (30 s), dedupliziert + klassifiziert | PostgreSQL `news_events` |
+| `orchestrator` | Shadow-Pipeline im 15-Min-Zyklus (Agenten → Konsens, **keine Order-Ausführung**) | PostgreSQL `shadow_decisions` |
 | `alertmanager` | Alert-Ziel von Prometheus auf `127.0.0.1:9093` | — |
 
 Dazu: `postgres`, `clickhouse`, `redis`, `minio`, `redpanda`, `mlflow`,
@@ -54,6 +55,9 @@ docker compose exec -T clickhouse wget -qO- \
   Bitcoin Magazine, Crypto Potato) sind auf Erreichbarkeit geprüft; neue
   Events landen pro Zyklus in `news_events` (sichtbar unter
   `/status` → `streaming.news_events_total`).
+- **Autostart nach Reboot**: `ops/systemd/install_autostart.sh` (sudo)
+  installiert eine systemd-Unit, die den Stack beim Boot startet.
+  `restart: unless-stopped` deckt nur Docker-Daemon-Neustarts ab.
 - Secrets liegen in `configs/secrets/*.txt` (gitignored) und werden über
   Docker Secrets in die Container eingelesen.
 - Test-Gate: `.venv/bin/pytest tests/unit -q` (Lint-Gate: `uvx ruff check`
