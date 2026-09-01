@@ -17,11 +17,12 @@ Redpanda-Topic `market_data`. Die App-Services starten erst danach.
 
 | Service | Aufgabe | Persistiert in |
 |---|---|---|
-| `api` | REST-API auf `localhost:8080` (`/status`, `/metrics`, `/v1/...`) | — |
-| `market-producer` | Synthetische Candles (Dummy-Adapter, BTC/ETH, 60 s Ticks) | Redpanda `market_data` |
+| `api` | REST-API auf `localhost:8080` (`/status`, `/metrics`, `/v1/...`) + Web-Dashboard unter `http://localhost:8080/` | — |
+| `market-producer` | Echte Binance-Futures-Klines (BTC/ETH, 60 s Ticks, 1 m), Dummy-Fallback pro Tick bei Ausfall | Redpanda `market_data` |
 | `ingestion-consumer` | Konsument von `market_data`, validiert Candles | ClickHouse `trading_events.candles` |
 | `news-ingestion` | RSS-Zyklen (30 s), dedupliziert + klassifiziert | PostgreSQL `news_events` |
 | `orchestrator` | Shadow-Pipeline im 15-Min-Zyklus (Agenten → Konsens, **keine Order-Ausführung**) | PostgreSQL `shadow_decisions` |
+| `demo-trader` | Paper-Trading im 5-Min-Zyklus auf echten Kursdaten (ACTIVE-Agenten → Konsens → **virtuelle** Orders, 100.000 $ Startkapital) | PostgreSQL `demo_trades` + `demo_account` |
 | `alertmanager` | Alert-Ziel von Prometheus auf `127.0.0.1:9093` | — |
 
 Dazu: `postgres`, `clickhouse`, `redis`, `minio`, `redpanda`, `mlflow`,
@@ -51,6 +52,12 @@ docker compose exec -T clickhouse wget -qO- \
 
 - **SHADOW-Phase**: `live_trading_enabled` ist deaktiviert; es werden keine
   echten Orders ausgeführt.
+- **Demo-Modus (imaginäres Geld)**: `demo-trader` führt echte
+  Konsens-Entscheidungen der Agenten auf Binance-Futures-Kursen als
+  Paper-Trades aus (long-only, max. 10 % Position, Slippage/Commission
+  0,1 %). Alles sichtbar im Web-Dashboard unter
+  `http://localhost:8080/` (Konto, Positionen, Trades, Entscheidungen,
+  News).
 - Die mitgelieferten RSS-Feeds (CoinDesk, Cointelegraph, Decrypt, The Block,
   Bitcoin Magazine, Crypto Potato) sind auf Erreichbarkeit geprüft; neue
   Events landen pro Zyklus in `news_events` (sichtbar unter

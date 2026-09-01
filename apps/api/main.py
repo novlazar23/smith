@@ -12,11 +12,13 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
 # FastAPI import — optional dependency
 try:
     from fastapi import FastAPI, HTTPException, status
-    from fastapi.responses import JSONResponse, Response
+    from fastapi.responses import FileResponse, JSONResponse, Response
+    from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, Field
 
     FASTAPI_AVAILABLE = True
@@ -26,6 +28,8 @@ except ImportError:
     BaseModel = None  # type: ignore[assignment,misc]
     Field = None  # type: ignore[assignment]
     Response = None  # type: ignore[assignment,misc]
+    FileResponse = None  # type: ignore[assignment,misc]
+    StaticFiles = None  # type: ignore[assignment,misc]
     FASTAPI_AVAILABLE = False
 
 from apps.api.endpoints import (
@@ -47,9 +51,18 @@ except ImportError:
     live_orders = None  # type: ignore[assignment]
     live_signal = None  # type: ignore[assignment]
 
+# Dashboard-Router — Web-UI und Aggregation für das Live-Dashboard
+try:
+    from apps.api.routers import dashboard
+except ImportError:
+    dashboard = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 VERSION = "0.1.0"
+
+# Verzeichnis der Dashboard-Statik (index.html, app.js, style.css)
+_DASHBOARD_DIR = Path(__file__).resolve().parent / "static" / "dashboard"
 
 
 if FASTAPI_AVAILABLE:
@@ -189,6 +202,20 @@ def create_app() -> FastAPI:  # type: ignore[return-value, valid-type]
             media_type="text/plain; version=0.0.4",
         )
 
+    # Web-Dashboard — Startseite und Alias, Statische Dateien unter /static
+    @app.get("/", include_in_schema=False)
+    async def dashboard_index() -> FileResponse:  # type: ignore[type-arg, misc]
+        """Liefert das Web-Dashboard als Startseite."""
+        return FileResponse(_DASHBOARD_DIR / "index.html")  # type: ignore[call-arg, possibly-unbound, union-attr]
+
+    @app.get("/dashboard", include_in_schema=False)
+    async def dashboard_page() -> FileResponse:  # type: ignore[type-arg, misc]
+        """Alias für das Web-Dashboard."""
+        return FileResponse(_DASHBOARD_DIR / "index.html")  # type: ignore[call-arg, possibly-unbound, union-attr]
+
+    if _DASHBOARD_DIR.is_dir():
+        app.mount("/static", StaticFiles(directory=_DASHBOARD_DIR), name="static")  # type: ignore[call-arg, union-attr, possibly-unbound]
+
     # Live-Router — nur verfügbar wenn die Router importiert werden konnten
     if live_signal is not None:
         app.include_router(live_signal.router)
@@ -198,5 +225,9 @@ def create_app() -> FastAPI:  # type: ignore[return-value, valid-type]
 
     if live_orders is not None:
         app.include_router(live_orders.router)
+
+    # Dashboard-Router — nur verfügbar wenn importiert werden konnte
+    if dashboard is not None:
+        app.include_router(dashboard.router)
 
     return app
