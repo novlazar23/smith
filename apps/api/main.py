@@ -57,6 +57,12 @@ try:
 except ImportError:
     dashboard = None  # type: ignore[assignment]
 
+# Proxy-Router — Reverse-Proxy für interne Observability- und Storage-UIs
+try:
+    from apps.api.routers import proxy
+except ImportError:
+    proxy = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 VERSION = "0.1.0"
@@ -229,5 +235,9 @@ def create_app() -> FastAPI:  # type: ignore[return-value, valid-type]
     # Dashboard-Router — nur verfügbar wenn importiert werden konnte
     if dashboard is not None:
         app.include_router(dashboard.router)
+
+    # Proxy-Router — nur verfügbar wenn importiert werden konnte
+    if proxy is not None:
+        app.include_router(proxy.router)
 
     return app

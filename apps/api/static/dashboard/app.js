@@ -325,6 +325,90 @@ function renderNews(news) {
   ).join("");
 }
 
+/* ── Tabs / Embeds ───────────────────────────────────────────────────────── */
+
+const TAB_DEFAULT = "trading";
+
+const EMBED_SRC = {
+  monitoring: "/proxy/grafana/d/trading-orchestra?kiosk&from=now-1h&to=now",
+  metriken: "/proxy/prometheus/graph?h=1",
+  alerts: "/proxy/alertmanager/",
+  ml: "/proxy/mlflow/",
+  storage: "/proxy/minio/",
+};
+
+let activeTab = TAB_DEFAULT;
+const embedFrames = new Map();
+
+function tabFromHash() {
+  const raw = String(window.location.hash || "").replace(/^#\/?/, "");
+  if (raw === TAB_DEFAULT) return TAB_DEFAULT;
+  if (Object.prototype.hasOwnProperty.call(EMBED_SRC, raw)) return raw;
+  return TAB_DEFAULT;
+}
+
+function writeHash(tabId, push) {
+  const target = `#/${tabId}`;
+  if (window.location.hash === target) return;
+  try {
+    if (push) history.pushState(null, "", target);
+    else history.replaceState(null, "", target);
+  } catch (err) {
+    window.location.hash = target; // Fallback: feuert hashchange, activateTab ist idempotent
+  }
+}
+
+function ensureEmbed(tabId) {
+  if (embedFrames.has(tabId)) return;
+  const frame = document.createElement("iframe");
+  frame.className = "embed-frame";
+  const label = document.getElementById(tabId);
+  frame.title = label && label.textContent ? label.textContent.trim() : tabId;
+  frame.src = EMBED_SRC[tabId];
+  $("#embed-wrap").appendChild(frame);
+  embedFrames.set(tabId, frame);
+}
+
+function activateTab(tabId) {
+  activeTab = tabId;
+  const isTrading = tabId === TAB_DEFAULT;
+
+  document.querySelectorAll("#tabbar .tab").forEach((btn) => {
+    const selected = btn.id === tabId;
+    btn.classList.toggle("active", selected);
+    if (selected) btn.setAttribute("aria-current", "page");
+    else btn.removeAttribute("aria-current");
+  });
+
+  if (!isTrading) ensureEmbed(tabId);
+
+  $("main.grid").hidden = !isTrading;
+  $("#embed-wrap").hidden = isTrading;
+
+  for (const [id, frame] of embedFrames) {
+    frame.classList.toggle("is-active", !isTrading && id === tabId);
+  }
+
+  // Hash-Invariante: URL spiegelt immer den aktiven Tab (kein eigener History-Eintrag)
+  writeHash(tabId, false);
+}
+
+function onTabClick(evt) {
+  const btn = evt.target && typeof evt.target.closest === "function"
+    ? evt.target.closest(".tab")
+    : null;
+  if (!btn || !btn.id || btn.id === activeTab) return;
+  writeHash(btn.id, true);
+  activateTab(btn.id);
+}
+
+function initTabs() {
+  const bar = $("#tabbar");
+  if (bar) bar.addEventListener("click", onTabClick);
+  window.onhashchange = () => activateTab(tabFromHash());
+  activateTab(tabFromHash());
+}
+
 /* ── Polling ────────────────────────────────────────────────────────────── */
 
 function render(data) {
@@ -363,6 +447,7 @@ async function poll() {
 }
 
 function init() {
+  initTabs();
   updateClock();
   setInterval(updateClock, 1000);
   poll();

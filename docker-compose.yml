@@ -45,6 +45,7 @@ services:
       - ch_data:/var/lib/clickhouse
       - ./infrastructure/clickhouse/config.xml:/etc/clickhouse-server/config.d/logging.xml:ro
       - ./infrastructure/clickhouse/config.d/ipv4.xml:/etc/clickhouse-server/config.d/ipv4.xml:ro
+      - ./infrastructure/clickhouse/users.d/grafana_ro.xml:/etc/clickhouse-server/users.d/grafana_ro.xml:ro
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping"]
       interval: 10s
@@ -160,6 +161,9 @@ services:
     environment:
       API_SECRET_KEY_FILE: /run/secrets/api_secret_key
       API_CORS_ORIGINS: "http://localhost:3000,http://localhost:8080,http://localhost"
+      # MinIO-Auto-Login für den Storage-Tab (Secret wird vom Entrypoint
+      # als Root nach MINIO_SECRET_KEY exportiert — App-User liest die Datei nicht)
+      MINIO_ACCESS_KEY: "orchestra"
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: trading
@@ -179,6 +183,7 @@ services:
       - api_secret_key
       - postgres_password
       - clickhouse_password
+      - minio_password
     depends_on:
       postgres:
         condition: service_healthy
@@ -202,9 +207,19 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/grafana/dashboards:/etc/grafana/dashboards:ro
     environment:
       GF_SECURITY_ADMIN_PASSWORD_FILE: /run/secrets/grafana_password
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # ClickHouse-DS für die Trading-Daten-Panels im provisionierten Dashboard
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+      # Subpfad-Betrieb hinter dem Reverse-Proxy der API (localhost:8080/proxy/grafana/)
+      GF_SERVER_ROOT_URL: "http://localhost:8080/proxy/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # Login ausgestellt — anonymes Admin-Zugriff (lokaler Dev-Stack, nur localhost)
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_NAME: "Main Org."
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
     depends_on:
       prometheus:
         condition: service_healthy
@@ -391,9 +406,12 @@ services:
       DEMO_INSTRUMENTS: "BTC/USDT,ETH/USDT"
       DEMO_INITIAL_CASH: "100000"
       DEMO_TRADE_NOTIONAL: "2000"
-      DEMO_MIN_CONFIDENCE: "0.4"
+      DEMO_MIN_CONFIDENCE: "0.3"
       # Live-Kerzen von Binance Futures (market-producer, MARKET_DATA_SOURCE=binance)
       CANDLE_VENUE: "BINANCE_FUTURES"
+      # MLflow-Experiment-Tracking pro Zyklus (ML-Tab der zentralen Web-UI)
+      MLFLOW_ENABLED: "true"
+      MLFLOW_TRACKING_URI: "http://mlflow:5000"
     depends_on:
       db-init:
         condition: service_completed_successfully

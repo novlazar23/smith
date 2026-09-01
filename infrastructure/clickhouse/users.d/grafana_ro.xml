@@ -1,0 +1,16 @@
+<clickhouse>
+    <!-- Grafana-User für das Monitoring-Dashboard (lokaler Dev-Stack, internes
+         Docker-Netzwerk). Bewusst ohne readonly-Profil: das Grafana-CH-Plugin
+         setzt max_execution_time pro Query, was readonly-User blockiert. -->
+    <users>
+        <grafana>
+            <profile>default</profile>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <password>orchestra-ro</password>
+            <quota>default</quota>
+            <access_management>0</access_management>
+        </grafana>
+    </users>
+</clickhouse>

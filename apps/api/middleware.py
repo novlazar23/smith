@@ -61,6 +61,11 @@ def create_rate_limit_middleware() -> Callable:
     """
 
     async def middleware(request, call_next):
+        # /static und /proxy sind ausgenommen: ein einziger Iframe-Load erzeugt
+        # weit mehr als 60 Requests (Assets, API-Calls) und die Zielsysteme
+        # (Grafana, MinIO, …) haben eigene Zugriffskontrolle.
+        if request.url.path.startswith(_OPEN_PREFIXES):
+            return await call_next(request)
         client_host = request.client.host if request.client else "unknown"
         allowed = await _cleanup_and_check(client_host)
         if not allowed:
@@ -76,7 +81,15 @@ def create_rate_limit_middleware() -> Callable:
 
 # Endpunkte die KEINE Authentifizierung benötigen
 # /metrics: Prometheus-Scraper läuft ohne API-Key gegen den Endpunkt
-_OPEN_ENDPOINTS = frozenset(["/health", "/status", "/metrics"])
+# /, /dashboard, /v1/dashboard: Web-Dashboard (läuft ohne API-Key)
+_OPEN_ENDPOINTS = frozenset(
+    ["/health", "/status", "/metrics", "/", "/dashboard", "/v1/dashboard"]
+)
+
+# Pfade (Präfix-Match) ohne API-Key:
+# /static — Dashboard-Assets, /proxy — Reverse-Proxy: Iframes können keine
+# X-API-Key-Header senden, die Zielsysteme (Grafana, MinIO) haben eigene Auth
+_OPEN_PREFIXES = ("/static", "/proxy")
 
 
 def create_auth_middleware() -> Callable | None:
@@ -85,7 +98,8 @@ def create_auth_middleware() -> Callable | None:
     Liest den Secret-Key aus einer Datei (Pfad via API_SECRET_KEY_FILE ENV)
     oder aus der ENV-Var API_SECRET_KEY.
     Gibt None zurück wenn kein Key konfiguriert — Auth ist dann disabled.
-    Öffentliche Endpunkte (/health, /status) werden ausgenommen.
+    Öffentliche Endpunkte (/health, /status, /metrics, Dashboard) und die
+    Präfixe /static sowie /proxy werden ausgenommen.
     Gibt 401 mit {"error": "unauthorized"} wenn Key fehlt/ungültig.
     """
     expected_key: str | None = None
@@ -102,7 +116,8 @@ def create_auth_middleware() -> Callable | None:
         return None
 
     async def middleware(request, call_next):
-        if request.url.path in _OPEN_ENDPOINTS:
+        path = request.url.path
+        if path in _OPEN_ENDPOINTS or path.startswith(_OPEN_PREFIXES):
             return await call_next(request)
         api_key = request.headers.get("X-API-Key")
         if not api_key or api_key != expected_key:

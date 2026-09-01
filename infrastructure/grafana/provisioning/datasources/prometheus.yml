@@ -8,10 +8,16 @@ datasources:
     isDefault: true
     editable: false
 
+  # Nur-Lese-User "grafana" (siehe infrastructure/clickhouse/users.d/grafana_ro.xml)
   - name: ClickHouse
     type: grafana-clickhouse-datasource
-    url: http://clickhouse:8123
+    access: proxy
     editable: false
     jsonData:
-      defaultDatabase: trading_events
+      host: clickhouse
+      # 9000 = natives TCP-Protokoll (Plugin-Default "Native")
       port: 9000
+      username: grafana
+      defaultDatabase: trading_events
+    secureJsonData:
+      password: orchestra-ro

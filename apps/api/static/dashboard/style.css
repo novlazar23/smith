@@ -489,3 +489,101 @@ body {
   .trade-row { grid-template-columns: 58px minmax(70px, auto) 58px 1fr 1fr; }
   .tr-comm, .tr-status { display: none; }
 }
+
+/* ── Tabbar & Embeds ──────────────────────────────────────────────────────── */
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+.tabbar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 14px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line-soft);
+  background: linear-gradient(180deg, rgba(12, 18, 32, 0.5), rgba(7, 11, 19, 0));
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.tabbar::-webkit-scrollbar { height: 6px; }
+.tabbar::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.tabbar::-webkit-scrollbar-track { background: transparent; }
+
+.tab {
+  flex: none;
+  position: relative;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 11px 14px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.tab:hover {
+  color: var(--text);
+  background: rgba(87, 160, 255, 0.06);
+}
+
+.tab:focus-visible {
+  outline: 1px solid var(--blue);
+  outline-offset: -2px;
+}
+
+.tab.active {
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.tab.active::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: linear-gradient(90deg, var(--blue), rgba(87, 160, 255, 0.35));
+  box-shadow: 0 0 8px rgba(87, 160, 255, 0.45);
+}
+
+.grid[hidden] { display: none; }
+
+.embed-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 20px 18px;
+}
+
+.embed-wrap[hidden] { display: none; }
+
+.embed-frame {
+  display: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+}
+
+.embed-frame.is-active { display: block; }
+
+@media (max-width: 768px) {
+  .tabbar { padding: 0 10px; }
+  .tab { padding: 10px 11px 9px; }
+  .embed-wrap { padding: 10px 12px 14px; }
+}

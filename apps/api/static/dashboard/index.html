@@ -34,6 +34,15 @@
     </div>
   </header>
 
+  <nav class="tabbar" id="tabbar" aria-label="Systemansichten">
+    <button class="tab active" type="button" id="trading" aria-current="page">Trading</button>
+    <button class="tab" type="button" id="monitoring">Monitoring</button>
+    <button class="tab" type="button" id="metriken">Metriken</button>
+    <button class="tab" type="button" id="alerts">Alerts</button>
+    <button class="tab" type="button" id="ml">ML</button>
+    <button class="tab" type="button" id="storage">Storage</button>
+  </nav>
+
   <div class="conn-banner" id="conn-banner" hidden>
     <span class="conn-dot"></span>
     <span>Verbindung verloren — versuche erneut …</span>
@@ -53,7 +62,7 @@
     <section class="panel account-panel" aria-label="Demo-Konto">
       <header class="panel-head">
         <h2>Demo-Konto</h2>
-        <span class="panel-meta">Shadow-Phase</span>
+        <span class="panel-meta">Demo · virtuelle Orders</span>
       </header>
       <div class="panel-body" id="account-body">
         <div class="empty"><span>Lade Daten …</span></div>
@@ -100,6 +109,8 @@
       </div>
     </section>
   </main>
+
+  <div class="embed-wrap" id="embed-wrap" hidden></div>
 
   <script src="/static/app.js"></script>
 </body>
