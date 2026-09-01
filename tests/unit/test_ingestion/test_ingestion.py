@@ -73,6 +73,34 @@ class TestMarketDataProcessor:
         with pytest.raises(ValueError, match="Missing"):
             proc.process_candle(raw)
 
+    def test_process_candle_preserves_venue_metadata(self) -> None:
+        """Behaelt Quell-Metadaten (venue, Instrument, Zeitgrenzen) bei."""
+        proc = MarketDataProcessor()
+        raw = _candle_event()
+        raw["venue"] = "BINANCE_FUTURES"
+        raw["instrument"] = "BTC/USDT"
+        raw["open_time"] = "2026-09-01T12:00:00+00:00"
+        raw["close_time"] = "2026-09-01T12:00:59.999000+00:00"
+        raw["trade_count"] = 1252
+        raw["is_closed"] = True
+
+        result = proc.process_candle(raw)
+
+        assert result["venue"] == "BINANCE_FUTURES"
+        assert result["instrument"] == "BTC/USDT"
+        assert result["open_time"] == "2026-09-01T12:00:00+00:00"
+        assert result["close_time"] == "2026-09-01T12:00:59.999000+00:00"
+        assert result["trade_count"] == 1252
+        assert result["is_closed"] is True
+
+    def test_process_candle_without_metadata_unchanged(self) -> None:
+        """Events ohne Metadaten bleiben ohne Metadaten-Felder."""
+        proc = MarketDataProcessor()
+        result = proc.process_candle(_candle_event())
+
+        assert "venue" not in result
+        assert "instrument" not in result
+
     def test_high_low_swap(self) -> None:
         """Tauscht high/low wenn high < low."""
         proc = MarketDataProcessor()

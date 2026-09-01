@@ -25,7 +25,9 @@ class MarketDataProcessor:
 
         Returns:
             A dict with keys: symbol, open, high, low, close, volume,
-            timestamp, type.
+            timestamp, type — plus any source metadata present in the raw
+            event (venue, instrument, open_time, close_time, trade_count,
+            is_closed), which the persistence layer relies on.
         """
         required = ("symbol", "open", "high", "low", "close", "volume", "timestamp")
         missing = [f for f in required if f not in raw_event]
@@ -61,7 +63,7 @@ class MarketDataProcessor:
         if high_price < low_price:
             high_price, low_price = low_price, high_price
 
-        return {
+        event = {
             "symbol": symbol,
             "open": open_price,
             "high": high_price,
@@ -71,6 +73,12 @@ class MarketDataProcessor:
             "timestamp": timestamp,
             "type": "candle",
         }
+        # Quell-Metadaten durchreichen (die Persistenz braucht z.B. die
+        # Venue-Spalte für die ClickHouse-Zuordnung).
+        for field in ("venue", "instrument", "open_time", "close_time", "trade_count", "is_closed"):
+            if field in raw_event:
+                event[field] = raw_event[field]
+        return event
 
     def process_tick(self, raw_event: dict[str, Any]) -> dict[str, Any]:
         """Converts a raw tick event into standard format.
