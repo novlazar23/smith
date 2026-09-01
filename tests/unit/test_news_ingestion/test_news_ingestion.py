@@ -141,9 +141,11 @@ class TestDefaultSourceConfigs:
         configs = default_source_configs()
         names = [c.name for c in configs]
         assert "CoinDesk" in names
-        assert "Binance Announcements" in names
-        assert "SEC News" in names
-        assert "Ethereum Blog" in names
+        assert "Cointelegraph" in names
+        assert "Decrypt" in names
+        assert "The Block" in names
+        assert "Bitcoin Magazine" in names
+        assert "Crypto Potato" in names
 
     def test_cookdesk_is_rss(self) -> None:
         configs = default_source_configs()

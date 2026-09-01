@@ -174,7 +174,7 @@ def rss_fetch(url: str) -> list[dict[str, Any]]:
     }
 
     try:
-        response = httpx.get(url, headers=headers, timeout=30.0)
+        response = httpx.get(url, headers=headers, timeout=30.0, follow_redirects=True)
         response.raise_for_status()
     except Exception as exc:
         logger.error("Failed to fetch RSS feed %s: %s", url, exc)

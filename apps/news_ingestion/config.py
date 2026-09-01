@@ -86,13 +86,16 @@ class NewsConfig:
 def default_source_configs() -> list[SourceConfig]:
     """Standard-Quellen für Krypto-Trading bereitstellen.
 
+    Alle Feeds wurden auf Erreichbarkeit (HTTP 200, gültiges RSS-XML)
+    aus der Laufzeitumgebung verifiziert.
+
     Gibt eine Liste vordefinierter Quellen zurück:
-        - Coindesk RSS
-        - Binance Announcements
-        - SEC News
-        - FCA Updates
-        - Ethereum Blog
-        - CME Digital Asset
+        - CoinDesk RSS
+        - Cointelegraph RSS
+        - Decrypt RSS
+        - The Block RSS
+        - Bitcoin Magazine RSS
+        - Crypto Potato RSS
     """
     return [
         SourceConfig(
@@ -103,46 +106,39 @@ def default_source_configs() -> list[SourceConfig]:
             priority=1,
         ),
         SourceConfig(
-            name="CoinDesk API",
-            url="https://api.coindesk.com/v1/bpi/currentprice.json",
-            feed_type=FeedType.JSON,
-            update_interval=60,
-            priority=2,
-        ),
-        SourceConfig(
-            name="Binance Announcements",
-            url="https://www.binance.com/en/rss/channel",
+            name="Cointelegraph",
+            url="https://cointelegraph.com/rss",
             feed_type=FeedType.RSS,
-            update_interval=600,
+            update_interval=300,
             priority=1,
         ),
         SourceConfig(
-            name="SEC News",
-            url="https://www.sec.gov/rss/secRSSfeeds.xml",
+            name="Decrypt",
+            url="https://decrypt.co/feed",
             feed_type=FeedType.RSS,
-            update_interval=900,
+            update_interval=600,
             priority=2,
         ),
         SourceConfig(
-            name="FCA Updates",
-            url="https://www.fca.org.uk/rss.xml",
+            name="The Block",
+            url="https://www.theblock.co/rss.xml",
+            feed_type=FeedType.RSS,
+            update_interval=600,
+            priority=2,
+        ),
+        SourceConfig(
+            name="Bitcoin Magazine",
+            url="https://news.bitcoin.com/feed/",
             feed_type=FeedType.RSS,
             update_interval=900,
             priority=3,
         ),
         SourceConfig(
-            name="Ethereum Blog",
-            url="https://blog.ethereum.org/en/feed/",
+            name="Crypto Potato",
+            url="https://cryptopotato.com/feed/",
             feed_type=FeedType.RSS,
-            update_interval=1800,
+            update_interval=900,
             priority=3,
-        ),
-        SourceConfig(
-            name="CME Digital Asset",
-            url="https://www.cmegroup.com/rss/cme_digital_asset_rss.xml",
-            feed_type=FeedType.RSS,
-            update_interval=1200,
-            priority=2,
         ),
     ]
 
