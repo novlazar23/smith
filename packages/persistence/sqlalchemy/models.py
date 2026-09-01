@@ -12,8 +12,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Float, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import JSON, BigInteger, DateTime, Float, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -152,6 +152,57 @@ class ShadowDecisionModel(Base):
     warnings: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class DemoTradeModel(Base):
+    """SQLAlchemy-Model für ausgeführte Paper-Trades des Demo-Traders.
+
+    Jede Zeile entspricht einem via ``PaperExecutor`` ausgeführten
+    (virtuellen) Trade. Rein dokumentierend — es werden hier nie
+    reale Orders ausgeführt.
+    """
+
+    __tablename__ = "demo_trades"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    trade_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    instrument: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    direction: Mapped[str] = mapped_column(String, nullable=False)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    filled_price: Mapped[float] = mapped_column(Float, nullable=False)
+    filled_quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    commission: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    slippage: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="filled")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class DemoAccountModel(Base):
+    """SQLAlchemy-Model für den Demo-Trader-Account-Snapshot.
+
+    Eine Zeile pro Account (PKey ``account_id``); wird nach jedem
+    Zyklus per Upsert überschrieben. ``positions`` enthält die
+    offenen Paper-Positionen als JSON-Liste.
+    """
+
+    __tablename__ = "demo_account"
+
+    account_id: Mapped[str] = mapped_column(String, primary_key=True)
+    cash: Mapped[float] = mapped_column(Float, nullable=False)
+    equity: Mapped[float] = mapped_column(Float, nullable=False)
+    initial_cash: Mapped[float] = mapped_column(Float, nullable=False)
+    total_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    total_commission: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    total_trades: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    positions: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 
