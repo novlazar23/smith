@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, String, Text, func
+from sqlalchemy import JSON, DateTime, Float, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -125,6 +125,31 @@ class AnalysisRequestModel(Base):
     portfolio_id: Mapped[str | None] = mapped_column(String, nullable=True)
     mode: Mapped[str] = mapped_column(String, nullable=False, default="research")
     requested_agents: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ShadowDecisionModel(Base):
+    """SQLAlchemy-Model für Shadow-Entscheidungen des Orchestrator-Services.
+
+    Persistiert die finale Shadow-Entscheidung der OrchestratorPipeline pro
+    (Zyklus, Instrument). Rein dokumentierend/auditierend — es werden hier
+    **nie** Orders ausgeführt.
+    """
+
+    __tablename__ = "shadow_decisions"
+
+    run_id: Mapped[str] = mapped_column(String, primary_key=True, index=True)
+    instrument: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    decision: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    first_round_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    second_round_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latency_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    errors: Mapped[str | None] = mapped_column(Text, nullable=True)
+    warnings: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

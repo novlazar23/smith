@@ -10,6 +10,7 @@ Verwaltet ClickHouse-Verbindungen und persistiert Marktdaten-Zeitreihen:
 from __future__ import annotations
 
 import base64
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -239,6 +240,54 @@ class ClickHouseEngine:
             self._connected = True
         except httpx.ConnectError as e:
             raise Exception(f"Could not connect to ClickHouse at {url}: {e}") from e
+
+    def query(self, sql: str) -> tuple[list[str], list[list[str]]]:
+        """Führt eine SELECT-Query aus und liefert das Ergebnis als Zeilen.
+
+        Die Query wird über die ClickHouse HTTP-Schnittstelle mit
+        ``FORMAT TabSeparatedWithNames`` ausgeführt; die FORMAT-Klausel
+        wird bei Bedarf automatisch angehängt.
+
+        Args:
+            sql: SELECT-Statement (ohne FORMAT-Klausel).
+
+        Returns:
+            Tuple aus Spaltennamen und Zeilen (jeweils Listen von Strings).
+            Bei leerem Ergebnis ist die Zeilenliste leer.
+
+        Raises:
+            Exception: Bei Verbindungs- oder Query-Fehlern.
+        """
+        statement = sql.strip().rstrip(";").strip()
+        if not re.search(r"\bFORMAT\b", statement, flags=re.IGNORECASE):
+            statement = f"{statement} FORMAT TabSeparatedWithNames"
+
+        logger = get_logger(__name__)
+        logger.info("executing_query", query=statement[:200])
+
+        url = f"{self._config.url}/"
+        headers = self._auth_headers()
+        headers["X-ClickHouse-Database"] = self._config.database
+        try:
+            response = httpx.post(
+                url,
+                content=statement,
+                headers=headers,
+                timeout=30.0,
+                verify=self._config.verify,
+            )
+        except httpx.ConnectError as e:
+            raise Exception(f"Could not connect to ClickHouse at {url}: {e}") from e
+        if response.status_code != 200:
+            error_msg = response.text.strip() if response.text else "unknown error"
+            raise Exception(f"ClickHouse query failed (HTTP {response.status_code}): {error_msg}")
+
+        lines = [line for line in response.text.splitlines() if line]
+        if not lines:
+            return [], []
+        names = lines[0].split("\t")
+        rows = [line.split("\t") for line in lines[1:]]
+        return names, rows
 
 
 # Globale Instanz für einfache Nutzung
