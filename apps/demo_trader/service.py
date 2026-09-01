@@ -18,6 +18,7 @@ Orders platziert. Jeder ausgeführte Trade landet in PostgreSQL
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -42,6 +43,7 @@ from apps.orchestrator_service.service import (
 from packages.agents import AnomalyAgent, ChartAgent, HistoricalAnalogyAgent
 from packages.agents.base import AgentConfig, AgentType, BaseAgent
 from packages.consensus import ConsensusDecision
+from packages.observability.mlflow_client import MLflowClient
 from packages.orchestrator.pipeline import OrchestratorPipeline
 from packages.paper import PaperAccount, PaperExecutor, Trade, TradeDirection
 from packages.persistence.clickhouse.engine import (
@@ -60,7 +62,7 @@ DEFAULT_INTERVAL_SECONDS = 300.0
 DEFAULT_INSTRUMENTS = "BTC/USDT,ETH/USDT"
 DEFAULT_INITIAL_CASH = 100000.0
 DEFAULT_TRADE_NOTIONAL = 2000.0
-DEFAULT_MIN_CONFIDENCE = 0.4
+DEFAULT_MIN_CONFIDENCE = 0.3
 DEFAULT_CANDLE_VENUE = "BINANCE_FUTURES"
 DEFAULT_CANDLE_LIMIT = 200
 DEFAULT_MIN_CANDLES = 30
@@ -368,6 +370,73 @@ def make_run_id(instrument: str, moment: datetime | None = None) -> str:
     return f"demo-{stamp}-{instrument}"
 
 
+def log_cycle_to_mlflow(
+    config: DemoTraderConfig,
+    instrument: str,
+    decision: str,
+    confidence: float,
+    plan: DemoTradePlan,
+    trade: Trade | None,
+    account: PaperAccount,
+    latest_close: float,
+    client_factory: Callable[[], Any] | None = None,
+) -> None:
+    """Recordet einen Demo-Zyklus als MLflow-Run (optional, nie fatal).
+
+    Die Runs füllen den ML-Tab der zentralen Web-UI (Entscheidungen,
+    Konfidenz und Konto-Verlauf pro Zyklus). Opt-in über
+    ``MLFLOW_ENABLED=true`` (z. B. im Compose-Block); ein unerreichbarer
+    MLflow-Server führt nur zu einer Warnung, nie zu einem Cycle-Abbruch.
+
+    Umgebungsvariablen: MLFLOW_ENABLED (false), MLFLOW_TRACKING_URI
+    (http://mlflow:5000), MLFLOW_EXPERIMENT_NAME (demo-trader).
+    """
+    if os.environ.get("MLFLOW_ENABLED", "false").strip().lower() not in ("1", "true", "yes", "on"):
+        return
+    factory = client_factory
+    if factory is None:
+        factory = lambda: MLflowClient(  # noqa: E731
+            tracking_uri=os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000"),
+            experiment_name=os.environ.get("MLFLOW_EXPERIMENT_NAME", "demo-trader"),
+        )
+    try:
+        client = factory()
+        run_id = client.start_run(
+            run_name=f"{instrument}-{datetime.now(UTC):%Y%m%dT%H%M%SZ}",
+            tags={"instrument": instrument, "component": "demo-trader", "venue": config.candle_venue},
+        )
+        try:
+            client.log_parameters(
+                run_id,
+                {
+                    "min_confidence": config.min_confidence,
+                    "trade_notional": config.trade_notional,
+                    "horizon": config.horizon,
+                    "decision": decision,
+                    "action": plan.action,
+                    "latest_close": latest_close,
+                },
+            )
+            client.log_metrics(
+                run_id,
+                {
+                    "confidence": confidence,
+                    "equity": account.equity,
+                    "cash": account.cash,
+                    "total_pnl": account.total_pnl,
+                    "total_trades": account.total_trades,
+                    "trade_executed": 1.0 if trade is not None else 0.0,
+                },
+            )
+            client.end_run(run_id, status="FINISHED")
+        except Exception:
+            with contextlib.suppress(Exception):
+                client.end_run(run_id, status="FAILED")
+            raise
+    except Exception as exc:
+        logger.warning("MLflow-Run-Aufzeichnung für %s fehlgeschlagen (nicht fatal): %s", instrument, exc)
+
+
 class DemoTrader:
     """Führt den Demo-Zyklus (Analyse → Paper-Trade → Persistenz) aus.
 
@@ -512,6 +581,9 @@ class DemoTrader:
             confidence,
             trade_repr,
         )
+        log_cycle_to_mlflow(
+            self._config, instrument, decision, confidence, plan, trade, self._account, latest_close
+        )
         return executed
 
     def _persist_snapshot(self) -> None:
@@ -530,7 +602,7 @@ def config_from_env() -> DemoTraderConfig:
     Umgebungsvariablen (Defaults in Klammern):
       DEMO_INTERVAL_SECONDS (300), DEMO_INSTRUMENTS (BTC/USDT,ETH/USDT),
       DEMO_INITIAL_CASH (100000), DEMO_TRADE_NOTIONAL (2000),
-      DEMO_MIN_CONFIDENCE (0.4), CANDLE_VENUE (BINANCE_FUTURES),
+      DEMO_MIN_CONFIDENCE (0.3), CANDLE_VENUE (BINANCE_FUTURES),
       DEMO_HEARTBEAT (/tmp/demo_trader_heartbeat), LOG_LEVEL (INFO).
     """
     raw_instruments = os.environ.get("DEMO_INSTRUMENTS", DEFAULT_INSTRUMENTS)

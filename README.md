@@ -17,7 +17,7 @@ Redpanda-Topic `market_data`. Die App-Services starten erst danach.
 
 | Service | Aufgabe | Persistiert in |
 |---|---|---|
-| `api` | REST-API auf `localhost:8080` (`/status`, `/metrics`, `/v1/...`) + Web-Dashboard unter `http://localhost:8080/` | — |
+| `api` | REST-API auf `localhost:8080` (`/status`, `/metrics`, `/v1/...`) + zentrale Web-UI unter `http://localhost:8080/` (Tabs: Trading, Monitoring, Metriken, Alerts, ML, Storage) | — |
 | `market-producer` | Echte Binance-Futures-Klines (BTC/ETH, 60 s Ticks, 1 m), Dummy-Fallback pro Tick bei Ausfall | Redpanda `market_data` |
 | `ingestion-consumer` | Konsument von `market_data`, validiert Candles | ClickHouse `trading_events.candles` |
 | `news-ingestion` | RSS-Zyklen (30 s), dedupliziert + klassifiziert | PostgreSQL `news_events` |
@@ -50,14 +50,34 @@ docker compose exec -T clickhouse wget -qO- \
 
 ### Hinweise
 
-- **SHADOW-Phase**: `live_trading_enabled` ist deaktiviert; es werden keine
-  echten Orders ausgeführt.
+- **Agenten im Realbetrieb**: Der Orchestrator läuft standardmäßig mit
+  `ACTIVE`-Agenten (`ORCHESTRATOR_AGENT_STATUS=ACTIVE`; auf `SHADOW`
+  setzbar für den reinen Beobachtungsmodus). Der Demo-Modus führt
+  Konsens-Entscheidungen als **virtuelle** Paper-Orders aus
+  (Konfidenz-Gate ≥ 0,3, long-only). `live_trading_enabled` bleibt
+  deaktiviert — es werden **nie** echte Orders ausgeführt.
 - **Demo-Modus (imaginäres Geld)**: `demo-trader` führt echte
   Konsens-Entscheidungen der Agenten auf Binance-Futures-Kursen als
   Paper-Trades aus (long-only, max. 10 % Position, Slippage/Commission
   0,1 %). Alles sichtbar im Web-Dashboard unter
   `http://localhost:8080/` (Konto, Positionen, Trades, Entscheidungen,
   News).
+- **Zentrale Web-UI**: `http://localhost:8080/` bündelt alle
+  Oberflächen als Tabs — Trading (eigenes Dashboard), Monitoring
+  (Grafana), Metriken (Prometheus), Alerts (Alertmanager), ML (MLflow)
+  und Storage (Minio). Die fremden UIs laufen über einen Reverse-Proxy
+  der API (`/proxy/...`), damit sie embedded funktionieren; die
+  Originale bleiben unter ihren bisherigen Ports erreichbar.
+  Alle eingebetteten Oberflächen sind **login-frei** (lokaler Dev-Stack,
+  nur localhost): Grafana läuft mit anonymem Admin-Zugriff, der
+  Storage-Tab meldet sich bei MinIO automatisch an (Credentials bleiben
+  im API-Container). Das Monitoring-Tab zeigt das provisionierte
+  Dashboard „Trading Orchestra — System" (API-, Redpanda- und
+  ClickHouse-Panels); der ML-Tab wird pro Demo-Zyklus mit einem
+  MLflow-Run gefüllt (Entscheidung, Konfidenz, Konto). Live-Updates
+  über WebSocket sind im eingebetteten Modus deaktiviert (der Proxy
+  forwardet keine WS-Upgrade-Requests) — die Panels aktualisieren sich
+  per Polling/Refresh.
 - Die mitgelieferten RSS-Feeds (CoinDesk, Cointelegraph, Decrypt, The Block,
   Bitcoin Magazine, Crypto Potato) sind auf Erreichbarkeit geprüft; neue
   Events landen pro Zyklus in `news_events` (sichtbar unter

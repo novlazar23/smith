@@ -46,10 +46,11 @@ def main() -> int:
     install_signal_handlers(stop_event)
     logger.info(
         "Orchestrator-Service gestartet: instruments=%s interval=%.0fs horizon=%s "
-        "(Shadow-Modus, keine Order-Ausführung)",
+        "agent_status=%s (keine Order-Ausführung)",
         list(config.instruments),
         config.interval_seconds,
         config.horizon,
+        config.agent_status,
     )
     run_service(service, stop_event.is_set)
     logger.info("Orchestrator-Service beendet (graceful)")

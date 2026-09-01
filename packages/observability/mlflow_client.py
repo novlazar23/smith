@@ -56,7 +56,11 @@ class MLflowClient:
         run_name: str | None = None,
         tags: dict[str, str] | None = None,
     ) -> str:
-        """Startet einen neuen MLflow-Run und gibt die Run-ID zurück.
+        """Startet einen neuen MLflow-Run (bleibt aktiv) und gibt die Run-ID zurück.
+
+        Der Run bleibt geöffnet, bis ``end_run()`` aufgerufen wird — so können
+        ``log_parameters``/``log_metrics``/``log_artifact`` im aktiven Kontext
+        recorden.
 
         Args:
             run_name: Optionaler Name für den Run.
@@ -69,30 +73,30 @@ class MLflowClient:
 
         import mlflow
 
-        with mlflow.start_run(experiment_id=self._experiment_id, run_name=run_name) as run:
-            if tags:
-                for key, value in tags.items():
-                    mlflow.set_tag(key, value)
-            return run.info.run_id
+        run = mlflow.start_run(experiment_id=self._experiment_id, run_name=run_name)
+        if tags:
+            for key, value in tags.items():
+                mlflow.set_tag(key, value)
+        return run.info.run_id
 
     def log_parameters(self, run_id: str, params: dict[str, Any]) -> None:
-        """Recordet Parameter für einen Run.
+        """Recordet Parameter im aktiven Run.
 
         Args:
-            run_id: Die Run-ID.
+            run_id: Die Run-ID (muss der aktive Run sein).
             params: Parameter-Dict (z. B. Hyperparameter).
         """
         self._ensure_initialized()
         import mlflow
 
         for key, value in params.items():
-            mlflow.log_param(key, value)
+            mlflow.log_param(key, str(value))
 
     def log_metrics(self, run_id: str, metrics: dict[str, float]) -> None:
-        """Recordet Metriken für einen Run.
+        """Recordet Metriken im aktiven Run.
 
         Args:
-            run_id: Die Run-ID.
+            run_id: Die Run-ID (muss der aktive Run sein).
             metrics: Metriken-Dict (z. B. Sharpe Ratio, Drawdown).
         """
         self._ensure_initialized()
@@ -130,18 +134,19 @@ class MLflowClient:
         if sklearn is not None:
             sklearn.log_model(model, model_name)
 
-    def end_run(self, run_id: str, status: str = "SUCCESS") -> None:
-        """Beendet einen MLflow-Run mit Status.
+    def end_run(self, run_id: str, status: str = "FINISHED") -> None:
+        """Beendet den aktiven MLflow-Run mit Status.
 
         Args:
-            run_id: Die Run-ID.
-            status: Status ("SUCCESS", "FAILED", "RUNNING").
+            run_id: Die Run-ID (muss der aktive Run sein).
+            status: MLflow-Runstatus ("FINISHED" oder "FAILED").
         """
         self._ensure_initialized()
         import mlflow
 
         mlflow.set_tag("run_status", status)
         mlflow.set_tag("orchestra_component", "mlflow-tracker")
+        mlflow.end_run(status=status)
 
     def search_runs(self, filter_string: str | None = None, max_results: int = 20) -> list[Any]:
         """Sucht Runs basierend auf Filtern.

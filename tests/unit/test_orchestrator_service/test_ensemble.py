@@ -103,6 +103,14 @@ class TestBuildEnsemble:
             assert inner.config.instrument == "BTC/USDT"
             assert inner.config.horizon == "15m"
 
+    def test_build_ensemble_active_status(self) -> None:
+        """Mit agent_status=ACTIVE erhalten alle Agenten den ACTIVE-Status."""
+        agents = build_ensemble("BTC/USDT", "15m", AgentStatus.ACTIVE)
+
+        inner_agents = [agent._agent for agent in agents]  # type: ignore[attr-defined]
+        for inner in inner_agents:
+            assert inner.config.status is AgentStatus.ACTIVE
+
     def test_agent_types_match(self) -> None:
         """Die AgentTypen stimmen mit den gewählten Klassen überein."""
         agents = build_ensemble("ETH/USDT", "15m")

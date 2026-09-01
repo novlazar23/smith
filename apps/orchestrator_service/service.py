@@ -1,10 +1,13 @@
-"""Kern-Logik des Orchestrator-Services (Shadow-Modus).
+"""Kern-Logik des Orchestrator-Services.
 
 Jeder Zyklus holt pro Instrument die letzten N Kerzen aus ClickHouse,
 führt die ``OrchestratorPipeline`` (Analyse + Konsens + Audit) mit einem
 frisch erstellten Agenten-Ensemble aus und persistiert die Entscheidung
-in PostgreSQL (``shadow_decisions``). Es findet **nie** Order-Ausführung
-statt — unabhängig vom Feature-Flag ``live_trading_enabled``.
+in PostgreSQL (``shadow_decisions``). Der Agenten-Status ist über
+``ORCHESTRATOR_AGENT_STATUS`` konfigurierbar (Default ``ACTIVE`` =
+Realbetrieb; ``SHADOW`` = Beobachtungsmodus). Es findet **nie**
+Order-Ausführung statt — unabhängig vom Feature-Flag
+``live_trading_enabled``.
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ DEFAULT_CANDLE_LIMIT = 200
 DEFAULT_MIN_CANDLES = 30
 DEFAULT_HORIZON = "15m"
 DEFAULT_CANDLE_VENUE = "BINANCE_FUTURES"
+DEFAULT_AGENT_STATUS = "ACTIVE"
 HEARTBEAT_PATH = Path("/tmp/orchestrator_heartbeat")
 
 INSERT_SHADOW_DECISION = text(
@@ -69,6 +73,7 @@ class OrchestratorServiceConfig:
     candle_limit: int = DEFAULT_CANDLE_LIMIT
     min_candles: int = DEFAULT_MIN_CANDLES
     horizon: str = DEFAULT_HORIZON
+    agent_status: str = DEFAULT_AGENT_STATUS
     heartbeat_path: Path = HEARTBEAT_PATH
     log_level: str = "INFO"
 
@@ -201,13 +206,24 @@ class ContextualAgent:
         return self._agent.analyze(market_data)
 
 
-def build_ensemble(instrument: str, horizon: str) -> list[ContextualAgent]:
-    """Erzeugt frische Shadow-Agenten für einen Zyklus.
+def build_ensemble(
+    instrument: str,
+    horizon: str,
+    agent_status: AgentStatus = AgentStatus.SHADOW,
+) -> list[ContextualAgent]:
+    """Erzeugt frische Agenten für einen Zyklus.
 
     Ensemble: AnomalyAgent (OHLCV-Statistik), HistoricalAnalogyAgent
     (DTW-Analogien, nutzt das eigene Kerzenfenster als Historie) und
     ChartAgent (Swing-Pivots, S/R-Level, BOS/CHoCH) — alle drei sind
     ausschließlich auf ein OHLCV-Fenster angewiesen.
+
+    Args:
+        instrument: Kanonisches Instrument, z.B. ``"BTC/USDT"``.
+        horizon: Analyse-Horizont, z.B. ``"15m"``.
+        agent_status: Lebenszyklus-Status der Agenten. Default ``SHADOW``
+            (konservativ für direkte Aufrufe); der Service übergibt den
+            konfigurierten Status (Default ``ACTIVE`` = Realbetrieb).
     """
     specs: list[tuple[str, AgentType, type[BaseAgent]]] = [
         ("anomaly", AgentType.ANOMALY, AnomalyAgent),
@@ -221,7 +237,7 @@ def build_ensemble(instrument: str, horizon: str) -> list[ContextualAgent]:
             agent_type=agent_type,
             instrument=instrument,
             horizon=horizon,
-            status=AgentStatus.SHADOW,
+            status=agent_status,
         )
         agents.append(ContextualAgent(agent_cls(config=config)))
     return agents
@@ -351,7 +367,9 @@ class OrchestratorService:
 
         market_data = build_market_data(window)
         run_id = make_run_id(instrument)
-        agents = build_ensemble(instrument, self._config.horizon)
+        agents = build_ensemble(
+            instrument, self._config.horizon, AgentStatus[self._config.agent_status]
+        )
         started = time.perf_counter()
         result = self._pipeline_factory().run(
             run_id=run_id,
@@ -426,7 +444,8 @@ def config_from_env() -> OrchestratorServiceConfig:
       ORCHESTRATOR_INTERVAL_SECONDS (900), ORCHESTRATOR_INSTRUMENTS
       (BTC/USDT,ETH/USDT), ORCHESTRATOR_CANDLE_LIMIT (200),
       ORCHESTRATOR_MIN_CANDLES (30), ORCHESTRATOR_HORIZON (15m),
-      ORCHESTRATOR_HEARTBEAT (/tmp/orchestrator_heartbeat), LOG_LEVEL (INFO).
+      ORCHESTRATOR_AGENT_STATUS (ACTIVE), ORCHESTRATOR_HEARTBEAT
+      (/tmp/orchestrator_heartbeat), LOG_LEVEL (INFO).
     """
     raw_instruments = os.environ.get("ORCHESTRATOR_INSTRUMENTS", DEFAULT_INSTRUMENTS)
     try:
@@ -447,12 +466,21 @@ def config_from_env() -> OrchestratorServiceConfig:
     except ValueError:
         min_candles = DEFAULT_MIN_CANDLES
     heartbeat = Path(os.environ.get("ORCHESTRATOR_HEARTBEAT", str(HEARTBEAT_PATH)))
+    raw_status = os.environ.get("ORCHESTRATOR_AGENT_STATUS", DEFAULT_AGENT_STATUS).strip().upper()
+    if raw_status not in ("ACTIVE", "SHADOW"):
+        logger.warning(
+            "Ungültiges ORCHESTRATOR_AGENT_STATUS '%s' → Default '%s'",
+            raw_status,
+            DEFAULT_AGENT_STATUS,
+        )
+        raw_status = DEFAULT_AGENT_STATUS
     return OrchestratorServiceConfig(
         interval_seconds=interval,
         instruments=parse_instruments(raw_instruments),
         candle_limit=candle_limit,
         min_candles=min_candles,
         horizon=os.environ.get("ORCHESTRATOR_HORIZON", DEFAULT_HORIZON),
+        agent_status=raw_status,
         heartbeat_path=heartbeat,
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
     )
