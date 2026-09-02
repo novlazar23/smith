@@ -264,6 +264,24 @@ class TestBacktestMetrics:
         sharpe = calculate_sharpe_ratio(returns, risk_free_rate=0.0)
         assert sharpe == 0.0
 
+    def test_calculate_sharpe_degenerate_near_constant(self) -> None:
+        """Regression: eine (nahezu) konstante Equity-Kurve (0 Trades, nur
+        winzige Kosten-Effekte) darf kein unbeschränkt großes Sharpe
+        liefern — der Epsilon-Guard fängt Float64-Unterlauf ab."""
+        import numpy as np
+
+        # Equity ~100k, ein einziger winziger Dip → degenerate std
+        equity = [100_000.0] * 500
+        equity[250] = 99_999.9999999
+        returns = [
+            (equity[i] - equity[i - 1]) / equity[i - 1] for i in range(1, len(equity))
+        ]
+        std = float(np.std(returns, ddof=1))
+        # Testvoraussetzung: std ist winzig, aber > 0 (der alte Bug)
+        assert 0 < std < 1e-9
+        sharpe = calculate_sharpe_ratio(returns, risk_free_rate=0.0)
+        assert abs(sharpe) < 1e6
+
     def test_calculate_sortino_ratio(self) -> None:
         """Sortino ratio calculated correctly."""
         returns = [0.01, -0.005, 0.008, -0.002, 0.003, 0.001]

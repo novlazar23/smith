@@ -48,6 +48,68 @@ docker compose exec -T clickhouse wget -qO- \
   --post-data "SELECT count() FROM candles" http://127.0.0.1:8123/
 ```
 
+### Backtest & Kalibrierung (One-Shot)
+
+Die Agenten-Ensembles sind regel-/TA-basiert (keine ML-Gewichte) — sie
+werden daher nicht „trainiert", sondern auf historischen Kursdaten
+**geprüft und kalibriert**: exakt derselbe Produktions-Pfad wie im
+Live-Betrieb (ACTIVE-Ensemble → OrchestratorPipeline → Konsens →
+Konfidenz-Gate), nur rückwärts auf Kerzen-Historik.
+
+1. **`backfill`** lädt historische Binance-Futures-1m-Kerzen idempotent in
+   ClickHouse `trading_events.candles_history` (gleiche Spalten wie die
+   Live-Tabelle `candles`, aber **ohne TTL** — die Live-Tabelle löst Daten
+   nach 1 Jahr auf, die dedizierte Backtest-Tabelle nicht; sie wird
+   automatisch angelegt, vorhandene Zeiträume werden übersprungen,
+   Lücken nachgeladen):
+
+   ```bash
+   docker compose --profile on-demand run --rm backfill \
+     python -m apps.backfill --start 2021-05-01 --end 2022-07-31
+   docker compose --profile on-demand run --rm backfill \
+     python -m apps.backfill --months 12
+   ```
+
+2. **`backtest`** führt die Produktions-Entscheidungslogik auf den
+   historischen Kerzen aus — pro Marktregime ein Szenario (`crash-2021-05`,
+   `pump-2021-11`, `crash-2022-06`, `range-2022-03`, `full` = gesamte
+   vorhandene Historie) — und erzeugt pro Szenario einen MLflow-Run
+   (Experiment `backtest`, sichtbar im ML-Tab der Web-UI), einen
+   Markdown-Report auf der Konsole und Artefakte in `./backtest_reports/`
+   (`report.json`, `equity_curve.csv`, `evaluations.json`):
+
+   ```bash
+   docker compose --profile on-demand run --rm backtest \
+     python -m apps.backtest \
+     --scenarios crash-2021-05,pump-2021-11,crash-2022-06,range-2022-03 \
+     --gate 0.3 --sweep-gates 0.2,0.3,0.4,0.5,0.6,0.7
+   ```
+
+   Der Gate-Sweep rechnet die gecachten Konsens-Entscheidungen des letzten
+   Szenarios pro Gate nach (keine Agenten-Rekomputation) und liefert die
+   Kalibrierungstabelle (Return, Sharpe, Max-Drawdown, Win-Rate pro
+   Gate) — die Evidenz-Basis dafür, ob das Konfidenz-Gate (Default 0,3)
+   und die Agenten-Setups passen. `--resample 5m` aggregiert die 1m-Kerzen
+   auf 5m (4× weniger Evaluations, gröberes Fenster).
+
+   **Erster Kalibrierungslauf (02.09.2026, BTC/USDT, 2021-05→2022-07,
+   157.777 Kerzen):** In allen vier Szenarien (crash-2021-05, pump-2021-11,
+   crash-2022-06, range-2022-03) fällt der Konsens zu 100 % auf `NO_TRADE`
+   aus (18.124 Evaluations), der Gate-Sweep (0,2–0,7) ändert daran nichts.
+   Die Konfidenz liegt im Median bei 0,26–0,28 und übersteigt das Gate 0,3
+   in 78–85 % der Fälle — das Gate ist also **nicht** der Engpass. Ursache:
+   Bei drei gleichgewichtigten Agenten kann im `compute_consensus` keine
+   Seite die notwendige Gewichtsmehrheit (50 %) erreichen, solange nicht
+   mindestens zwei Agenten in dieselbe Richtung voten; die aktuelle
+   Vot-Logik (`up_score > 0,6`) ist so streng, dass das in den historischen
+   Fenstern nie passiert. Hebel für einen Folge-Lauf:
+   `min_consensus_threshold` auf 0,25 setzen, die 0,6-Vote-Schwelle der
+   Agenten senken oder ein viertes, unabhängiges Signal-Agent-Setup
+   ergänzen. Erst danach ist eine Gate-Kalibrierung sinnvoll.
+
+Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
+nie mit `docker compose up`, nur explizit via `docker compose run`.
+
 ### Hinweise
 
 - **Agenten im Realbetrieb**: Der Orchestrator läuft standardmäßig mit

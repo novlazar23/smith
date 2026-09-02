@@ -120,9 +120,16 @@ services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.17.0
     restart: unless-stopped
-    command: mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root /artifacts --host 0.0.0.0
+    # --serve-artifacts: Clients in anderen Containern laden Artefakte per
+    # HTTP durch den Server (ohne den Flag wäre artifact_uri ein reiner
+    # lokaler Pfad auf dem Server-Dateisystem und für Client-Container
+    # nicht erreichbar → "Permission denied: /artifacts" beim Upload).
+    command: mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root /artifacts --serve-artifacts --host 0.0.0.0
     volumes:
       - mlflow_artifacts:/artifacts
+      # Tracking-DB überleben Container-Neuaufbau (sonst wäre sqlite:///mlflow.db
+      # beim Neustart weg)
+      - mlflow_data:/mlflow
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
     ports:
@@ -434,6 +441,75 @@ services:
     networks:
       - backend
 
+  # ─── Backfill (One-Shot: Binance-Historik → ClickHouse) ────────────────────
+  # Lädt historische 1m-Kerzen von Binance Futures idempotent in
+  # trading_events.candles_history (5-Jahre-TTL, wird automatisch angelegt).
+  # Profil `on-demand` → startet nie mit `docker compose up`, nur via `run`:
+  #
+  #   docker compose --profile on-demand run --rm backfill \
+  #     python -m apps.backfill --start 2021-05-01 --end 2022-07-31
+  #   docker compose --profile on-demand run --rm backfill \
+  #     python -m apps.backfill --months 12
+  #   docker compose --profile on-demand run --rm backfill \
+  #     python -m apps.backfill --months 12 --dry-run
+  backfill:
+    profiles: ["on-demand"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["python", "-m", "apps.backfill"]
+    healthcheck:
+      disable: true  # One-Shot — kein API-/health-Endpoint
+    environment:
+      CH_HOST: clickhouse
+      CH_PORT: "8123"
+      CH_DB: trading_events
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    secrets:
+      - clickhouse_password
+    networks:
+      - backend
+
+  # ─── Backtest (One-Shot: Agent-Ensemble auf historischen Kerzen) ───────────
+  # Führt die PRODUKTIONS-Entscheidungslogik (ACTIVE-Ensemble → Pipeline →
+  # Konsens → Gate) auf den candles_history-Daten aus; Artefakte landen in
+  # ./backtest_reports, MLflow-Runs im Experiment "backtest".
+  #
+  #   docker compose --profile on-demand run --rm backtest \
+  #     python -m apps.backtest --scenarios crash-2021-05,pump-2021-11,crash-2022-06,range-2022-03 \
+  #     --sweep-gates 0.2,0.3,0.4,0.5,0.6,0.7
+  #   docker compose --profile on-demand run --rm backtest \
+  #     python -m apps.backtest --scenario full --resample 5m
+  backtest:
+    profiles: ["on-demand"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["python", "-m", "apps.backtest"]
+    healthcheck:
+      disable: true  # One-Shot — kein API-/health-Endpoint
+    environment:
+      CH_HOST: clickhouse
+      CH_PORT: "8123"
+      CH_DB: trading_events
+      MLFLOW_ENABLED: "true"
+      MLFLOW_TRACKING_URI: "http://mlflow:5000"
+    volumes:
+      # Named Volume (kein Bind-Mount): initialisiert mit appuser-Besitz aus
+      # dem Image; ein root-eigenes Host-Verzeichnis wäre nicht schreibbar.
+      - backtest_reports:/app/backtest_reports
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      mlflow:
+        condition: service_started
+    secrets:
+      - clickhouse_password
+    networks:
+      - backend
+
   # ─── Alertmanager ──────────────────────────────────────────────────────────
   alertmanager:
     image: prom/alertmanager:v0.27.0
@@ -462,8 +538,10 @@ volumes:
   redis_data:
   minio_data:
   mlflow_artifacts:
+  mlflow_data:
   prometheus_data:
   grafana_data:
+  backtest_reports:
 
 # ─── Secrets ────────────────────────────────────────────────────────────────
 # In Produktion via Docker Secrets oder Vault.

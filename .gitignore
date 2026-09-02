@@ -16,3 +16,6 @@ configs/secrets/
 
 # Python
 .venv/
+
+# Backtest-Artefakte (einer `apps.backtest`-Läufe)
+backtest_reports/

@@ -44,6 +44,10 @@ COPY pyproject.toml README.md ./
 COPY packages/ ./packages/
 COPY apps/ ./apps/
 
+# Artefakt-Verzeichnis des Backtests (named volume initialisiert es mit
+# appuser-Besitz — root-gebundene Bind-Mounts wären für appuser nicht schreibbar)
+RUN mkdir -p /app/backtest_reports
+
 # Copy secret-aware entrypoint (before chown below so appuser owns it)
 COPY apps/api/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

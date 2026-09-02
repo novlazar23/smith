@@ -235,7 +235,11 @@ def calculate_sharpe_ratio(
     mean_excess = sum(excess_returns) / len(excess_returns)
     std_excess = float(np.std(excess_returns, ddof=1))
 
-    if std_excess == 0:
+    # Epsilon-Guard: (nahezu) konstante Equity-Kurven (z. B. 0 Trades,
+    # nur Kosten-Effekte) liefern numerisch degenerate Standardabweichungen
+    # im Float64-Unterlaufbereich → ohne Guard ergibt sich ein
+    # unbeschränkt großes Sharpe statt "kein Risiko = kein Verhältnis".
+    if std_excess < 1e-12:
         return 0.0
 
     return (mean_excess / std_excess) * (periods_per_year ** 0.5)
@@ -267,7 +271,8 @@ def calculate_sortino_ratio(
     downside_variance = sum(r ** 2 for r in negative_returns) / len(excess_returns)
     downside_deviation = downside_variance ** 0.5
 
-    if downside_deviation == 0:
+    # Epsilon-Guard, s. calculate_sharpe_ratio (degenerate Kurven).
+    if downside_deviation < 1e-12:
         return 0.0
 
     return (mean_excess / downside_deviation) * (periods_per_year ** 0.5)
