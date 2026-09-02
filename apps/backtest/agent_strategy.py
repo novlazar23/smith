@@ -3,8 +3,10 @@
 Jede ``evaluate_every``-te Kerze wird exakt so analysiert wie im Live-Betrieb
 des ``demo-trader``: Die letzten ``candle_limit`` Kerzen (älteste → neueste)
 werden als ``CandleWindow`` gebaut, aus ihnen ``market_data`` erzeugt, ein
-frisches ACTIVE-Ensemble (``build_active_ensemble``: Anomaly, Historical
-Analogy, Chart) erstellt und die ``OrchestratorPipeline`` ausgeführt. Die
+frisches ACTIVE-Ensemble (``build_active_ensemble``: das kanonische
+4-Agenten-Ensemble aus Trend, Mean-Reversion, Volatilitäts-Regime und
+Volumen-Konviktions) erstellt und die ``OrchestratorPipeline`` (mit der
+kalibrierten Ensemble-WeightConfig) ausgeführt. Die
 Konsens-Entscheidung wird mit derselben long-only-Semantik wie
 ``plan_trade`` auf ein ``StrategySignal`` gemappt:
 
@@ -35,7 +37,12 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 from apps.demo_trader.service import build_active_ensemble
-from apps.orchestrator_service.service import CandleWindow, ContextualAgent, build_market_data
+from apps.orchestrator_service.service import (
+    CandleWindow,
+    ContextualAgent,
+    build_calibrated_pipeline,
+    build_market_data,
+)
 from numpy.typing import NDArray
 from packages.backtesting.strategies import (
     BaseStrategy,
@@ -43,7 +50,6 @@ from packages.backtesting.strategies import (
     StrategySignal,
 )
 from packages.consensus import ConsensusDecision
-from packages.orchestrator.pipeline import OrchestratorPipeline
 
 if TYPE_CHECKING:
     from packages.backtesting.core import Candle
@@ -163,7 +169,7 @@ class AgentEnsembleStrategy(BaseStrategy):
         min_confidence: float = 0.3,
         trade_notional: float = 2000.0,
         initial_capital: float = 100_000.0,
-        pipeline_factory: PipelineFactory = OrchestratorPipeline,
+        pipeline_factory: PipelineFactory | None = None,
         ensemble_factory: EnsembleFactory = build_active_ensemble,
     ) -> None:
         """Initialisiert die Strategie (Parameter spiegeln den Demo-Trader).
@@ -179,7 +185,8 @@ class AgentEnsembleStrategy(BaseStrategy):
                 ``DEMO_TRADE_NOTIONAL``).
             initial_capital: Startkapital (für position_size = notional/capital).
             pipeline_factory: Erzeugt die Pipeline (Default: echte
-                ``OrchestratorPipeline``; in Tests injizierbar).
+                ``OrchestratorPipeline`` mit der kalibrierten
+                Ensemble-WeightConfig; in Tests injizierbar).
             ensemble_factory: Erzeugt das ACTIVE-Ensemble (Default:
                 ``build_active_ensemble``; in Tests injizierbar).
         """
@@ -200,7 +207,7 @@ class AgentEnsembleStrategy(BaseStrategy):
         self.min_confidence = min_confidence
         self.trade_notional = trade_notional
         self.initial_capital = initial_capital
-        self._pipeline_factory = pipeline_factory
+        self._pipeline_factory = pipeline_factory or build_calibrated_pipeline
         self._ensemble_factory = ensemble_factory
         self._window: deque[Candle] = deque(maxlen=candle_limit)
         self._bar_index = 0

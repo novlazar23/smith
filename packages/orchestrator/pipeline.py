@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from packages.consensus import ConsensusDecision, ConsensusResult
+from packages.consensus import ConsensusDecision, ConsensusResult, WeightConfig
 from packages.orchestrator.graph import (
     OrchestratorGraph,
     PipelineStage,
@@ -70,15 +70,22 @@ class OrchestratorPipeline:
         print(result.decision)
     """
 
-    def __init__(self, high_dissent_threshold: float = 0.6) -> None:
+    def __init__(
+        self,
+        high_dissent_threshold: float = 0.6,
+        weight_config: WeightConfig | None = None,
+    ) -> None:
         """Initialisiert die Pipeline.
 
         Args:
             high_dissent_threshold: Schwellwert fuer Dissens (Default 0.6 = 60%).
                                     Wenn >60% der gewichteten Agenten disagree,
                                     dann NO_TRADE.
+            weight_config: Optionale WeightConfig für den Konsens (z.B.
+                min_consensus_threshold). None = Standard-Konfiguration.
         """
         self.high_dissent_threshold = high_dissent_threshold
+        self.weight_config = weight_config
 
     def run(
         self,
@@ -240,4 +247,8 @@ seal_records=[r.__dict__ for r in seal_records],
         summary = state.round_summary
         high_dissent = summary.get("dissent_score", 0) > self.high_dissent_threshold
 
-        return compute_consensus(reports, high_dissent=high_dissent)
+        return compute_consensus(
+            reports,
+            high_dissent=high_dissent,
+            weight_config=self.weight_config,
+        )

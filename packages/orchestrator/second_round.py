@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from packages.consensus import ConsensusDecision, ConsensusResult, VoteDirection
+from packages.consensus import ConsensusDecision, ConsensusResult, VoteDirection, WeightConfig
 from packages.orchestrator.graph import (
     OrchestratorGraph,
     PipelineStage,
@@ -255,6 +255,7 @@ def run_second_round(
 def compute_consensus(
     reports: list[AgentReport],
     high_dissent: bool = False,  # noqa: FBT001,FBT002
+    weight_config: WeightConfig | None = None,
 ) -> ConsensusResult:
     """Berechnet Konsens aus Second-Round-Reports.
 
@@ -266,11 +267,14 @@ def compute_consensus(
     Args:
         reports: Liste von AgentReports (Second Round).
         high_dissent: True wenn Dissens-Prüfung aktiv ist.
+        weight_config: Optionale WeightConfig-Überschreibung (z.B.
+            ``min_consensus_threshold``). Default: Standard-Config mit
+            Shadow-Gewicht 0.0 und Schwellwert 0.5.
 
     Returns:
         ConsensusResult mit Entscheidung und Gewichten.
     """
-    from packages.consensus import WeightConfig, WeightedConsensusEngine
+    from packages.consensus import WeightedConsensusEngine
 
     # Filtere Shadow-Agenten heraus (weight = 0.0)
     active_reports = [
@@ -292,17 +296,19 @@ def compute_consensus(
             reason="No active agents (all shadow)",
         )
 
-    # WeightConfig mit shadow_weight = 0.0 (EPIC-08 Spezifikation)
-    config = WeightConfig(
-        status_multiplier={
-            "active": 1.0,
-            "shadow": 0.0,  # EPIC-08: Shadow agents weight 0.0
-            "degraded": 0.3,
-            "quarantined": 0.0,
-            "disabled": 0.0,
-        },
-    )
-    engine = WeightedConsensusEngine(config=config)
+    # Default: WeightConfig mit shadow_weight = 0.0 (EPIC-08 Spezifikation);
+    # injizierte weight_config ersetzt sie komplett.
+    if weight_config is None:
+        weight_config = WeightConfig(
+            status_multiplier={
+                "active": 1.0,
+                "shadow": 0.0,  # EPIC-08: Shadow agents weight 0.0
+                "degraded": 0.3,
+                "quarantined": 0.0,
+                "disabled": 0.0,
+            },
+        )
+    engine = WeightedConsensusEngine(config=weight_config)
     result = engine.compute_consensus(active_reports)
 
     # Dissens-Prüfung: wenn >60% Uneinigkeit → NO_TRADE

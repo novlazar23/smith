@@ -36,12 +36,12 @@ import numpy as np
 from apps.orchestrator_service.service import (
     CandleWindow,
     ContextualAgent,
+    build_calibrated_pipeline,
+    build_ensemble,
     build_market_data,
     parse_instruments,
     write_heartbeat,
 )
-from packages.agents import AnomalyAgent, ChartAgent, HistoricalAnalogyAgent
-from packages.agents.base import AgentConfig, AgentType, BaseAgent
 from packages.consensus import ConsensusDecision
 from packages.observability.mlflow_client import MLflowClient
 from packages.orchestrator.pipeline import OrchestratorPipeline
@@ -195,29 +195,15 @@ class DemoCandleProvider:
 
 
 def build_active_ensemble(instrument: str, horizon: str) -> list[ContextualAgent]:
-    """Erzeugt ein frisches ACTIVE-Ensemble für einen Zyklus.
+    """Erzeugt das kanonische Ensemble mit ``AgentStatus.ACTIVE``.
 
-    Dasselbe Agenten-Trio wie der Orchestrator-Service (AnomalyAgent,
-    HistoricalAnalogyAgent, ChartAgent) — aber mit ``AgentStatus.ACTIVE``,
-    damit der gewichtete Konsens echte Entscheidungen statt NO_TRADE
-    ("No active agents (all shadow)") liefert.
+    Dasselbe 4-Agenten-Ensemble wie der Orchestrator-Service
+    (``build_ensemble``: Trend, Mean-Reversion, Volatilitäts-Regime,
+    Volumen-Konviktions), damit der gewichtete Konsens echte
+    Entscheidungen statt NO_TRADE ("No active agents (all shadow)")
+    liefert.
     """
-    specs: list[tuple[str, AgentType, type[BaseAgent]]] = [
-        ("anomaly", AgentType.ANOMALY, AnomalyAgent),
-        ("historical_analogy", AgentType.HISTORICAL_ANALOGY, HistoricalAnalogyAgent),
-        ("chart", AgentType.CHART, ChartAgent),
-    ]
-    agents: list[ContextualAgent] = []
-    for agent_id, agent_type, agent_cls in specs:
-        config = AgentConfig(
-            agent_id=agent_id,
-            agent_type=agent_type,
-            instrument=instrument,
-            horizon=horizon,
-            status=AgentStatus.ACTIVE,
-        )
-        agents.append(ContextualAgent(agent_cls(config=config)))
-    return agents
+    return build_ensemble(instrument, horizon, AgentStatus.ACTIVE)
 
 
 def plan_trade(
@@ -451,7 +437,7 @@ class DemoTrader:
         provider: CandleSource,
         db: SQLAlchemyEngine,
         executor: PaperExecutor,
-        pipeline_factory: Callable[[], OrchestratorPipeline] = OrchestratorPipeline,
+        pipeline_factory: Callable[[], OrchestratorPipeline] | None = None,
     ) -> None:
         """Initialisiert den Demo-Trader.
 
@@ -461,12 +447,14 @@ class DemoTrader:
             db: SQLAlchemy-Engine-Wrapper für die Persistenz.
             executor: PaperExecutor (imaginäres Geld, Slippage, Kommission).
             pipeline_factory: Factory für die Pipeline (Testbarkeit).
+                Default: Pipeline mit der kalibrierten Ensemble-WeightConfig
+                (``build_weight_config``).
         """
         self._config = config
         self._provider = provider
         self._db = db
         self._executor = executor
-        self._pipeline_factory = pipeline_factory
+        self._pipeline_factory = pipeline_factory or build_calibrated_pipeline
         self._account = executor.create_account(config.account_id)
 
     @property

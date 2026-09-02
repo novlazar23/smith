@@ -26,8 +26,12 @@ from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
-from packages.agents import AnomalyAgent, ChartAgent, HistoricalAnalogyAgent
 from packages.agents.base import AgentConfig, AgentType, BaseAgent
+from packages.agents.mean_reversion_agent import MeanReversionAgent
+from packages.agents.trend_agent import TrendAgent
+from packages.agents.volatility_regime_agent import VolatilityRegimeAgent
+from packages.agents.volume_conviction_agent import VolumeConvictionAgent
+from packages.consensus import WeightConfig
 from packages.governance.feature_flags import feature_flags
 from packages.orchestrator.pipeline import OrchestratorPipeline
 from packages.orchestrator.second_round import RoundContext
@@ -51,6 +55,24 @@ DEFAULT_HORIZON = "15m"
 DEFAULT_CANDLE_VENUE = "BINANCE_FUTURES"
 DEFAULT_AGENT_STATUS = "ACTIVE"
 HEARTBEAT_PATH = Path("/tmp/orchestrator_heartbeat")
+
+# Konsens-Kalibrierung für das 4-Agenten-Ensemble (gleichgewichtet):
+# 1 Stimme = 0,25 Gewicht reicht für eine Konsens-Entscheidung (Schwellwert
+# 0,2), aber nur ab 2 übereinstimmenden Agenten (Konfidenz 0,5) übersteigt
+# die Konfidenz das übliche Konfidenz-Gate (0,3) — faktisch eine
+# 2-von-4-Mehrheit. Basis: Backtest-Kalibrierung 02.09.2026
+# (README, Abschnitt Backtest & Kalibrierung).
+CONSENSUS_MIN_THRESHOLD = 0.2
+
+
+def build_weight_config() -> WeightConfig:
+    """WeightConfig des kanonischen Agenten-Ensembles (siehe CONSENSUS_MIN_THRESHOLD)."""
+    return WeightConfig(min_consensus_threshold=CONSENSUS_MIN_THRESHOLD)
+
+
+def build_calibrated_pipeline() -> OrchestratorPipeline:
+    """OrchestratorPipeline mit der kalibrierten Ensemble-WeightConfig."""
+    return OrchestratorPipeline(weight_config=build_weight_config())
 
 INSERT_SHADOW_DECISION = text(
     """
@@ -211,12 +233,25 @@ def build_ensemble(
     horizon: str,
     agent_status: AgentStatus = AgentStatus.SHADOW,
 ) -> list[ContextualAgent]:
-    """Erzeugt frische Agenten für einen Zyklus.
+    """Erzeugt frische Agenten für einen Zyklus (kanonisches Ensemble).
 
-    Ensemble: AnomalyAgent (OHLCV-Statistik), HistoricalAnalogyAgent
-    (DTW-Analogien, nutzt das eigene Kerzenfenster als Historie) und
-    ChartAgent (Swing-Pivots, S/R-Level, BOS/CHoCH) — alle drei sind
-    ausschließlich auf ein OHLCV-Fenster angewiesen.
+    Ensemble (4 komplementäre Marktblickwinkel, alle rein OHLCV-basiert):
+      - ``TrendAgent``: Trendrichtung und -stärke (EMA-Ausrichtung, ROC,
+        ATR-normierte Trennung)
+      - ``MeanReversionAgent``: Überdehnung und Reversionspotenzial
+        (z-Score gegen SMA50, RSI)
+      - ``VolatilityRegimeAgent``: Volatilitätsregime (Bandbreite-/ATR-
+        Percentile, Squeeze-Breakouts)
+      - ``VolumeConvictionAgent``: Überzeugung hinter der Bewegung
+        (Up/Down-Volumen, OBV-Steigung, Partizipation)
+
+    Die vier Agenten sind bewusst unterschiedlich kalibriert: bei einem
+    starken, eindeutigen Signal gibt jeder relevante Blickwinkel eine
+    dominante Richtungswahrscheinlichkeit ≥ 0,65 aus (Vot-Schwelle des
+    Konsens), bei widersprüchlichen oder schwachen Signalen votiert er
+    range/abstain. Damit ist der gewichtete Konsens mit
+    ``CONSENSUS_MIN_THRESHOLD`` erreichbar, ohne auf Einzelagenten
+    vertrauen zu müssen.
 
     Args:
         instrument: Kanonisches Instrument, z.B. ``"BTC/USDT"``.
@@ -226,9 +261,10 @@ def build_ensemble(
             konfigurierten Status (Default ``ACTIVE`` = Realbetrieb).
     """
     specs: list[tuple[str, AgentType, type[BaseAgent]]] = [
-        ("anomaly", AgentType.ANOMALY, AnomalyAgent),
-        ("historical_analogy", AgentType.HISTORICAL_ANALOGY, HistoricalAnalogyAgent),
-        ("chart", AgentType.CHART, ChartAgent),
+        ("trend", AgentType.INDICATOR, TrendAgent),
+        ("mean_reversion", AgentType.INDICATOR, MeanReversionAgent),
+        ("volatility_regime", AgentType.REGIME, VolatilityRegimeAgent),
+        ("volume_conviction", AgentType.ORDERFLOW, VolumeConvictionAgent),
     ]
     agents: list[ContextualAgent] = []
     for agent_id, agent_type, agent_cls in specs:
@@ -298,7 +334,7 @@ class OrchestratorService:
         config: OrchestratorServiceConfig,
         provider: CandleProvider,
         db: SQLAlchemyEngine,
-        pipeline_factory: Callable[[], OrchestratorPipeline] = OrchestratorPipeline,
+        pipeline_factory: Callable[[], OrchestratorPipeline] | None = None,
     ) -> None:
         """Initialisiert den Service.
 
@@ -307,11 +343,13 @@ class OrchestratorService:
             provider: Kerzen-Anbieter (ClickHouse).
             db: SQLAlchemy-Engine-Wrapper für die Persistenz.
             pipeline_factory: Factory für die Pipeline (Testbarkeit).
+                Default: Pipeline mit der kalibrierten Ensemble-WeightConfig
+                (``CONSENSUS_MIN_THRESHOLD``).
         """
         self._config = config
         self._provider = provider
         self._db = db
-        self._pipeline_factory = pipeline_factory
+        self._pipeline_factory = pipeline_factory or build_calibrated_pipeline
 
     @property
     def config(self) -> OrchestratorServiceConfig:

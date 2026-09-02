@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from packages.consensus import ConsensusDecision
+from packages.consensus import ConsensusDecision, WeightConfig
 from packages.orchestrator.graph import (
     OrchestratorGraph,
     PipelineStage,
@@ -292,3 +292,24 @@ class TestComputeConsensus:
         result = compute_consensus(reports)
         dist_sum = sum(result.vote_distribution.values())
         assert abs(dist_sum - 1.0) < 0.001
+
+    def test_weight_config_injection_threshold(self) -> None:
+        """Injizierte WeightConfig überschreibt den Standard-Schwellwert.
+
+        1 von 4 aktiven Agenten votet LONG (0.25 Gewicht). Standard
+        (Schwellwert 0.5) → NO_TRADE; injiziert (Schwellwert 0.2) →
+        LONG_BIAS mit Konfidenz 0.25.
+        """
+        reports = [
+            _make_report("long-1", up=0.65, down=0.1),  # votet LONG
+            _make_report("neu-1", up=0.33, down=0.33),  # ABSTAIN
+            _make_report("neu-2", up=0.33, down=0.33),  # ABSTAIN
+            _make_report("neu-3", up=0.33, down=0.33),  # ABSTAIN
+        ]
+        default_result = compute_consensus(reports)
+        assert default_result.decision == ConsensusDecision.NO_TRADE
+        injected = compute_consensus(
+            reports, weight_config=WeightConfig(min_consensus_threshold=0.2)
+        )
+        assert injected.decision == ConsensusDecision.LONG_BIAS
+        assert injected.confidence == pytest.approx(0.25)

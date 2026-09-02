@@ -92,20 +92,57 @@ Konfidenz-Gate), nur rückwärts auf Kerzen-Historik.
    und die Agenten-Setups passen. `--resample 5m` aggregiert die 1m-Kerzen
    auf 5m (4× weniger Evaluations, gröberes Fenster).
 
-   **Erster Kalibrierungslauf (02.09.2026, BTC/USDT, 2021-05→2022-07,
-   157.777 Kerzen):** In allen vier Szenarien (crash-2021-05, pump-2021-11,
-   crash-2022-06, range-2022-03) fällt der Konsens zu 100 % auf `NO_TRADE`
-   aus (18.124 Evaluations), der Gate-Sweep (0,2–0,7) ändert daran nichts.
-   Die Konfidenz liegt im Median bei 0,26–0,28 und übersteigt das Gate 0,3
-   in 78–85 % der Fälle — das Gate ist also **nicht** der Engpass. Ursache:
-   Bei drei gleichgewichtigten Agenten kann im `compute_consensus` keine
-   Seite die notwendige Gewichtsmehrheit (50 %) erreichen, solange nicht
-   mindestens zwei Agenten in dieselbe Richtung voten; die aktuelle
-   Vot-Logik (`up_score > 0,6`) ist so streng, dass das in den historischen
-   Fenstern nie passiert. Hebel für einen Folge-Lauf:
-   `min_consensus_threshold` auf 0,25 setzen, die 0,6-Vote-Schwelle der
-   Agenten senken oder ein viertes, unabhängiges Signal-Agent-Setup
-   ergänzen. Erst danach ist eine Gate-Kalibrierung sinnvoll.
+    **Erster Kalibrierungslauf (02.09.2026, BTC/USDT, 2021-05→2022-07,
+    157.777 Kerzen):** In allen vier Szenarien (crash-2021-05, pump-2021-11,
+    crash-2022-06, range-2022-03) fällt der Konsens zu 100 % auf `NO_TRADE`
+    aus (18.124 Evaluations), der Gate-Sweep (0,2–0,7) ändert daran nichts.
+    Die Konfidenz liegt im Median bei 0,26–0,28 und übersteigt das Gate 0,3
+    nur in 15–22 % der Fälle — das Gate ist also **nicht** der Engpass.
+    Ursache: Bei drei gleichgewichtigten Agenten kann im `compute_consensus`
+    keine Seite die notwendige Gewichtsmehrheit (50 %) erreichen, solange
+    nicht mindestens zwei Agenten in dieselbe Richtung voten; die aktuelle
+    Vot-Logik (`up_score > 0,6`) ist so streng, dass das in den historischen
+    Fenstern nie passiert. Hebel für einen Folge-Lauf:
+    `min_consensus_threshold` auf 0,25 setzen, die 0,6-Vote-Schwelle der
+    Agenten senken oder ein viertes, unabhängiges Signal-Agent-Setup
+    ergänzen. Erst danach ist eine Gate-Kalibrierung sinnvoll.
+
+    **Zweiter Kalibrierungslauf (02.09.2026, neues 4er-Ensemble):** Die
+    drei alten Agenten (Anomaly, Historical-Analogy, Chart) wurden durch
+    vier richtungssensitive ersetzt, die unterschiedliche Marktperspektiven
+    abbilden: ``trend`` (EMA12/26-Ausrichtung, ROC10, ATR-normierte
+    Trennung), ``mean_reversion`` (z-Score gegen SMA50, RSI14),
+    ``volatility_regime`` (Squeeze-Breakout aus Baseline-Bandbreite plus
+    20-Bar-Position) und ``volume_conviction`` (Up/Down-Volumen-Verhältnis,
+    OBV-Steigung, Partizipation). Parallel wurde
+    ``min_consensus_threshold`` von 0,5 auf 0,2 gesenkt: Bei vier
+    gleichgewichtigten Agenten reicht eine Richtungsvote (0,25 > 0,2) für
+    eine Konsens-Entscheidung, das Konfidenz-Gate 0,3 erzwingt in der
+    Praxis zwei übereinstimmende Agenten (Konfidenz ≈ 0,5).
+
+    Ergebnis (Startkapital 100.000 $, Long-Only, max. 10 % Position):
+
+    | Szenario | Return | Trades | Win-Rate | Gate-Pass ≥ 0,3 |
+    |---|---:|---:|---:|---:|
+    | crash-2021-05 (11 Tage) | -4,4 % | 1 | 0 % | 98,6 % |
+    | pump-2021-11 (9 Tage) | -4,2 % | 1 | 0 % | 98,7 % |
+    | crash-2022-06 (10 Tage) | -5,0 % | 1 | 0 % | 99,2 % |
+    | range-2022-03 (31 Tage) | -13,2 % | 1 | 0 % | 99,1 % |
+
+    Der strukturelle `NO_TRADE`-Blockade aus dem ersten Lauf ist damit
+    gelöst: Die Agenten votieren in 15–40 % der Evaluations richtungs-
+    bestimmt, und der Konsens übersteigt das Gate 0,3 in 98,6–99,2 % aller
+    Evaluations. Die Handelsqualität ist dagegen negativ: Jeder Lauf
+    handelt genau einen Long-Round-Trip (Entry bei einem LONG-Konsens,
+    Exit erst bei einem SHORT-Konsens — die Long-Only-Einzelpositions-
+    Logik hält bis dahin durch), und alle vier Szenarien laufen ins Minus
+    (Kauf nahe des Hochs, Holding des kompletten Drawdowns). Der Gate-
+    Sweep auf crash-2021-05 liefert kein positives Gate (0,2: 934 Trades/
+    38,1 % Win, 0,3–0,5: 899/36,6 %, 0,6: 255/40,9 %, alle negative
+    Return) — der Engpass liegt nicht im Gate, sondern in der
+    Entry-/Exit-Logik. Nächste Hebel: Exit-Regeln (Stop-Loss, Max-
+    Haltezeit), Positionsgröße und die Behandlung SHORT-Signale in
+    Long-Only-Setups.
 
 Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
 nie mit `docker compose up`, nur explizit via `docker compose run`.

@@ -128,8 +128,13 @@ class TestRunCycle:
             assert len(market_data[key]) == 200
             assert market_data[key].dtype == np.float64
         agents = call["agents"]
-        assert len(agents) == 3
-        assert {agent.agent_id for agent in agents} == {"anomaly", "historical_analogy", "chart"}
+        assert len(agents) == 4
+        assert {agent.agent_id for agent in agents} == {
+            "trend",
+            "mean_reversion",
+            "volatility_regime",
+            "volume_conviction",
+        }
 
     def test_writes_heartbeat_after_cycle(
         self,
@@ -181,14 +186,14 @@ class TestRunCycle:
     ) -> None:
         """Die Zeile 'Shadow-Cyklus fertig' erscheint pro Instrument."""
         stub_provider.windows = {BTC: make_ohlcv(200)}
-        stub_pipeline.results = {BTC: make_result(confidence=0.42, reason="No active agents (all shadow)")}
+        stub_pipeline.results = {BTC: make_result(confidence=0.42, reason="No active agents (all shadow)", first=4, second=4)}
         service = _service_with(config, stub_provider, FakeDB(fake_conn), stub_pipeline)
 
         with caplog.at_level("INFO"):
             service.run_cycle()
 
         assert re.search(
-            r"Shadow-Cyklus fertig: BTC/USDT -> NO_TRADE \(confidence=0\.4200, 3/3 Agenten, \d+ ms\)",
+            r"Shadow-Cyklus fertig: BTC/USDT -> NO_TRADE \(confidence=0\.4200, 4/4 Agenten, \d+ ms\)",
             caplog.text,
         ) is not None
 

@@ -75,8 +75,13 @@ class TestRunCycle:
         market_data = call["market_data"]
         assert set(market_data) == {"open", "high", "low", "close", "volume"}
         agents = call["agents"]
-        assert len(agents) == 3
-        assert {agent.agent_id for agent in agents} == {"anomaly", "historical_analogy", "chart"}
+        assert len(agents) == 4
+        assert {agent.agent_id for agent in agents} == {
+            "trend",
+            "mean_reversion",
+            "volatility_regime",
+            "volume_conviction",
+        }
         for agent in agents:
             assert agent._agent.config.status.value == "active"
 

@@ -156,6 +156,6 @@ class TestWiring:
         assert result.decision == "NO_TRADE"
         assert result.consensus is not None
         assert result.consensus.reason == "No active agents (all shadow)"
-        assert len(result.first_round_reports) == 3
-        assert len(result.second_round_reports) == 3
-        assert len(result.seal_records) == 3
+        assert len(result.first_round_reports) == 4
+        assert len(result.second_round_reports) == 4
+        assert len(result.seal_records) == 4

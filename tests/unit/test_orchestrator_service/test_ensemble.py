@@ -91,12 +91,17 @@ class TestContextualAgent:
 class TestBuildEnsemble:
     """build_ensemble() erzeugt frische, korrekt konfigurierte Shadow-Agenten."""
 
-    def test_returns_three_configured_shadow_agents(self) -> None:
-        """Ensemble besteht aus Anomaly, HistoricalAnalogy und Chart Agent."""
+    def test_returns_four_configured_shadow_agents(self) -> None:
+        """Ensemble besteht aus den vier kanonischen Blickwinkel-Agenten."""
         agents = build_ensemble("BTC/USDT", "15m")
 
-        assert len(agents) == 3
-        assert {agent.agent_id for agent in agents} == {"anomaly", "historical_analogy", "chart"}
+        assert len(agents) == 4
+        assert {agent.agent_id for agent in agents} == {
+            "trend",
+            "mean_reversion",
+            "volatility_regime",
+            "volume_conviction",
+        }
         inner_agents = [agent._agent for agent in agents]  # type: ignore[attr-defined]
         for inner in inner_agents:
             assert inner.config.status is AgentStatus.SHADOW
@@ -119,9 +124,10 @@ class TestBuildEnsemble:
             for agent in agents
         }
         assert types == {
-            "anomaly": AgentType.ANOMALY,
-            "historical_analogy": AgentType.HISTORICAL_ANALOGY,
-            "chart": AgentType.CHART,
+            "trend": AgentType.INDICATOR,
+            "mean_reversion": AgentType.INDICATOR,
+            "volatility_regime": AgentType.REGIME,
+            "volume_conviction": AgentType.ORDERFLOW,
         }
 
     def test_fresh_instances_per_cycle(self) -> None:
