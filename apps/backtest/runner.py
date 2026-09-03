@@ -47,6 +47,7 @@ from packages.backtesting.strategies import BaseStrategy, SignalAction, Strategy
 from .agent_strategy import (
     SignalEvent,
     derive_action,
+    entry_allowed,
 )
 
 if TYPE_CHECKING:
@@ -280,6 +281,8 @@ class ReplayStrategy(BaseStrategy):
         gate: float,
         trade_notional: float,
         initial_capital: float,
+        entry_gate: float | None = None,
+        entry_required_agents: tuple[str, ...] = (),
         name: str = "replay",
     ) -> None:
         """Initialisiert die Replay-Strategie.
@@ -290,6 +293,8 @@ class ReplayStrategy(BaseStrategy):
             gate: Neues Konfidenz-Gate für die Signal-Ableitung.
             trade_notional: Nominal pro BUY (für position_size).
             initial_capital: Startkapital (für position_size).
+            entry_gate: Optionale Entry-Schwelle für BUY (wie in der Strategie).
+            entry_required_agents: Agent-IDs, die für BUY alle LONG voten müssen.
             name: Strategie-Name (Logging).
         """
         super().__init__(name=name)
@@ -297,6 +302,8 @@ class ReplayStrategy(BaseStrategy):
         self.gate = gate
         self.trade_notional = trade_notional
         self.initial_capital = initial_capital
+        self.entry_gate = entry_gate
+        self.entry_required_agents = tuple(entry_required_agents)
         self._cache = cache
         self._bar_index = 0
         self.signal_events: list[SignalEvent] = []
@@ -308,8 +315,12 @@ class ReplayStrategy(BaseStrategy):
         entry = self._cache.get(bar_index)
         if entry is None:
             return None
-        decision, confidence, _ = entry
+        decision, confidence, per_agent = entry
         action = derive_action(decision, confidence, self.gate)
+        if action == "BUY":
+            buy_gate = max(self.gate, self.entry_gate) if self.entry_gate is not None else self.gate
+            if not entry_allowed(confidence, per_agent, buy_gate, self.entry_required_agents):
+                return None
         if action == "NONE":
             return None
         self.signal_events.append(
@@ -402,6 +413,8 @@ def gate_sweep(
             gate=gate,
             trade_notional=base.trade_notional,
             initial_capital=base.initial_capital,
+            entry_gate=base.entry_gate,
+            entry_required_agents=base.entry_required_agents,
             name=f"replay-gate-{gate}",
         )
         engine = BacktestEngine(default_config(base, config))

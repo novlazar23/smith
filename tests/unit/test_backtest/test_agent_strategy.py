@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from apps.backtest.agent_strategy import dominant_direction, extract_per_agent
+from apps.backtest.agent_strategy import dominant_direction, entry_allowed, extract_per_agent
 from packages.backtesting.strategies import SignalAction
 from tests.unit.test_backtest.conftest import (
     FakeReport,
@@ -232,3 +232,118 @@ class TestRunIdAndInputs:
         assert len(market_data["close"]) == 30  # volles Fenster
         assert float(market_data["close"][-1]) == pytest.approx(candles[29].close)
         assert float(market_data["close"][0]) == pytest.approx(candles[0].close)
+
+
+class TestEntrySelection:
+    """Entry-Selektion: entry_gate + entry_required_agents filtern nur BUY."""
+
+    def test_entry_allowed_requires_buy_gate(self) -> None:
+        assert entry_allowed(0.2, {}, 0.6, ()) is False
+        assert entry_allowed(0.9, {}, 0.6, ()) is True
+
+    def test_entry_allowed_requires_long_agents(self) -> None:
+        per_agent = {"trend": {"direction": "LONG", "confidence": 0.9, "status": "active"}}
+        assert entry_allowed(0.9, per_agent, 0.3, ("trend",)) is True
+        per_agent["trend"]["direction"] = "SHORT"
+        assert entry_allowed(0.9, per_agent, 0.3, ("trend",)) is False
+        # fehlender Agent blockiert (fail-closed)
+        assert entry_allowed(0.9, {}, 0.3, ("trend",)) is False
+
+    def test_entry_required_agent_blocks_buy(self) -> None:
+        # Konsens LONG_BIAS, aber der geforderte Agent votet SHORT → kein BUY
+        strategy = make_strategy(
+            make_pipeline_result(
+                "LONG_BIAS",
+                0.9,
+                reports=[FakeReport("trend", up=0.2, down=0.6, range_prob=0.2)],
+            ),
+            min_confidence=0.3,
+            entry_required_agents=("trend",),
+        )
+        signals = drive(strategy, trending_up(35))
+        assert signals == []
+        assert len(strategy.evaluations) == 2  # Evaluationen laufen weiter
+
+    def test_entry_required_agent_long_allows_buy(self) -> None:
+        strategy = make_strategy(
+            make_pipeline_result(
+                "LONG_BIAS",
+                0.9,
+                reports=[FakeReport("trend", up=0.6, down=0.1, range_prob=0.3)],
+            ),
+            min_confidence=0.3,
+            entry_required_agents=("trend",),
+        )
+        signals = drive(strategy, trending_up(35))
+        assert len(signals) == 2
+        assert all(s.action == SignalAction.BUY for s in signals)
+
+    def test_entry_gate_blocks_low_confidence_buy(self) -> None:
+        # Konsens-Gate 0.3 würde lassen, Entry-Gate 0.6 blockiert
+        strategy = make_strategy(
+            make_pipeline_result(
+                "LONG_BIAS",
+                0.5,
+                reports=[FakeReport("trend", up=0.6, down=0.1, range_prob=0.3)],
+            ),
+            min_confidence=0.3,
+            entry_gate=0.6,
+            entry_required_agents=("trend",),
+        )
+        assert drive(strategy, trending_up(35)) == []
+
+    def test_entry_gate_higher_than_min_confidence(self) -> None:
+        strategy = make_strategy(make_pipeline_result("LONG_BIAS", 0.7), min_confidence=0.3, entry_gate=0.6)
+        assert len(drive(strategy, trending_up(35))) == 2
+
+    def test_entry_rules_do_not_affect_sells(self) -> None:
+        # Exit-Seite: SHORT_BIAS wird trotz fehlender Entry-Zulassung gesendet
+        strategy = make_strategy(
+            make_pipeline_result(
+                "SHORT_BIAS",
+                0.9,
+                reports=[FakeReport("trend", up=0.2, down=0.6, range_prob=0.2)],
+            ),
+            min_confidence=0.3,
+            entry_gate=0.6,
+            entry_required_agents=("trend",),
+        )
+        signals = drive(strategy, trending_up(35))
+        assert len(signals) == 2
+        assert all(s.action == SignalAction.SELL for s in signals)
+
+    def test_entry_gate_validated(self) -> None:
+        with pytest.raises(ValueError, match="entry_gate"):
+            make_strategy(make_pipeline_result(), entry_gate=1.5)
+
+    def test_replay_respects_entry_rules(self) -> None:
+        # Cache mit LONG_BIAS + Agent-SHORT; Replay mit gefordertem Agent bleibt leer
+        strategy = make_strategy(
+            make_pipeline_result(
+                "LONG_BIAS",
+                0.9,
+                reports=[FakeReport("trend", up=0.2, down=0.6, range_prob=0.2)],
+            ),
+            min_confidence=0.3,
+            entry_required_agents=("trend",),
+        )
+        drive(strategy, trending_up(40))
+        assert strategy.replay_with_gate(0.3) == []
+        # Ohne geforderten Agent liefert derselbe Cache BUYs
+        plain = make_strategy(
+            make_pipeline_result(
+                "LONG_BIAS",
+                0.9,
+                reports=[FakeReport("trend", up=0.2, down=0.6, range_prob=0.2)],
+            ),
+            min_confidence=0.3,
+        )
+        drive(plain, trending_up(40))
+        actions = [action for _, action, _ in plain.replay_with_gate(0.3)]
+        assert actions == ["BUY", "BUY", "BUY"]
+
+    def test_to_dict_exposes_entry_config(self) -> None:
+        strategy = make_strategy(make_pipeline_result(), entry_gate=0.6, entry_required_agents=("trend",))
+        summary = strategy.to_dict()
+        assert summary["entry_gate"] == pytest.approx(0.6)
+        assert summary["entry_required_agents"] == ["trend"]

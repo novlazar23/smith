@@ -19,6 +19,7 @@ from packages.backtesting.datafeed import MemoryDataFeed
 from packages.orchestrator.pipeline import OrchestratorPipelineResult
 from tests.unit.test_backtest.conftest import (
     BTC,
+    FakeReport,
     StubPipeline,
     make_pipeline_result,
     make_strategy,
@@ -174,3 +175,24 @@ class TestGateSweep:
                 assert key in row
         assert rows[0]["trades"] > 0
         assert rows[1]["trades"] == 0
+
+    def test_sweep_inherits_entry_rules(self) -> None:
+        # Entry-Pflicht-Agent votet SHORT: der Sweep (Replay) bekommt keine BUYs
+        stub = StubPipeline(
+            make_pipeline_result(
+                "LONG_BIAS",
+                0.9,
+                reports=[FakeReport("trend", up=0.2, down=0.6, range_prob=0.2)],
+            )
+        )
+        feed = MemoryDataFeed(trending_up(120, price0=100.0, step=1.0))
+
+        def with_entry_filter() -> AgentEnsembleStrategy:
+            return _strategy_for(stub, min_confidence=0.3, entry_required_agents=("trend",))
+
+        rows = gate_sweep(feed, with_entry_filter, [0.3])
+        assert rows[0]["trades"] == 0
+
+        # Ohne Entry-Filter liefert derselbe Cache BUYs
+        plain_rows = gate_sweep(feed, lambda: _strategy_for(stub, min_confidence=0.3), [0.3])
+        assert plain_rows[0]["trades"] > 0

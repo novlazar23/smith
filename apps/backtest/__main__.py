@@ -81,6 +81,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Maximale Haltezeit in Bars, danach wird die Position geschlossen (Default: aus)",
     )
+    parser.add_argument(
+        "--entry-gate",
+        type=float,
+        default=None,
+        help="Höhere Konfidenz-Schwelle nur für BUY (SELL nutzt --gate; Default: aus)",
+    )
+    parser.add_argument(
+        "--entry-required-agents",
+        default="",
+        help="Kommagetrennte Agent-IDs, die für einen BUY alle selbst LONG votieren müssen "
+        "(z.B. 'trend' oder 'trend,volatility_regime'; Default: aus)",
+    )
     parser.add_argument("--output", default="./backtest_reports", help="Artefakt-Verzeichnis (Default: ./backtest_reports)")
     parser.add_argument("--ch-host", default=None, help="ClickHouse-Host (Env CH_HOST, Default: clickhouse)")
     parser.add_argument("--ch-port", type=int, default=None, help="ClickHouse-Port (Env CH_PORT, Default: 8123)")
@@ -118,6 +130,10 @@ def build_ch_engine(args: argparse.Namespace) -> ClickHouseEngine:
     )
 
 
+def parse_agent_ids(value: str) -> tuple[str, ...]:
+    return tuple(agent_id.strip() for agent_id in value.split(",") if agent_id.strip())
+
+
 def make_strategy(args: argparse.Namespace) -> AgentEnsembleStrategy:
     """Erzeugt die Agent-Ensemble-Strategie aus den CLI-Argumenten."""
     return AgentEnsembleStrategy(
@@ -127,6 +143,8 @@ def make_strategy(args: argparse.Namespace) -> AgentEnsembleStrategy:
         min_candles=args.min_candles,
         evaluate_every=args.evaluate_every,
         min_confidence=args.gate,
+        entry_gate=args.entry_gate,
+        entry_required_agents=parse_agent_ids(args.entry_required_agents),
         trade_notional=args.trade_notional,
         initial_capital=args.initial_capital,
     )
@@ -223,6 +241,8 @@ def run_scenario(
         "candle_limit": args.candle_limit,
         "evaluate_every": args.evaluate_every,
         "min_confidence": args.gate,
+        "entry_gate": args.entry_gate,
+        "entry_required_agents": list(parse_agent_ids(args.entry_required_agents)),
         "stop_loss_pct": args.stop_loss,
         "max_holding_bars": args.max_holding_bars,
         "trade_notional": args.trade_notional,

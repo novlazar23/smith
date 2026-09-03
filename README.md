@@ -206,6 +206,76 @@ Konfidenz-Gate), nur rückwärts auf Kerzen-Historik.
     kaufen, wenn Trend- und Volatilitäts-Regime übereinstimmen), nicht
     weitere Exit-Tuning.
 
+    **Vierter Kalibrierungslauf (03.09.2026, Entry-Selektion):** Aus dem
+    Befund des dritten Laufs (Engpass = Entry-Seite, LONG-Feuern kauft nahe
+    lokaler Hochs) wurden zwei Entry-Filter auf der Strategie-Ebene ergänzt
+    (wirkt nur auf die BUY-Seite, Exits bleiben unverändert):
+    ``--entry-gate`` (zusätzliches BUY-Gate, das das Basis-Gate nur erhöht:
+    bei 0,6 müssen drei von vier Agenten auf der LONG-Seite übereinstimmen)
+    und ``--entry-required-agents`` (Fail-Closed-Pflichtvoten, z. B.
+    ``trend,volatility_regime`` — alle genannten Agenten müssen in derselben
+    Evaluation selbst LONG votieren; fehlt ein Agent oder votiert er nicht
+    LONG, wird der Kauf blockiert). Beide Flags erben auch der Gate-Sweep
+    und die Replay-Rechnung.
+
+    Entry-Varianten-Sweep auf crash-2021-05 (5m, Gate 0,3, Stop 8 %,
+    Max-Haltezeit 2016 Bars, Startkapital 100.000 $, Long-Only):
+
+    | Variante | Return | Win-Rate | Profit-Factor | Round-Trips | Max-DD |
+    |---|---:|---:|---:|---:|---:|
+    | Baseline (ohne Entry-Selektion) | -1,3 % | 38,0 % | 0,81 | 50 | 2,40 % |
+    | Entry-Gate 0,6 | +0,02 % | 45,5 % | 1,25 | 22 | 0,71 % |
+    | Pflicht: trend | -1,6 % | 17,9 % | 0,46 | 28 | 2,30 % |
+    | Pflicht: trend, volatility_regime | -0,01 % | 25,0 % | 1,11 | 4 | 0,20 % |
+    | Entry-Gate 0,6 + Pflicht: trend | -0,1 % | 0,0 % | 0,00 | 2 | 0,11 % |
+    | Pflicht: mean_reversion | +0,00 % | 59,1 % | 1,29 | 22 | 0,45 % |
+
+    Die Trend-Pflicht verschlechtert das Szenario sogar (die Strategie
+    kauft ohne Trendbestätigung seltener und besser als mit ihr) — das
+    bestätigt „LONG kauft nahe lokaler Hochs". Das Entry-Gate 0,6 wird als
+    robuster Gewinner gewählt (nahe Break-even mit 22 Round-Trips,
+    agenten-agnostisch).
+
+    Finaler E2E-Lauf (Entry-Gate 0,6, Gate 0,3, Stop 8 %; 5m mit
+    Max-Haltezeit 2016 Bars, 1m mit 10080 Bars):
+
+    5m (4× weniger Kostenabrieb, gröberes Fenster):
+
+    | Szenario | Return | Win-Rate | Round-Trips | Profit-Factor | Max-DD |
+    |---|---:|---:|---:|---:|---:|
+    | crash-2021-05 (11 Tage) | +0,02 % | 45,5 % | 22 | 1,25 | 0,71 % |
+    | pump-2021-11 (9 Tage) | -0,57 % | 7,1 % | 28 | 0,29 | 0,62 % |
+    | crash-2022-06 (10 Tage) | -0,51 % | 30,0 % | 30 | 0,66 | 0,71 % |
+    | range-2022-03 (31 Tage) | -0,35 % | 29,6 % | 81 | 1,31 | 0,48 % |
+
+    1m (vergleichbar mit dem finalen Lauf 3):
+
+    | Szenario | Final Equity | Return | Win-Rate | Round-Trips | Profit-Factor | Max-DD | (Lauf 3 ohne Entry-Selektion) |
+    |---|---:|---:|---:|---:|---:|---:|---:|
+    | crash-2021-05 (11 Tage) | 97.073 $ | -2,9 % | 21,8 % | 133 | 0,37 | 3,1 % | -10,5 % |
+    | pump-2021-11 (9 Tage) | 98.508 $ | -1,5 % | 17,7 % | 136 | 0,26 | 1,5 % | -5,3 % |
+    | crash-2022-06 (10 Tage) | 98.250 $ | -1,8 % | 23,0 % | 161 | 0,76 | 1,8 % | -5,8 % |
+    | range-2022-03 (31 Tage) | 96.570 $ | -3,4 % | 21,6 % | 371 | 0,84 | 3,8 % | -13,9 % |
+
+    Befund: Das Entry-Gate 0,6 ist der größte Hebel aller vier Läufe: Es
+    halbiert die Round-Trips (133–371 statt 236–649 bei 1m) und senkt die
+    Verluste von -5 bis -14 % auf -1,5 bis -3,4 % (crash-2021-05: von
+    -10,5 % auf -2,9 %); die Max-Drawdowns fallen von 5–15 % auf 1,5–3,8 %.
+    Bei 5m-Auflösung liegen alle vier Szenarien nahe Break-even (-0,6 % bis
+    +0,02 %) mit Drawdowns unter 0,8 %. Die Strategie ist damit von
+    „klar negativ mit hohen Drawdowns" zu „niedriges Risiko, nahe
+    Break-even" verbessert — aber es entsteht **kein klar positiver
+    Edge**: Die verbleibenden Verluste sind der Kostenabrieb
+    (Slippage/Commission 0,1 % pro Seite), den die schwache verbleibende
+    PnL nicht mehr vollständig deckt. Die Trend-Pflicht-Voten sind als
+    Entry-Filter ungeeignet (sie bestätigen Hochkäufe); die
+    Mean-Reversion-Pflicht ist nahe Break-even mit hoher Win-Rate, aber zu
+    restriktiv in Kombination (1–4 Round-Trips). Sinnvolle nächste Hebel:
+    den Handel auf 5m-Auflösung mit Entry-Gate verlagern (geringerer
+    Kostenabrieb), die Trade-Frequenz weiter drosseln oder eine echte
+    Alpha-Quelle ergänzen — weiteres Gate- oder Exit-Tuning hat nach vier
+    Läufen keinen positiven Effekt mehr gezeigt.
+
 Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
 nie mit `docker compose up`, nur explizit via `docker compose run`.
 

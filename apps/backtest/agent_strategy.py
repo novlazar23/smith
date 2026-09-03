@@ -15,6 +15,13 @@ Konsens-Entscheidung wird mit derselben long-only-Semantik wie
   - ``SHORT_BIAS``               → SELL (Position glattstellen)
   - sonst (``NO_TRADE``/``RANGE``) → kein Signal
 
+Optional filtert die **Entry-Selektion** nur die BUY-Seite weiter (SELL/Exit
+bleibt unverändert): ``entry_gate`` hebt die Konfidenz-Schwelle für BUY an
+(überschneidet nicht unter das Basis-Gate), und ``entry_required_agents``
+verlangt, dass alle benannten Agenten in derselben Evaluation selbst ``LONG``
+voten. Ein Agent, der dafür keine ``LONG``-Report-Lieferung hat, blockiert
+den Entry (fail-closed).
+
 Die rohen Konsensergebnisse (decision, confidence, Per-Agent-Details) werden
 pro Bar in ``consensus_cache`` gecacht. Ein Gate-Sweep kann daraus über
 ``replay_with_gate`` bzw. die ``ReplayStrategy`` (``runner.py``) Signale für
@@ -116,6 +123,30 @@ def derive_action(decision: str, confidence: float, gate: float) -> str:
     return "NONE"
 
 
+def entry_allowed(
+    confidence: float,
+    per_agent: PerAgentInfo,
+    buy_gate: float,
+    required_agents: Sequence[str],
+) -> bool:
+    """Prüft die Entry-Selektion für ein BUY-Signal.
+
+    True, wenn die Konfidenz die Buy-Schwelle ``buy_gate`` erreicht und alle
+    in ``required_agents`` benannten Agenten in dieser Evaluation selbst
+    ``LONG`` voten. Ein Agent, der in ``per_agent`` fehlt oder nicht ``LONG``
+    votet, blockiert den Entry (Defensive: fehlende/UNKNOWN-Details zählen
+    als Verneinung, damit eine unvollständige Report-Lieferung nicht versehentlich
+    einen Entry durchlässt). Die Exit-Seite (SELL) ist davon nicht betroffen.
+    """
+    if confidence < buy_gate:
+        return False
+    for agent_id in required_agents:
+        info = per_agent.get(agent_id)
+        if info is None or info.get("direction") != "LONG":
+            return False
+    return True
+
+
 def dominant_direction(probabilities: Mapping[str, Any]) -> str:
     """Baut die dominante Richtung (LONG/SHORT/RANGE) aus Wahrscheinlichkeiten."""
     try:
@@ -167,6 +198,8 @@ class AgentEnsembleStrategy(BaseStrategy):
         min_candles: int = 30,
         evaluate_every: int = 5,
         min_confidence: float = 0.3,
+        entry_gate: float | None = None,
+        entry_required_agents: tuple[str, ...] = (),
         trade_notional: float = 2000.0,
         initial_capital: float = 100_000.0,
         pipeline_factory: PipelineFactory | None = None,
@@ -181,6 +214,12 @@ class AgentEnsembleStrategy(BaseStrategy):
             min_candles: Mindestanzahl Kerzen vor der ersten Evaluation.
             evaluate_every: Evaluation alle N Bars (Live-Rhythmus 5 Min.).
             min_confidence: Konfidenz-Gate (wie ``DEMO_MIN_CONFIDENCE``).
+            entry_gate: Optional höhere Konfidenz-Schwelle **nur für BUY**
+                (SELL nutzt weiter ``min_confidence``); ``None`` = kein
+                zusätzlicher Entry-Filter.
+            entry_required_agents: Agent-IDs, die für einen BUY **alle
+                selbst LONG voten** müssen (z.B. ``("trend",)``); leere
+                Sequenz = aus.
             trade_notional: Ziel-Nominal pro BUY in USDT (wie
                 ``DEMO_TRADE_NOTIONAL``).
             initial_capital: Startkapital (für position_size = notional/capital).
@@ -199,12 +238,16 @@ class AgentEnsembleStrategy(BaseStrategy):
             raise ValueError("evaluate_every muss >= 1 sein")
         if initial_capital <= 0:
             raise ValueError("initial_capital muss > 0 sein")
+        if entry_gate is not None and not 0.0 <= entry_gate <= 1.0:
+            raise ValueError("entry_gate muss in [0, 1] liegen oder None sein")
         self.instrument = instrument
         self.horizon = horizon
         self.candle_limit = candle_limit
         self.min_candles = min_candles
         self.evaluate_every = evaluate_every
         self.min_confidence = min_confidence
+        self.entry_gate = entry_gate
+        self.entry_required_agents = tuple(entry_required_agents)
         self.trade_notional = trade_notional
         self.initial_capital = initial_capital
         self._pipeline_factory = pipeline_factory or build_calibrated_pipeline
@@ -230,6 +273,12 @@ class AgentEnsembleStrategy(BaseStrategy):
             return None
         return self._evaluate(candle, self._bar_index - 1)
 
+    def _effective_buy_gate(self, base_gate: float) -> float:
+        """Buy-Schwelle: ``entry_gate`` erhöht das Basis-Gate (nie unter es)."""
+        if self.entry_gate is None:
+            return base_gate
+        return max(base_gate, self.entry_gate)
+
     def _evaluate(self, candle: Candle, bar_index: int) -> StrategySignal | None:
         """Führt die Pipeline aus, cached den Konsens und mappt auf ein Signal."""
         window = CandleWindow(
@@ -254,6 +303,10 @@ class AgentEnsembleStrategy(BaseStrategy):
         self.consensus_cache[bar_index] = (decision, confidence, per_agent)
 
         action = derive_action(decision, confidence, self.min_confidence)
+        if action == "BUY" and not entry_allowed(
+            confidence, per_agent, self._effective_buy_gate(self.min_confidence), self.entry_required_agents
+        ):
+            action = "NONE"
         signal = self._build_signal(action, decision, confidence, candle)
         self.evaluations.append(
             Evaluation(
@@ -324,8 +377,12 @@ class AgentEnsembleStrategy(BaseStrategy):
         bar_indices = sorted(self.consensus_cache)
         timestamps = [evaluation.timestamp for evaluation in self.evaluations]
         for bar_index, timestamp in zip(bar_indices, timestamps, strict=True):
-            decision, confidence, _ = self.consensus_cache[bar_index]
+            decision, confidence, per_agent = self.consensus_cache[bar_index]
             action = derive_action(decision, confidence, gate)
+            if action == "BUY" and not entry_allowed(
+                confidence, per_agent, self._effective_buy_gate(gate), self.entry_required_agents
+            ):
+                action = "NONE"
             if action != "NONE":
                 replayed.append((timestamp, action, confidence))
         return replayed
@@ -369,6 +426,8 @@ class AgentEnsembleStrategy(BaseStrategy):
             "min_candles": self.min_candles,
             "evaluate_every": self.evaluate_every,
             "min_confidence": self.min_confidence,
+            "entry_gate": self.entry_gate,
+            "entry_required_agents": list(self.entry_required_agents),
             "trade_notional": self.trade_notional,
             "initial_capital": self.initial_capital,
             "n_evaluations": n_evaluations,
