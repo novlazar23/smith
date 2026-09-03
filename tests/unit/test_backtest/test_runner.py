@@ -43,12 +43,10 @@ class TestRunBacktest:
     """Voller Engine-Run auf synthetischem Uptrend."""
 
     def test_uptrend_run_executes_buys_and_tracks_equity(self) -> None:
-        # Engine-Eigenheit (documented): PaperExecutor.close_position schließt
-        # immer zum avg_price (Dummy-Marktpreis) und Positionen werden zum
-        # Einkaufskurs bewertet — long-only Equity bleibt daher ≈ Startkapital
-        # minus Kosten, nie darüber. Die Trade-Ökonomie wird in
-        # confidence_buckets/gate_sweep close-preis-basiert rekonstruiert.
-        # Sanity hier: BUYs werden tatsächlich ausgeführt und Equity getrackt.
+        # Positionen werden mark-to-market zum Bar-Schluss bewertet und
+        # SHORT-/Glattstellungssignale schließen zum Marktpreis. Im Uptrend
+        # steigt die Equity einer long-only Strategie daher über das
+        # Startkapital (Kursgewinn der gehaltenen Position).
         strategy = _strategy_for(make_pipeline_result("LONG_BIAS", 0.9), min_confidence=0.3)
         result = run_backtest(_uptrend_feed(), lambda: strategy, BacktestConfig(symbol=BTC), "test")
         assert result.metadata["strategy"] is strategy
@@ -56,8 +54,8 @@ class TestRunBacktest:
         assert result.metadata["equity_curve"][0] == 100_000.0
         buys = [trade for trade in result.trades if trade.side == "buy"]
         assert len(buys) > 10
-        # nur Kostenabgang (Slippage + Kommission), kein Kapitalverlust
-        assert 99_000.0 < result.metadata["final_equity"] < 100_000.0
+        # Mark-to-Market: Uptrend → Kursgewinn schlägt Kosten, Equity steigt
+        assert result.metadata["final_equity"] > 100_000.0
 
     def test_equity_curve_length(self) -> None:
         strategy = _strategy_for(make_pipeline_result("LONG_BIAS", 0.9))

@@ -132,17 +132,79 @@ Konfidenz-Gate), nur rückwärts auf Kerzen-Historik.
     Der strukturelle `NO_TRADE`-Blockade aus dem ersten Lauf ist damit
     gelöst: Die Agenten votieren in 15–40 % der Evaluations richtungs-
     bestimmt, und der Konsens übersteigt das Gate 0,3 in 98,6–99,2 % aller
-    Evaluations. Die Handelsqualität ist dagegen negativ: Jeder Lauf
-    handelt genau einen Long-Round-Trip (Entry bei einem LONG-Konsens,
-    Exit erst bei einem SHORT-Konsens — die Long-Only-Einzelpositions-
-    Logik hält bis dahin durch), und alle vier Szenarien laufen ins Minus
-    (Kauf nahe des Hochs, Holding des kompletten Drawdowns). Der Gate-
-    Sweep auf crash-2021-05 liefert kein positives Gate (0,2: 934 Trades/
-    38,1 % Win, 0,3–0,5: 899/36,6 %, 0,6: 255/40,9 %, alle negative
-    Return) — der Engpass liegt nicht im Gate, sondern in der
-    Entry-/Exit-Logik. Nächste Hebel: Exit-Regeln (Stop-Loss, Max-
-    Haltezeit), Positionsgröße und die Behandlung SHORT-Signale in
-    Long-Only-Setups.
+    Evaluations. Die Handelsqualität ist dagegen negativ: alle vier
+    Szenarien laufen ins Minus. Der Gate-Sweep auf crash-2021-05 liefert
+    kein positives Gate (0,2: 934 Trades/38,1 % Win, 0,3–0,5: 899/36,6 %,
+    0,6: 255/40,9 %, alle negative Return) — der Engpass liegt nicht im
+    Gate, sondern in der Entry-/Exit-Logik.
+
+    **Korrektur (im Zuge des dritten Laufs gefunden):** Die Backtest-Engine
+    bewertete Positionen zur Kostengrundlage (`qty × avg_price`) statt
+    mark-to-market und stellte Glattstellungssignale ebenfalls zur
+    Kostengrundlage statt zum Marktpreis; geschlossene Positionen verschwanden
+    aus dem Positions-Dict, sodass `total_trades` pro Symbol auf 1 kollabierte.
+    Die „Returns" der Lauf-2-Tabelle sind daher weitgehend **Kostenabrieb**
+    (Slippage/Commission über hundert Round-Trips), keine Markt-PnL, und die
+    Spalten „Trades"/„Win-Rate" waren Artefakte. Die Confidence-Bucket-
+    Statistik (close-preis-basierte Rekonstruktion) war dagegen schon im
+    zweiten Lauf die realitätsnahe Sicht: ~38 % Win-Rate mit negativem
+    mittleren PnL pro Trade. Die Engine wurde im dritten Lauf korrigiert
+    (mark-to-market, Marktpreis-Glattstellung, Round-Trip-Tracking mit
+    Bar-Timestamps) — die Lauf-1/2-Zahlen sind mit den Lauf-3-Zahlen
+    **nicht vergleichbar**.
+
+    **Dritter Kalibrierungslauf (03.09.2026, korrigierte Engine + Exit-
+    Regeln):** Auf Engine-Ebene wurden zwei Exit-Regeln ergänzt (wirkt auf
+    alle Strategien, auch im Gate-Sweep): ``--stop-loss`` (Exit bei
+    ``close <= avg_price × (1 − stop)``) und ``--max-holding-bars``
+    (Exit nach N Kerzen). Die Glattstellung läuft jetzt zum Marktpreis,
+    Positionen werden mark-to-market bewertet, und die Metriken zählen
+    echte Round-Trips (``trade_data`` aus Close-Fills, Timestamps aus den
+    Bars). Der Report zeigt pro Szenario zusätzlich die Exit-Verteilung
+    nach Exit-Grund.
+
+    Stop-Loss-Sweep auf crash-2021-05 (5m, Gate 0,3, Max-Haltezeit
+    2016 Bars ≈ 7 Tage, Startkapital 100.000 $, Long-Only):
+
+    | Stop-Loss | Return | Win-Rate | Profit-Factor | Round-Trips |
+    |---:|---:|---:|---:|---:|
+    | 4 % | -0,8 % | 38,0 % | 0,97 | 50 |
+    | 6 % | -1,3 % | 38,0 % | 0,80 | 50 |
+    | 8 % | -1,3 % | 38,0 % | 0,81 | 50 |
+    | 12 % | -1,0 % | 39,6 % | 0,88 | 48 |
+
+    Kein Stop-Wert dreht das Szenario ins Plus; der Stop ist bei 5m-
+    Auflösung kaum relevant (die SHORT-Konsens-Exits machen 45 von 50
+    Round-Trips und sind für sich leicht positiv, +728 $ bei 4 % Stop).
+    Für den finalen Lauf wurde 8 % als robuster Mittelwert gewählt.
+
+    Finaler E2E-Lauf (1m, alle vier Szenarien, Gate 0,3, Stop 8 %,
+    Max-Haltezeit 10080 Bars ≈ 7 Tage):
+
+    | Szenario | Final Equity | Return | Win-Rate | Round-Trips | Profit-Factor | Max-DD |
+    |---|---:|---:|---:|---:|---:|---:|
+    | crash-2021-05 (11 Tage) | 89.520 $ | -10,5 % | 19,9 % | 236 | 0,26 | 10,6 % |
+    | pump-2021-11 (9 Tage) | 94.724 $ | -5,3 % | 14,0 % | 236 | 0,39 | 5,3 % |
+    | crash-2022-06 (10 Tage) | 94.245 $ | -5,8 % | 18,7 % | 246 | 0,72 | 5,8 % |
+    | range-2022-03 (31 Tage) | 86.126 $ | -13,9 % | 16,0 % | 649 | 0,65 | 14,6 % |
+
+    Befund: Die korrigierte Abrechnung bestätigt die Bucket-Schätzung des
+    zweiten Laufs (Win-Rate 14–20 % statt des damaligen Artefakt-Werts
+    „0 %", hundert bis sechshundert echte Round-Trips pro Szenario). Der
+    8-%-Stop löst praktisch nie aus (einmal in crash-2021-05), die
+    Max-Haltezeit nie — die SHORT-Konsens-Exits dominieren mit über 99 %
+    aller Closes, und ihr mittleres PnL ist in allen vier Szenarien
+    negativ (-5 bis -21 $ pro Trade). Die Exit-Regeln haben den Verlust
+    also nicht beseitigt; der Engpass bleibt die **Entry-Seite**: Das
+    LONG-Konsens-Feuern kauft systematisch nahe lokaler Hochs, und bei
+    1m-Auflösung verzehnfacht die Trade-Frequenz (236–649 Round-Trips)
+    den Kostenabrieb. Der Resampling-Effekt dominiert: dasselbe
+    crash-2021-05-Szenario liefert bei 5m nur -0,8 bis -1,3 % (nahe
+    Break-even), bei 1m -10,5 %. Der Agenten-Konsens hat in diesen
+    BTC/USDT-Szenarien (2021/2022) keinen positiven Long-Only-Edge;
+    nächster sinnvoller Hebel ist die Entry-Selektion (z. B. nur
+    kaufen, wenn Trend- und Volatilitäts-Regime übereinstimmen), nicht
+    weitere Exit-Tuning.
 
 Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
 nie mit `docker compose up`, nur explizit via `docker compose run`.

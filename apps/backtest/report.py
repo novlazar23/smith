@@ -88,6 +88,31 @@ def _bucket_table(buckets: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _exit_table(extra: dict[str, Any]) -> list[str]:
+    """Exit-Verteilung (Round-Trips pro Exit-Grund mit PnL-Statistik)."""
+    round_trips: list[dict[str, Any]] = extra.get("round_trips", [])
+    lines = [
+        "### Exit-Verteilung",
+        "",
+        "| exit_reason | n_round_trips | win_rate | avg_pnl | total_pnl |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    if not round_trips:
+        lines.append("| _keine Round-Trips_ | | | | |")
+        return lines
+    by_reason: dict[str, list[dict[str, Any]]] = {}
+    for rt in round_trips:
+        by_reason.setdefault(str(rt.get("exit_reason", "unknown")), []).append(rt)
+    for reason in sorted(by_reason):
+        trips = by_reason[reason]
+        pnls = [float(rt.get("pnl", 0.0)) for rt in trips]
+        wins = sum(1 for pnl in pnls if pnl > 0)
+        win_rate = f"{wins / len(pnls):.2%}" if pnls else "—"
+        avg_pnl = f"{sum(pnls) / len(pnls):.2f}" if pnls else "—"
+        lines.append(f"| {reason} | {len(trips)} | {win_rate} | {avg_pnl} | {sum(pnls):.2f} |")
+    return lines
+
+
 def _sweep_table(rows: list[dict[str, Any]]) -> list[str]:
     """Gate-Sweep-Tabelle (gate → trades, win_rate, Return, Sharpe, DD, Pass-Rate)."""
     lines = [
@@ -141,6 +166,7 @@ def render_markdown(
         lines.extend(["", f"## Szenario: {label}", ""])
         lines.extend(_per_agent_table(extra))
         lines.extend(["", *_bucket_table(extra.get("buckets", []))])
+        lines.extend(["", *_exit_table(extra)])
     if sweep_rows:
         lines.extend(["", *_sweep_table(sweep_rows)])
     return "\n".join(lines) + "\n"

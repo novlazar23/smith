@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
@@ -31,7 +31,12 @@ from packages.backtesting.metrics import (
     calculate_sharpe_ratio,
     calculate_sortino_ratio,
 )
-from packages.backtesting.strategies import MACDCrossover, SignalAction, StrategySignal
+from packages.backtesting.strategies import (
+    BaseStrategy,
+    MACDCrossover,
+    SignalAction,
+    StrategySignal,
+)
 from packages.backtesting.validation import (
     MonteCarloSimulator,
     ParameterSweeper,
@@ -835,3 +840,178 @@ class TestStrategySignal:
         assert signal.stop_loss == 49000.0
         assert signal.take_profit == 52000.0
         assert signal.position_size == 0.0  # default
+
+
+# ─── Engine Accounting & Risk Exits ──────────────────────────────────────────
+
+
+def _path_candles(closes: list[float], symbol: str = "BTC/USD") -> list[Candle]:
+    """Kerzen mit deterministischem Preisverlauf (1m-Schritte, UTC-aware)."""
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    return [
+        Candle(
+            timestamp=start + timedelta(minutes=i),
+            symbol=symbol,
+            open=close,
+            high=close,
+            low=close,
+            close=close,
+            volume=10.0,
+        )
+        for i, close in enumerate(closes)
+    ]
+
+
+class ScriptedStrategy(BaseStrategy):
+    """Ergibt BUY/SELL-Signale an festgelegten Bar-Indizes (Engine-Tests)."""
+
+    def __init__(self, buys: list[int], sells: list[int], size: float = 0.10) -> None:
+        super().__init__(name="scripted")
+        self.buys = set(buys)
+        self.sells = set(sells)
+        self.size = size
+        self._seen = 0
+
+    def on_bar(self, candle: Candle) -> StrategySignal | None:
+        index = self._seen
+        self._seen += 1
+        if index in self.buys:
+            return StrategySignal(
+                action=SignalAction.BUY,
+                symbol=candle.symbol,
+                confidence=1.0,
+                reason="scripted buy",
+                position_size=self.size,
+                timestamp=candle.timestamp,
+            )
+        if index in self.sells:
+            return StrategySignal(
+                action=SignalAction.SELL,
+                symbol=candle.symbol,
+                confidence=1.0,
+                reason="scripted sell",
+                position_size=0.0,
+                timestamp=candle.timestamp,
+            )
+        return None
+
+
+class TestEngineAccounting:
+    """Mark-to-Market-Bewertung, Marktpreis-Glattstellung und Round-Trips."""
+
+    def test_equity_marked_to_market(self) -> None:
+        """Offene Position wird zum Schlusskurs bewertet (nicht Kostengrundlage)."""
+        closes = [100.0] * 4 + [120.0, 140.0, 160.0]
+        feed = MemoryDataFeed(candles=_path_candles(closes))
+        engine = BacktestEngine(config=BacktestConfig(symbol="BTC/USD"))
+        result = engine.run(feed, ScriptedStrategy(buys=[2], sells=[]), warmup_bars=2)
+
+        # Position ≈ 10 % vom Kapital, Kauf bei 100, Schluss bei 160:
+        # ~100.000 + 0,10 * 100.000 * 0,60 - Kosten ≈ 105.9xx
+        assert result.metadata["final_equity"] > 105_500.0
+        # Offene Position taucht als unrealisierter Trade auf, kein Round-Trip
+        assert result.metadata["round_trips"] == []
+        assert result.metrics["total_trades"] == 1
+
+    def test_close_realizes_market_loss(self) -> None:
+        """SELL-Signal realisiert den Marktverlust (Glattstellung am Kurs)."""
+        closes = [100.0] * 4 + [90.0, 90.0, 90.0, 90.0]
+        feed = MemoryDataFeed(candles=_path_candles(closes))
+        engine = BacktestEngine(config=BacktestConfig(symbol="BTC/USD"))
+        result = engine.run(feed, ScriptedStrategy(buys=[2], sells=[4]), warmup_bars=2)
+
+        # 10 %-Position, -10 % Kurs -> ca. -1 % vom Kapital (-1.000) - Kosten
+        final = result.metadata["final_equity"]
+        assert 98_800.0 < final < 99_400.0
+        round_trips = result.metadata["round_trips"]
+        assert len(round_trips) == 1
+        assert round_trips[0]["pnl"] < -900.0
+        assert round_trips[0]["exit_reason"] == "signal"
+        # Nach der Glattstellung ist das Konto flach
+        assert abs(result.snapshots[-1].market_value) < 1e-9
+
+    def test_round_trips_tracked(self) -> None:
+        """Zwei vollständige Zyklen liefern zwei Round-Trips und Win-Rate 50 %."""
+        closes = [100.0] * 4 + [110.0, 110.0] + [100.0, 100.0] + [100.0, 100.0]
+        feed = MemoryDataFeed(candles=_path_candles(closes))
+        engine = BacktestEngine(config=BacktestConfig(symbol="BTC/USD"))
+        result = engine.run(
+            feed, ScriptedStrategy(buys=[2, 6], sells=[4, 8]), warmup_bars=2
+        )
+
+        round_trips = result.metadata["round_trips"]
+        assert len(round_trips) == 2
+        assert round_trips[0]["pnl"] > 0
+        assert round_trips[1]["pnl"] < 0
+        assert result.metrics["total_trades"] == 2
+        assert result.metrics["win_rate_pct"] == 50.0
+
+    def test_trade_timestamps_use_bar_time(self) -> None:
+        """Round-Trip-Zeitstempel sind die Bar-Timestamps (kein Wall-Clock)."""
+        closes = [100.0] * 5
+        candles = _path_candles(closes)
+        feed = MemoryDataFeed(candles=candles)
+        engine = BacktestEngine(config=BacktestConfig(symbol="BTC/USD"))
+        result = engine.run(feed, ScriptedStrategy(buys=[2], sells=[4]), warmup_bars=2)
+
+        rt = result.metadata["round_trips"][0]
+        assert rt["entry_time"] == candles[2].timestamp
+        assert rt["exit_time"] == candles[4].timestamp
+
+
+class TestEngineRiskExits:
+    """Stop-Loss und Max-Haltezeit als Engine-Risiko-Schicht."""
+
+    def test_stop_loss_triggers(self) -> None:
+        """Stop-Loss schließt die Position unterhalb der Schwelle."""
+        closes = [100.0] * 4 + [94.0, 94.0] + [110.0, 110.0]
+        feed = MemoryDataFeed(candles=_path_candles(closes))
+        config = BacktestConfig(symbol="BTC/USD", stop_loss_pct=0.05)
+        engine = BacktestEngine(config=config)
+        result = engine.run(feed, ScriptedStrategy(buys=[2], sells=[]), warmup_bars=2)
+
+        round_trips = result.metadata["round_trips"]
+        assert len(round_trips) == 1
+        assert round_trips[0]["exit_reason"].startswith("stop_loss_")
+        assert round_trips[0]["exit_bar"] == 4
+        # Nach dem Stop ist flach: die spätere Erholung zählt nicht
+        assert abs(result.snapshots[-1].market_value) < 1e-9
+        assert result.metadata["final_equity"] < 99_500.0
+
+    def test_stop_loss_not_triggered(self) -> None:
+        """Innerhalb der Stop-Loss-Schwelle bleibt die Position offen."""
+        closes = [100.0] * 4 + [97.0, 97.0]
+        feed = MemoryDataFeed(candles=_path_candles(closes))
+        config = BacktestConfig(symbol="BTC/USD", stop_loss_pct=0.05)
+        engine = BacktestEngine(config=config)
+        result = engine.run(feed, ScriptedStrategy(buys=[2], sells=[]), warmup_bars=2)
+
+        assert result.metadata["round_trips"] == []
+        assert result.snapshots[-1].market_value > 0
+
+    def test_max_holding_triggers(self) -> None:
+        """Max-Haltezeit schließt die Position nach N Bars."""
+        closes = [100.0] * 20
+        feed = MemoryDataFeed(candles=_path_candles(closes))
+        config = BacktestConfig(symbol="BTC/USD", max_holding_bars=10)
+        engine = BacktestEngine(config=config)
+        result = engine.run(feed, ScriptedStrategy(buys=[2], sells=[]), warmup_bars=2)
+
+        round_trips = result.metadata["round_trips"]
+        assert len(round_trips) == 1
+        assert round_trips[0]["exit_reason"] == "max_holding_10"
+        assert round_trips[0]["holding_bars"] == 10
+        assert round_trips[0]["exit_bar"] == 12
+
+    def test_risk_rules_disabled_by_default(self) -> None:
+        """Ohne Config-Werte gibt es keine Zwangs-Exits."""
+        config = BacktestConfig()
+        assert config.stop_loss_pct is None
+        assert config.max_holding_bars is None
+
+    def test_invalid_risk_config_rejected(self) -> None:
+        """Ungültige Risiko-Parameter werden vom Config-Modell abgelehnt."""
+        with pytest.raises(ValueError):
+            BacktestConfig(symbol="BTC/USD", stop_loss_pct=1.5)
+        with pytest.raises(ValueError):
+            BacktestConfig(symbol="BTC/USD", max_holding_bars=0)

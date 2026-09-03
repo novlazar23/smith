@@ -162,6 +162,8 @@ class BacktestConfig(BaseModel):
     date_start: datetime | None = None
     date_end: datetime | None = None
     warmup_bars: int = Field(default=50, ge=0)
+    stop_loss_pct: float | None = Field(default=None, ge=0, le=1)
+    max_holding_bars: int | None = Field(default=None, ge=1)
     rebalance_interval_seconds: int = Field(default=3600, ge=60)
     symbol: str = "BTC/USDT"
     timeframe: str = "1d"

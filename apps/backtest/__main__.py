@@ -69,6 +69,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--horizon", default="15m", help="Analyse-Horizont (Default: 15m)")
     parser.add_argument("--trade-notional", type=float, default=2000.0, help="Nominal pro BUY (Default: 2000)")
     parser.add_argument("--initial-capital", type=float, default=100_000.0, help="Startkapital (Default: 100000)")
+    parser.add_argument(
+        "--stop-loss",
+        type=float,
+        default=None,
+        help="Stop-Loss als Anteil unterhalb des Positions-Durchschnittspreises (z.B. 0.08 = 8 %%; Default: aus)",
+    )
+    parser.add_argument(
+        "--max-holding-bars",
+        type=int,
+        default=None,
+        help="Maximale Haltezeit in Bars, danach wird die Position geschlossen (Default: aus)",
+    )
     parser.add_argument("--output", default="./backtest_reports", help="Artefakt-Verzeichnis (Default: ./backtest_reports)")
     parser.add_argument("--ch-host", default=None, help="ClickHouse-Host (Env CH_HOST, Default: clickhouse)")
     parser.add_argument("--ch-port", type=int, default=None, help="ClickHouse-Port (Env CH_PORT, Default: 8123)")
@@ -86,6 +98,11 @@ def parse_bound(value: str | None) -> datetime | None:
     except ValueError:
         return datetime.fromisoformat(value)
     return datetime(day.year, day.month, day.day, tzinfo=UTC)
+
+
+def _iso(value: datetime) -> str:
+    """Datetime → ISO-String (für JSON-Artefakte)."""
+    return value.isoformat()
 
 
 def build_ch_engine(args: argparse.Namespace) -> ClickHouseEngine:
@@ -120,6 +137,8 @@ def backtest_config(args: argparse.Namespace) -> BacktestConfig:
     return BacktestConfig(
         symbol=args.instrument,
         timeframe="5m" if args.resample == "5m" else "1m",
+        stop_loss_pct=args.stop_loss,
+        max_holding_bars=args.max_holding_bars,
     )
 
 
@@ -170,6 +189,32 @@ def run_scenario(
     extra["evaluations"] = strategy.evaluations_to_dicts()
     extra["strategy"] = strategy.to_dict()
     extra["warmup_bars"] = args.candle_limit
+    extra["round_trips"] = [
+        {
+            "entry_time": _iso(rt["entry_time"]),
+            "exit_time": _iso(rt["exit_time"]),
+            "entry_price": rt["entry_price"],
+            "exit_price": rt["exit_price"],
+            "quantity": rt["quantity"],
+            "pnl": rt["pnl"],
+            "holding_bars": rt["holding_bars"],
+            "exit_reason": rt["exit_reason"],
+        }
+        for rt in result.metadata.get("round_trips", [])
+    ]
+    for pos in result.metadata.get("open_positions", []):
+        extra["round_trips"].append(
+            {
+                "entry_time": None,
+                "exit_time": None,
+                "entry_price": pos["avg_price"],
+                "exit_price": None,
+                "quantity": pos["quantity"],
+                "pnl": pos["unrealized_pnl"],
+                "holding_bars": pos["holding_bars"],
+                "exit_reason": "open",
+            }
+        )
     extra["params"] = {
         "instrument": args.instrument,
         "venue": args.venue,
@@ -178,6 +223,8 @@ def run_scenario(
         "candle_limit": args.candle_limit,
         "evaluate_every": args.evaluate_every,
         "min_confidence": args.gate,
+        "stop_loss_pct": args.stop_loss,
+        "max_holding_bars": args.max_holding_bars,
         "trade_notional": args.trade_notional,
         "initial_capital": args.initial_capital,
         "resample": args.resample or "none",
@@ -205,7 +252,13 @@ def run_sweep(args: argparse.Namespace, last: tuple[str, Any, AgentEnsembleStrat
     """
     label, feed, warm_strategy, _extra = last
     gates = [float(item) for item in args.sweep_gates.split(",") if item.strip()]
-    rows = gate_sweep(feed, lambda: make_strategy(args), gates, warm_strategy=warm_strategy)
+    rows = gate_sweep(
+        feed,
+        lambda: make_strategy(args),
+        gates,
+        config=backtest_config(args),
+        warm_strategy=warm_strategy,
+    )
     sweep_path = Path(args.output) / label / "sweep.json"
     sweep_path.write_text(json.dumps(rows, indent=2, default=str), encoding="utf-8")
     logger.info("Gate-Sweep für %s fertig: %d Gates → %s", label, len(gates), sweep_path)
