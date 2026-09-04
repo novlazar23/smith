@@ -635,6 +635,57 @@ deployment-reifer Alpha-Edge; weitere Hebel (Cross-Section-Portfolio
 mit Asset-Auswahl, Vol-Targeting gegen den Gewichts-Drift) sind
 erforschte, aber nicht valide Optionen.**
 
+**Zehnter Kalibrierungslauf (04.09.2026, Exit-am-Fair-Value,
+preregistriert):** Die Schwäche des 9. Laufs (SOL 2021: 19,65 % Max-DD,
+weil s80 die Position über den September-Spike hinaus bis RSI 80 hielt)
+motiviert eine **vorab formulierte Hypothese mit fixer
+Entscheidungsregel**: Die Mean-Reversion-These ("extremer Oversold
+revertiert zum Mittelwert") ist bei RSI ≈ 50–60 erfüllt; ein früherer
+Exit sollte den Tail-Risk senken. Getestet: `sell_above` ∈ {55, 60}
+(neu; s50 ist außerhalb des Parameterspacls [55, 95]) vs. s80
+(Baseline-Replication, exakt reproduziert: Σ 29,21 % = 6 × 4,87 %,
+170 Legs, maxDD 19,65 %). Preregistrierte Regel: Variante übernehmen
+**nur wenn** (a) die schlechteste Einzel-Asset-Periode um ≥ 1,5 pp
+besser ist UND (b) die Summe aller 42 Asset-Perioden innerhalb von
+-2 pp der s80-Baseline liegt.
+
+| sell_above | Σ (42 Asset-Perioden) | min Periode | max DD | Legs |
+|---:|---:|---:|---:|---:|
+| 55 | +26,95 % | -1,29 % | **3,19 %** | 312 |
+| 60 | +26,24 % | -1,11 % | 4,41 % | 307 |
+| **80 (Referenz)** | +29,21 % | -5,87 % | 19,65 % | 170 |
+
+Ergebnis nach der Regel: **beide abgelehnt** — (a) erfüllt (min-Periode
++4,58 pp bzw. +4,76 pp besser), (b) verfehlt s55 um 0,26 pp
+(26,95 < 29,21 - 2,0 = 27,21), s60 um 0,97 pp. **s80 bleibt Referenz.**
+Dokumentierter Befund: s55 ist die **Tail-Risk-Reduzierungs-Variante**
+desselben Sleeves — maxDD von 19,65 % auf 3,19 %, schlechteste
+Asset-Periode von -5,87 % auf -1,29 %, dafür Σ -2,26 pp. Aufgeteilt
+(per Asset verifiziert): Der 2021-Unterschied (-34,9 Σ-Points) wird
+allein vom SOL-Spike erzeugt (SOL: s80 +50,77 % vs. s55 +4,09 %,
+d. h. -46,7; die anderen fünf Assets sind unter s55 2021 besser,
++11,8 Σ), der 2024-Unterschied (-17,9 Σ) ebenfalls (Bull-Periode,
+XRP/SOL-Edge). Pro Periode schlägt s55 s80 in 5 von 7 (nur 2021 und
+2024 negativ). Das ist ein bewusster Risiko-Rendite-Trade-off, keine
+überlegene Variante: Wer den Sleeve rein zur Kapitalerhaltung nutzt,
+für den ist s55 die riskosärmere Ausführung desselben Mechanismus.
+
+**Gesamtbild nach 10 Läufen (Endzustand der Strategie-Untersuchung):**
+D (p30/b20/s80, Flatsize 10 %, ohne Stop, 5m, Kosten 0,1 %/Seite) ist
+der robusteste dokumentierte Kandidat: mechanismusplausibel, auf 6
+Assets und 5,4 Jahren (170 Legs) beständig, in allen 9
+Down-/Seitwärts-Regime-Gruppen defensiv, OOS-2026 über B&H. Geprüfte
+und abgelehnte Hebel: Sizing (linear, kein Edge), Entry-/Exit-Grid
+(b20/s80 enges Optimum), Stops/Time-Stops (schlechter), Regime-Router
+(schlechter), Vol-Gate (dormant), Agenten-Ensemble (negativ),
+Fair-Value-Exit s55/s60 (Prereg-Regel verfehlt). Grenzen: kein
+Alpha in Bullmärkten, asset-spezifischer Edge (BNB/ADA negativ),
+Gewichts-Drift auf Volatilen (s55 als dokumentierte
+Tail-Risk-Alternative). **Finale Wertstellung: defensives
+Mean-Reversion-Sleeve ohne deployment-reifen Alpha-Edge; die
+Empfehlung lautet, D als Risikoreduktions-Position (kleine
+Allokation) zu betrachten, nicht als Renditequelle.**
+
 Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
 nie mit `docker compose up`, nur explizit via `docker compose run`.
 
