@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from packages.backtesting.core import BacktestConfig, Candle
+from packages.backtesting.core import BacktestConfig, BacktestResult, Candle
 from packages.backtesting.datafeed import MemoryDataFeed
 from packages.backtesting.engine import BacktestEngine
 from packages.backtesting.strategies import BaseStrategy, SignalAction, StrategySignal
@@ -51,7 +51,7 @@ class ScriptedStrategy(BaseStrategy):
         )
 
 
-def _run(buy_bars: frozenset[int], sell_bars: frozenset[int], allow_pyramiding: bool):
+def _run(buy_bars: frozenset[int], sell_bars: frozenset[int], *, allow_pyramiding: bool) -> BacktestResult:
     # 8 Bars zu 100, dann SELL-Phase zu 110
     feed = MemoryDataFeed(candles=_make_candles([100.0] * 8 + [110.0, 110.0]))
     cfg = BacktestConfig(symbol="BTC/USD", warmup_bars=0, allow_pyramiding=allow_pyramiding)
@@ -83,7 +83,7 @@ def test_no_pyramiding_keeps_flat_position() -> None:
 def test_trade_return_pct_is_fraction_of_notional() -> None:
     result = _run(frozenset({2}), frozenset({8}), allow_pyramiding=False)
     m = result.metrics
-    # 100 → 110 (vor Slippage) ≈ +10 % des Notentials — nicht $-PnL × 100
+    # 100 → 110 (vor Slippage) ≈ +10 % des Notentials — nicht $-PnL mal 100
     assert 9.5 < m["avg_trade_return_pct"] < 10.5
     assert 9.5 < m["best_trade_return_pct"] < 10.5
     assert 9.5 < m["avg_win_return_pct"] < 10.5

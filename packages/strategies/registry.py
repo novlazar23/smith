@@ -19,6 +19,7 @@ from .keltner_breakout import KeltnerBreakoutStrategy
 from .macd_cross import MacdCrossStrategy
 from .momentum_roc import MomentumRocStrategy
 from .rsi_mean_reversion import RsiMeanReversionStrategy
+from .rsi_vol_gate import RsiVolGateStrategy
 from .stochastics import StochasticsStrategy
 from .supertrend import SupertrendStrategy
 from .vwap_reversion import VwapReversionStrategy
@@ -31,6 +32,7 @@ _STRATEGY_CLASSES: tuple[type[RuleStrategy], ...] = (
     MacdCrossStrategy,
     MomentumRocStrategy,
     RsiMeanReversionStrategy,
+    RsiVolGateStrategy,
     StochasticsStrategy,
     SupertrendStrategy,
     VwapReversionStrategy,

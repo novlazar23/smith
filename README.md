@@ -374,6 +374,69 @@ Konfidenz-Gate), nur rückwärts auf Kerzen-Historik.
     bei 11 Tagen. Kandidat für eine Folge-Optimierung (einmaliger
     rekursiver Durchlauf, Werte unverändert).
 
+    **Sechster Kalibrierungslauf (04.09.2026, OOS-Validierung +
+    Engine-Korrektur: Flatsize):** Vor der Validierung auf weiteren
+    Zeiträumen wurden zwei Engine-Bugs gefunden und korrigiert:
+    (1) **Pyramiding**: Die Regel-Strategien feuern BUY-Signale wiederholt
+    (RSI kreuzt die Schwelle mehrfach), und die Engine addierte jede
+    Bestellung zur bestehenden Position — dadurch wuchs eine 10-%-
+    „Flatsize"-Strategie über Zeit bis zu ~100 % der Equity. Die Zoo-
+    Zahlen des 5. Laufs sind damit nur mit Vorbehalt interpretierbar.
+    Fix: `BacktestConfig.allow_pyramiding` (Default `True` = Verhalten
+    der Läufe 1–5, Backward-Compat) + CLI-Flag `--no-pyramiding` für
+    echten Flatsize (BUY bei offener Position wird ignoriert).
+    (2) **Trade-Return-Metrik**: `avg/best/worst_*_trade_return_pct`
+    rechneten Dollar-PnL × 100 statt dem Anteil am Handelsnotional;
+    `entry_price` wird jetzt in `trade_data` mitgeführt. Zusätzlich
+    wurde der O(n²)-Nebenbefund umgesetzt: `compute_indicators` rechnet
+    EMA/MACD jetzt in einem rekursiven Durchlauf (bit-identisch zu
+    vorher, E2E-Äquivalenz replays den 4. Lauf exakt; 158.000 Bars:
+    >10 min → 2,0 s).
+
+    Datenbasis: `candles_history` (BTC/USDT, BINANCE_FUTURES) deckt
+    zusätzlich den Zeitraum **2026-03-02 → 2026-09-02** ab (185 Tage,
+    echte Out-of-Sample-Daten, nie für Kalibrierung verwendet; Lücken
+    in der Historie: 2021-11-30 → 2022-02-15, 2022-07-31 → 2026-03-02).
+
+    RSI-Parameter-Sweep (5m, 125 Configs × 4 Szenarien) identifizierte
+    `period=30` als robusten Kandidaten; die Flatsize-Validierung
+    darüber auf **10 definierten Fenstern** (10 % Position,
+    `allow_pyramiding=False`, Kosten 0,1 %/Seite, 100.000 $):
+
+    | Fenster | Zeitraum | Regime |
+    |---|---|---|
+    | crash-2021-05 / pump-2021-11 | 05-15→05-25 / 11-01→11-10, 2021 | Kalibrierung |
+    | range-2022-03 / crash-2022-06 | 03-01→03-31 / 06-15→06-25, 2022 | Validierung |
+    | drop-2021-06 | 05-26→06-30, 2021 | OOS |
+    | bear-2022-q1 / range-2022-q2 / luna-2022 | 02-15→04-15 / 04-15→06-14 / 06-15→07-31, 2022 | OOS |
+    | oos-2026-h1 / oos-2026-h2 | 03-02→06-15 / 06-15→09-02, 2026 | OOS (nie kalibriert) |
+
+    | Kandidat | Σ | positiv | worst | Max-DD |
+    |---|---:|---:|---:|---:|
+    | A: rsi p30/b30/s80 (Zoo-Default) | **-6,46** | 5/10 | -4,85 | 6,23 |
+    | D: rsi p30/b20/s80 | **+4,06** | **6/10** | -1,80 | 4,09 |
+    | E: rsi_vol_gate p30/b30/s80 | +3,91 | 5/10 | -1,82 | 3,07 |
+
+    Befund: (1) Der Zoo-„Gewinner" des 5. Laufs (A, +1,49 %) kollabiert
+    unter echtem Flatsize auf Σ -6,46 % — seine damalige Robustheit war
+    pyramiding-getrieben. (2) **D** (nur tiefe Oversold: RSI30 < 20)
+    ist der robusteste Kandidat: 6/10 Fenster positiv, in den
+    2026-OOS-Hälften +1,20 % bzw. +0,97 %, worst Window -1,80 %
+    (range-2022-q2, LUNA-Crash; Buy-&-Hold dort -44,6 %). (3) **E**
+    (neue Strategie `rsi_vol_gate`: RSI-Reversion + ATR-Gate, BUY nur
+    bei ATR/close ≥ 0,8 %) hat das niedrigste Max-DD, handelte aber in
+    beiden 2026-Fenstern gar nicht (Gate zu restriktiv im ruhigen
+    Regime). (4) Ehrliche Einordnung: D erzeugt über ~446 Fenster-
+    tage nur 13 Round-Trips — statistisch dünn; der Mechanismus
+    (kaufen nur bei extremem Oversold-Ausschlag) ist aber konsistent
+    positiv, schlägt Buy-&-Hold in allen Crash-/Bear-Fenstern um
+    Größenordnungen und unterperformt strukturell nur in starken
+    Bullen (oos-2026-h2: +0,97 % vs. B&H +18,3 %). **Verdikt: kein
+    deployment-reifer Edge, aber D ist der erste Kandidat mit
+    OOS-bestätigtem, mechanismusplausibel positivem Flatsize-Ergebnis.**
+    Nächster Hebel: Regime-Router (Mean-Reversion in Crash/Range,
+    Trendfolge im Pump — das im 5. Lauf beobachtete Regime-Muster).
+
 Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
 nie mit `docker compose up`, nur explizit via `docker compose run`.
 

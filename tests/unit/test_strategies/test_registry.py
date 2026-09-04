@@ -20,13 +20,14 @@ EXPECTED = [
     "macd_cross",
     "momentum_roc",
     "rsi_mean_reversion",
+    "rsi_vol_gate",
     "stochastics",
     "supertrend",
     "vwap_reversion",
 ]
 
 
-def test_lists_all_ten_strategies() -> None:
+def test_lists_all_registered_strategies() -> None:
     assert list_strategies() == EXPECTED
     assert set(STRATEGIES) == set(EXPECTED)
 

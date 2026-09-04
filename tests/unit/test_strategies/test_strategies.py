@@ -133,6 +133,57 @@ def test_rsi_mean_reversion_sells_overbought_exit() -> None:
     assert any(s.action == DN for s in signals)
 
 
+def test_rsi_vol_gate_buys_oversold_in_high_vol() -> None:
+    crash = make_candles(250, step=-0.3)
+    recovery = _phases(0, 40, 0.3, start_price=crash[-1].close)
+    strategy = create_strategy("rsi_vol_gate", BTC)
+    signals = _feed(strategy, crash + recovery)
+    assert any(s.action == UP for s in signals)
+
+
+def test_rsi_vol_gate_blocks_buy_in_low_vol() -> None:
+    # sanfter, anhaltender Abwärtstrend mit minimalen Wicks:
+    # RSI(30) fällt unter 30, ATR/close bleibt aber < 0.8 %
+    quiet: list[Candle] = []
+    for i in range(150):
+        open_ = 100.0 - 0.2 * (i - 1) if i else 100.0
+        close = 100.0 - 0.2 * i
+        quiet.append(
+            Candle(
+                timestamp=BASE_TIME + timedelta(minutes=i),
+                symbol=BTC,
+                open=open_,
+                high=max(open_, close) + 0.05,
+                low=min(open_, close) - 0.05,
+                close=close,
+                volume=1000.0,
+            )
+        )
+    price = quiet[-1].close
+    rebound: list[Candle] = []
+    for i in range(30):
+        open_ = price
+        close = price + 0.2
+        rebound.append(
+            Candle(
+                timestamp=BASE_TIME + timedelta(minutes=150 + i),
+                symbol=BTC,
+                open=open_,
+                high=max(open_, close) + 0.05,
+                low=min(open_, close) - 0.05,
+                close=close,
+                volume=1000.0,
+            )
+        )
+        price = close
+    gated = create_strategy("rsi_vol_gate", BTC)
+    plain = create_strategy("rsi_mean_reversion", BTC)
+    gated_signals = _feed(gated, quiet + rebound)
+    plain_signals = _feed(plain, quiet + rebound)
+    assert any(s.action == UP for s in plain_signals)  # Basislogik würde kaufen
+    assert not any(s.action == UP for s in gated_signals)  # Gate blockiert
+
+
 def _dip_then_rebound(n_flat: int, dip: float, rebound: float) -> list[Candle]:
     candles = make_candles(n_flat)
     base = BASE_TIME + timedelta(minutes=n_flat)
