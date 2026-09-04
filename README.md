@@ -501,6 +501,79 @@ Konfidenz-Gate), nur rückwärts auf Kerzen-Historik.
     backfillen, um die längere Lücke zu schließen und die Stichprobe
     (aktuell 12 Round-Trips pro Asset) zu verdichten.
 
+**Achter Kalibrierungslauf (04.09.2026, Vollhistorie 2021-05 → 2026-09):**
+Zuerst wurde der Backfill-Planner repariert: `compute_missing_ranges` ging
+von einer kontinuierlichen Abdeckung (min..max) aus und erkannte Lücken
+*innerhalb* des vorhandenen Fensters nie — die Lücke 2022-08 → 2026-02
+wurde beim Dry-Run als „0 Lücken" gemeldet. Der Planner prüft jetzt die
+pro-Tage-Abdeckung (`uniqExact`-Zählung pro Tag, Teil-Tage minutengenau)
+und bildet das Komplement der abgedeckten Intervalle (Unit-Tests inkl.
+Regression für interne Lücken). Damit wurden 2022-08 → 2026-02 und
+2021-12 → 2022-02-14 backgefillt; `candles_history` enthält nun
+**zusammenhängende 1m-Daten von 2021-05-01 bis 2026-09-02** für BTC und
+ETH (ETH 2021-06/07/08 bleibt partiell wie vor dem Backfill).
+
+D wurde unverändert (p30/b20/s80, Flatsize, 10 %, ohne Stop, 5m, Kosten
+0,1 %/Seite) auf sieben zusammenhängenden Perioden × beiden Assets
+getestet:
+
+| Periode | Asset | Buy-&-Hold | D | Max-DD |
+|---|---|---:|---:|---:|
+| 2021-05 → 2021-11 (Korrektur) | BTC | -1,24 % | -0,80 % | 1,96 % |
+| | ETH | +67,01 % | +1,74 % | 6,30 % |
+| 2022-02 → 2022-07 (LUNA) | BTC | -45,23 % | -0,06 % | 4,09 % |
+| | ETH | -42,72 % | -1,21 % | 8,16 % |
+| 2022-08 → 2022-12 (**neu**) | BTC | -28,99 % | -2,06 % | 2,58 % |
+| | ETH | -28,70 % | +1,90 % | 0,50 % |
+| 2023 (**neu**) | BTC | +155,87 % | +1,75 % | 1,82 % |
+| | ETH | +90,94 % | -0,28 % | 3,10 % |
+| 2024 (**neu**) | BTC | +121,08 % | +2,71 % | 2,42 % |
+| | ETH | +46,09 % | +2,18 % | 4,26 % |
+| 2025 (**neu**) | BTC | -6,35 % | -0,64 % | 3,21 % |
+| | ETH | -10,97 % | -1,68 % | 5,61 % |
+| 2026-01 → 2026-09 (OOS) | BTC | -11,39 % | -0,43 % | 3,59 % |
+| | ETH | -18,44 % | +1,19 % | 4,61 % |
+
+Befund: Auf **fünf verschiedenen Down-/Seitwärts-Regimes** (Sept-2021-
+Crash, LUNA-2022, Bear-2022H2, Down-Jahr-2025, Down-Start-2026) über
+beide Assets bleibt D in jeder Asset-Periode zwischen -2,1 % und +1,9 %
+bei Max-DD ≤ 8,2 % — während Buy-&-Hold zwischen -45 % und +156 %
+schwängt. Die bull-market-Schwäche bestätigt sich auf den zwei neuen
+Bull-Jahren 2023/2024 (BTC: +1,75 %/+2,71 % vs. B&H +156 %/+121 %).
+Wichtig: b20/s80 **überlebt die vier neuen Jahre** — das Ergebnis ist
+nicht (nur) auf 2021/2022/2026 gefittet. Aggregiert (Summe der
+Perioden-Renditen): D ≈ +4,3 % (BTC +0,5 %, ETH +3,8 %) bei ≤ 8,2 %
+DD vs. B&H ≈ +287 % — erneut: **Risikoreduktion, kein Alpha**, aber
+jetzt auf 5,4 Jahren und ~35 Round-Trips über beide Assets statt 11.
+
+Zwei weitergeprüfte Hebel, beide **negative Ergebnisse**:
+
+- **Sizing-Sweep (5 %–25 % Flatsize):** Return und Drawdown skalieren
+  exakt linear, der Quotient Return/DD bleibt bei 0,26 konstant, die
+  Trade-Menge ist identisch. Sizing ist reine Exposure — kein
+  nichtlineares Edge. Die dokumentierten 10 % bleiben die
+  Referenzgröße (Risikogrund, nicht Renditegrund).
+- **Entry-Grid (buy_below 15/20/25/30 × sell_above 70/80/90, Σ über
+  die 6 bekannten Perioden):** b20/s80 (Σ +5,99 %, Return/DD 0,26) ist
+  das beste Zellenpaar, aber die Nachbarn sind schwach (15/80: -3,6 %,
+  25/80: -7,3 %, 30/70: -19,5 %); lockeres Entry (b25/b30) vervielfacht
+  die Trades (bis 189 Legs) und wird deutlich negativ, höheres Exit
+  (s90) erhöht den Drawdown stark (bis 38 %). **b20/s80 ist ein echtes,
+  aber enges lokales Optimum** — die Edge liegt exakt in der
+  Deep-Oversold-Zone; das Overfitting-Risiko ist dokumentiert.
+
+**Ehrliches Gesamturteil (Stand 8. Lauf):** D ist der bisher
+am besten validierte Kandidat: mechanismusplausibel (kaufen im
+extremen Oversold, verkaufen im Overbought), cross-Asset beständig,
+überlebt vier unbekannte Jahre, in fünf Down-/Seitwärts-Regimes auf
+beiden Assets defensiv (≤ ±2,1 %), OOS-2026-Start über B&H. Seine
+Grenzen sind ebenso klar: kein Alpha in Bullmärkten, dünne Stichprobe
+(3–9 Legs/Jahr), enger Parameter-Topf. **Verbleibender Hebel:
+Cross-Sectional-Ausweitung** (gleiche Strategie auf SOL/BNB/XRP/ADA —
+mehr Entries, Diversifikation der Idiosynkrasie, dichtere
+Stichprobe) und eine Portfolio-Variante (gleiche Gewichtung, Flatsize
+pro Asset).
+
 Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
 nie mit `docker compose up`, nur explizit via `docker compose run`.
 
