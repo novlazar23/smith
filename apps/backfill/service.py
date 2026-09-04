@@ -3,8 +3,10 @@
 Pro Instrument:
 
 1. gewünschtes Fenster berechnen (``start``/``end`` oder jetzt minus Monate)
-2. vorhandenes Kerzenfenster aus ClickHouse lesen (``existing_range``)
-3. fehlende Teilmengen (Lücken) vor/nach dem vorhandenen Fenster berechnen
+2. vorhandene Abdeckung aus ClickHouse lesen (pro Tag; Teil-Tage
+   minutengenau nachgefragt — erkennt auch interne Lücken)
+3. fehlende Teilmengen (Lücken) als Komplement der vorhandenen
+   Intervalle im Fenster berechnen
 4. jede Lücke paginiert von Binance laden und in Batches à 5000 schreiben
 5. Fortschritt pro 1000-Kerzen-Fenster und Final-Summary loggen
 
@@ -83,23 +85,60 @@ def months_ago(moment: datetime, months: int) -> datetime:
     return moment.replace(year=year, month=month, day=day)
 
 
-def compute_missing_ranges(
+@dataclass(frozen=True)
+class DayCoverage:
+    """Pro-Tage-Abdeckung eines Backfill-Tag in ClickHouse.
+
+    ``day`` ist der Tagbeginn (00:00 UTC) als datetime, ``count`` die
+    Anzahl distinkter 1m-Kerzen des Tags.
+    """
+
+    day: datetime
+    first: datetime
+    last: datetime
+    count: int
+
+
+def day_window(start: datetime, end: datetime, day: datetime) -> tuple[datetime, datetime]:
+    """Erwartetes Kerzenfenster des Tages ``day``, geklemmt auf ``[start, end]``."""
+    day_end = day + timedelta(days=1) - ONE_MINUTE
+    return max(day, start), min(day_end, end)
+
+
+def day_is_complete(start: datetime, end: datetime, coverage: DayCoverage) -> bool:
+    """Tag ist vollständig, wenn die Kerzenzahl die erwartete Minutenzahl erreicht."""
+    window_start, window_end = day_window(start, end, coverage.day)
+    expected = int((window_end - window_start).total_seconds() // 60) + 1
+    return coverage.count >= expected
+
+
+def minutes_to_intervals(minutes: Sequence[datetime]) -> list[tuple[datetime, datetime]]:
+    """Führt sortierte Minuten-Zeitstempel zu zusammenhängenden Intervallen zusammen."""
+    intervals: list[tuple[datetime, datetime]] = []
+    for moment in sorted(minutes):
+        if intervals and moment - intervals[-1][1] <= ONE_MINUTE:
+            intervals[-1] = (intervals[-1][0], moment)
+        else:
+            intervals.append((moment, moment))
+    return intervals
+
+
+def compute_missing_intervals(
     start: datetime,
     end: datetime,
-    existing: tuple[datetime, datetime] | None,
+    covered: Sequence[tuple[datetime, datetime]],
 ) -> list[tuple[datetime, datetime]]:
-    """Berechnet die fehlenden Teilmengen des Fensters ``[start, end]``.
+    """Berechnet das Komplement der Intervalle ``covered`` in ``[start, end]``.
 
-    ``existing`` ist das bereits in ClickHouse vorhandene Fenster
-    ``(min, max)`` von ``open_time``. Überlappende Bereiche werden
-    übersprungen; Lücken werden exakt an den vorhandenen Rand angelegt
-    (vorderer Teil endet bei ``min - 1 Min``, hinterer beginnt bei
-    ``max + 1 Min``).
+    ``covered`` muss nicht sortiert oder zusammengeführt sein;
+    Überlappungen werden gemerged, Anteile außerhalb des Fensters
+    abgeschnitten. Damit werden auch **interne** Lücken erkannt, die
+    eine min/max-Betrachtung verfehlen würde.
 
     Args:
         start: Gewünschter Fensterbeginn.
         end: Gewünschtes Fensterende (inklusive).
-        existing: Vorhandenes Fenster oder ``None`` (keine Kerzen).
+        covered: Vorhandene ``(von, bis)``-Intervalle (Minute-Präzision).
 
     Returns:
         Liste fehlender ``(von, bis)``-Paare in Zeitreihenfolge
@@ -107,15 +146,25 @@ def compute_missing_ranges(
     """
     if start >= end:
         return []
-    if existing is None:
-        return [(start, end)]
-    existing_min, existing_max = existing
-    ranges: list[tuple[datetime, datetime]] = []
-    if start < existing_min:
-        ranges.append((start, min(existing_min - ONE_MINUTE, end)))
-    if end > existing_max:
-        ranges.append((max(start, existing_max + ONE_MINUTE), end))
-    return ranges
+    merged: list[list[datetime]] = []
+    for cov_start, cov_end in sorted(covered):
+        cov_start = max(cov_start, start)
+        cov_end = min(cov_end, end)
+        if cov_start > cov_end:
+            continue
+        if merged and cov_start <= merged[-1][1] + ONE_MINUTE:
+            merged[-1][1] = max(merged[-1][1], cov_end)
+        else:
+            merged.append([cov_start, cov_end])
+    missing: list[tuple[datetime, datetime]] = []
+    cursor = start
+    for cov_start, cov_end in merged:
+        if cov_start > cursor:
+            missing.append((cursor, cov_start - ONE_MINUTE))
+        cursor = max(cursor, cov_end + ONE_MINUTE)
+    if cursor <= end:
+        missing.append((cursor, end))
+    return missing
 
 
 def candle_count(start: datetime, end: datetime) -> int:
@@ -198,13 +247,38 @@ class BackfillService:
                 failures.append((instrument, str(exc)))
         return BackfillResult(summaries=tuple(summaries), failures=tuple(failures))
 
+    def _covered_intervals(
+        self, instrument: str, start: datetime, end: datetime
+    ) -> list[tuple[datetime, datetime]]:
+        """Baut die exakt vorhandenen Intervalle des Fensters.
+
+        Voller Tage (Kerzenzahl = erwartete Minutenzahl) zählen als
+        ganztags abgedeckt; unvollständige Tage werden minutengenau
+        nachgefragt, um auch intra-tägige Lücken zu finden.
+        """
+        day_rows = storage.existing_day_coverage(
+            self._engine, instrument, self._config.venue, start, end
+        )
+        covered: list[tuple[datetime, datetime]] = []
+        for day, first, last, count in day_rows:
+            coverage = DayCoverage(day, first, last, count)
+            if day_is_complete(start, end, coverage):
+                covered.append(day_window(start, end, day))
+            else:
+                probe_start, probe_end = day_window(start, end, day)
+                minutes = storage.existing_minutes(
+                    self._engine, instrument, self._config.venue, probe_start, probe_end
+                )
+                covered.extend(minutes_to_intervals(minutes))
+        return covered
+
     def _run_instrument(self, instrument: str) -> InstrumentSummary:
         """Berechnet, lädt und persistiert die fehlenden Kerzen eines Instruments."""
         start, end = self.window()
-        existing = storage.existing_range(self._engine, instrument, self._config.venue)
-        ranges = compute_missing_ranges(start, end, existing)
+        covered = self._covered_intervals(instrument, start, end)
+        ranges = compute_missing_intervals(start, end, covered)
         estimated = estimate_requests(ranges)
-        self._log_plan(instrument, start, end, existing, ranges, estimated)
+        self._log_plan(instrument, start, end, covered, ranges, estimated)
         if self._config.dry_run:
             return InstrumentSummary(
                 instrument, start, end, tuple(ranges), estimated, 0, None
@@ -243,15 +317,17 @@ class BackfillService:
         instrument: str,
         start: datetime,
         end: datetime,
-        existing: tuple[datetime, datetime] | None,
+        covered: list[tuple[datetime, datetime]],
         ranges: list[tuple[datetime, datetime]],
         estimated: int,
     ) -> None:
         """Loggt den Backfill-Plan (im Dry-Run der einzige sichtbare Teil)."""
-        if existing is None:
-            have = "keine Kerzen vorhanden"
+        if not covered:
+            have = "keine Kerzen im Fenster"
         else:
-            have = f"vorhanden {_fmt(existing[0])} → {_fmt(existing[1])}"
+            covered_start = min(cov_start for cov_start, _ in covered)
+            covered_end = max(cov_end for _, cov_end in covered)
+            have = f"vorhanden {_fmt(covered_start)} → {_fmt(covered_end)}"
         mode = " [DRY-RUN]" if self._config.dry_run else ""
         logger.info(
             "Plan %s: Fenster %s → %s, %s, %d Lücke(n), ~%d Request(s)%s",

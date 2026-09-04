@@ -88,6 +88,77 @@ class TestExistingRange:
         assert storage.existing_range(engine, "BTC/USDT", "BINANCE_FUTURES") is None
 
 
+class TestExistingDayCoverage:
+    def test_parses_day_rows(self) -> None:
+        engine = FakeEngine(
+            {
+                "toStartOfDay(open_time)": (
+                    ["d", "mn", "mx", "n"],
+                    [
+                        ["2025-01-01 00:00:00", "2025-01-01 00:00:00", "2025-01-01 23:59:00", "1440"],
+                        ["2025-01-02 00:00:00", "2025-01-02 00:00:00", "2025-01-02 12:00:00", "721"],
+                    ],
+                )
+            }
+        )
+        result = storage.existing_day_coverage(
+            engine, "BTC/USDT", "BINANCE_FUTURES", START, START + timedelta(days=2)
+        )
+        assert result == [
+            (
+                datetime(2025, 1, 1, tzinfo=UTC),
+                datetime(2025, 1, 1, tzinfo=UTC),
+                datetime(2025, 1, 1, 23, 59, tzinfo=UTC),
+                1440,
+            ),
+            (
+                datetime(2025, 1, 2, tzinfo=UTC),
+                datetime(2025, 1, 2, tzinfo=UTC),
+                datetime(2025, 1, 2, 12, 0, tzinfo=UTC),
+                721,
+            ),
+        ]
+        sql = engine.statements[0][1]
+        assert "toStartOfDay(open_time)" in sql
+        assert "uniqExact(open_time)" in sql
+
+    def test_no_rows_yield_empty_list(self) -> None:
+        engine = FakeEngine()
+        result = storage.existing_day_coverage(
+            engine, "BTC/USDT", "BINANCE_FUTURES", START, START + timedelta(days=2)
+        )
+        assert result == []
+
+
+class TestExistingMinutes:
+    def test_parses_minute_rows(self) -> None:
+        engine = FakeEngine(
+            {
+                "SELECT open_time": (
+                    ["open_time"],
+                    [
+                        ["2025-01-01 00:00:00"],
+                        ["2025-01-01 00:02:00"],
+                    ],
+                )
+            }
+        )
+        result = storage.existing_minutes(
+            engine, "BTC/USDT", "BINANCE_FUTURES", START, START + timedelta(hours=1)
+        )
+        assert result == [
+            datetime(2025, 1, 1, tzinfo=UTC),
+            datetime(2025, 1, 1, 0, 2, tzinfo=UTC),
+        ]
+
+    def test_no_rows_yield_empty_list(self) -> None:
+        engine = FakeEngine()
+        result = storage.existing_minutes(
+            engine, "BTC/USDT", "BINANCE_FUTURES", START, START + timedelta(hours=1)
+        )
+        assert result == []
+
+
 class TestDeleteRange:
     def test_no_delete_issued_for_replacing_merge_tree(self) -> None:
         """Dokumentierte Dedup-Entscheidung: ``candles`` ist

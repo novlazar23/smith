@@ -157,6 +157,95 @@ def existing_range(
     return min_dt, max_dt
 
 
+def existing_day_coverage(
+    engine: CandleEngine,
+    instrument: str,
+    venue: str,
+    start: datetime,
+    end: datetime,
+) -> list[tuple[datetime, datetime, datetime, int]]:
+    """Liefert die pro-Tage-Abdeckung des Fensters ``[start, end]``.
+
+    Pro Tag mit Daten ein Tuple ``(day, first, last, count)``:
+    ``day`` = Tagbeginn 00:00 UTC, ``first``/``last`` = erste/letzte
+    ``open_time`` des Tags, ``count`` = Anzahl **distinkter** Minuten
+    (``uniqExact`` — Duplikate vor dem ReplacingMergeTree-Merge zählen
+    nicht mit). Tage ohne Daten fehlen in der Liste.
+
+    Args:
+        engine: ClickHouse-Engine.
+        instrument: Kanonisches Instrument (z. B. ``"BTC/USDT"``).
+        venue: Venue (z. B. ``"BINANCE_FUTURES"``).
+        start: Fensterbeginn (inklusive).
+        end: Fensterende (inklusive).
+
+    Returns:
+        Liste in Zeitreihenfolge; leer, wenn das Fenster keine Daten hat.
+    """
+    sql = (
+        "SELECT toStartOfDay(open_time) AS d, min(open_time) AS mn, "
+        "max(open_time) AS mx, uniqExact(open_time) AS n "
+        f"FROM {TABLE_NAME} "
+        f"WHERE instrument = {_sql_str(instrument)} AND venue = {_sql_str(venue)} "
+        f"AND open_time BETWEEN '{_fmt(start)}' AND '{_fmt(end)}' "
+        "GROUP BY d ORDER BY d"
+    )
+    names, rows = engine.query(sql)
+    if not rows:
+        return []
+    index = {name: i for i, name in enumerate(names)}
+    result: list[tuple[datetime, datetime, datetime, int]] = []
+    for row in rows:
+        day = _parse_dt(row[index["d"]])
+        first = _parse_dt(row[index["mn"]])
+        last = _parse_dt(row[index["mx"]])
+        count = int(row[index["n"]])
+        if day is None or first is None or last is None:
+            continue
+        result.append((day, first, last, count))
+    return result
+
+
+def existing_minutes(
+    engine: CandleEngine,
+    instrument: str,
+    venue: str,
+    start: datetime,
+    end: datetime,
+) -> list[datetime]:
+    """Liefert alle ``open_time``-Werte im Fenster ``[start, end]``.
+
+    Nur für Teil-Tage (wenige tausend Zeilen) gedacht: ermöglicht die
+    exakte Lückenbestimmung innerhalb eines unvollständigen Tages.
+
+    Args:
+        engine: ClickHouse-Engine.
+        instrument: Kanonisches Instrument.
+        venue: Venue.
+        start: Fensterbeginn (inklusive).
+        end: Fensterende (inklusive).
+
+    Returns:
+        Liste von UTC-datetimes (nicht sortiert, kann Duplikate enthalten).
+    """
+    sql = (
+        "SELECT open_time "
+        f"FROM {TABLE_NAME} "
+        f"WHERE instrument = {_sql_str(instrument)} AND venue = {_sql_str(venue)} "
+        f"AND open_time BETWEEN '{_fmt(start)}' AND '{_fmt(end)}'"
+    )
+    names, rows = engine.query(sql)
+    if not rows:
+        return []
+    index = {name: i for i, name in enumerate(names)}
+    result: list[datetime] = []
+    for row in rows:
+        value = _parse_dt(row[index["open_time"]])
+        if value is not None:
+            result.append(value)
+    return result
+
+
 def delete_range(
     engine: CandleEngine,
     instrument: str,
