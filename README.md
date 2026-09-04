@@ -92,6 +92,42 @@ Konfidenz-Gate), nur rückwärts auf Kerzen-Historik.
    und die Agenten-Setups passen. `--resample 5m` aggregiert die 1m-Kerzen
    auf 5m (4× weniger Evaluations, gröberes Fenster).
 
+   Zusätzlich zu `--gate`/`--sweep-gates` (nur Agenten-Ensemble) gibt es
+   zwei weitere Strategie-Modi (mutuell exklusiv):
+
+   - **Bibliothek-Strategien** (`packages/strategies/`, deterministisch,
+     ohne LLM): `--list-strategies` listet alle Strategien mit Parametern;
+     `--strategy NAME` backtestet eine einzelne Strategie; `--params
+     fast=8,slow=30` überschreibt Parameter; `--sweep-library` läuft alle
+     Strategien × alle Szenarien durch (je Run ein Artefakt-Verzeichnis
+     `szenario__strategie`):
+
+     ```bash
+     docker compose --profile on-demand run --rm backtest \
+       python -m apps.backtest --list-strategies
+     docker compose --profile on-demand run --rm backtest \
+       python -m apps.backtest --scenarios crash-2021-05,pump-2021-11,crash-2022-06,range-2022-03 \
+       --resample 5m --sweep-library
+     ```
+
+   - **LLM-Prompt-Strategie** (`PromptStrategy`, OpenAI-kompatibler
+     Endpoint via `litellm`, Default `local-fast`): Der LLM sieht pro
+     `--llm-every`-ter Kerze einen deterministischen OHLCV-Snapshot
+     (zuletzt 16 Kerzen, EMA/RSI/ATR/MACD/VWAP, Position, Kosten,
+     Exit-Regeln) und liefert eine strukturierte Entscheidung
+     (`BUY/SELL/CLOSE` + Konfidenz + Stop/Take-Profit). `--llm-cache
+     DATEI` speichert Antworten als JSONL (wiederverwendbar, determini-
+     stischer Re-Run), `--llm-model` überschreibt das Modell,
+     `--min-candles` ist das Warmup (Default 30, für Prompt-Läufe ≥ 120
+     sinnvoll):
+
+     ```bash
+     docker compose --profile on-demand run --rm backtest \
+       python -m apps.backtest --scenario crash-2021-05 --resample 5m \
+       --prompt-strategy --llm-every 60 --min-candles 120 \
+       --llm-cache /app/backtest_reports/llm_cache.jsonl
+     ```
+
     **Erster Kalibrierungslauf (02.09.2026, BTC/USDT, 2021-05→2022-07,
     157.777 Kerzen):** In allen vier Szenarien (crash-2021-05, pump-2021-11,
     crash-2022-06, range-2022-03) fällt der Konsens zu 100 % auf `NO_TRADE`
@@ -275,6 +311,68 @@ Konfidenz-Gate), nur rückwärts auf Kerzen-Historik.
     Kostenabrieb), die Trade-Frequenz weiter drosseln oder eine echte
     Alpha-Quelle ergänzen — weiteres Gate- oder Exit-Tuning hat nach vier
     Läufen keinen positiven Effekt mehr gezeigt.
+
+    **Fünfter Kalibrierungslauf (04.09.2026, Strategie-Zoo: Bibliothek +
+    LLM-Prompt):** Statt dem Agenten-Konsens wurden zwei unabhängige
+    Strategiewege gegenübergestellt (jeweils derselbe Engine-Pfad,
+    identische Kosten/Abrechnung): (a) eine deterministische
+    Strategie-Bibliothek (`packages/strategies/`, 10 öffentlich
+    dokumentierte Regel-Strategien: EMA-/MACD-Cross, Supertrend,
+    Donchian-/Keltner-Breakout, RSI-/Bollinger-/VWAP-Mean-Reversion,
+    Stochastik, ROC-Momentum — Long-Only, 10-%-Flatsize, 300-Bar-
+    Fenster) und (b) die `PromptStrategy` (LLM `local-fast` via
+    `litellm` trifft die Handelsentscheidungen selbst).
+
+    Bibliotheks-Sweep (5m, alle vier Szenarien, 40 Runs, je Strategie ×
+    Szenario; Rückgabe in %):
+
+    | Strategie | crash-2021-05 | pump-2021-11 | crash-2022-06 | range-2022-03 | Σ |
+    |---|---:|---:|---:|---:|---:|
+    | rsi_mean_reversion | **+1,08** | -0,16 | **+0,93** | -0,36 | **+1,49** |
+    | vwap_reversion | +0,79 | -0,38 | -1,62 | -0,77 | -1,98 |
+    | ema_cross | -0,26 | -0,20 | -0,12 | -1,05 | -1,63 |
+    | supertrend | -0,34 | -0,16 | -0,24 | -0,55 | -1,29 |
+    | keltner_breakout | -1,19 | +0,33 | -0,77 | -0,34 | -1,97 |
+    | bollinger_reversion | -1,22 | -0,37 | -0,48 | -1,33 | -3,40 |
+    | macd_cross | -1,29 | -0,63 | -0,66 | -1,84 | -4,42 |
+    | stochastics | -1,46 | -1,12 | -1,85 | -2,64 | -7,07 |
+    | momentum_roc | -5,14 | +0,42 | -1,75 | -1,74 | -8,21 |
+    | donchian_breakout | -5,43 | +0,03 | -1,14 | -1,90 | -8,44 |
+
+    `rsi_mean_reversion` ist der einzige Σ-positive Kandidat
+    (Win-Rate 78–83 %, 9–30 Round-Trips) — und der einzige, der in
+    **beiden** Crash-Szenarien deutlich positiv ist. Kalibrierung
+    (2021) vs. Validierung (2022) bleiben dabei konsistent: +0,92 %
+    (2021) vs. +0,57 % (2022) im Σ der jeweiligen Szenarien.
+    Regime-Muster: Mean-Reversion gewinnt in den Crashes, Trendfolge
+    (Momentum/Keltner/Donchian) gewinnt im Pump — range-2022-03 ist für
+    alle 10 Strategien negativ (kostengetriebener Seitwärtsabrieb, bei
+    5m-Auflösung -0,3 % bis -2,6 %). Zum Vergleich: der 4. Lauf
+    (Agenten-Ensemble mit Entry-Gate 0,6, 5m) lag bei -1,41 % Σ. Der
+    beste Zoo-Kandidat (rsi_mean_reversion, +1,49 %) schlägt damit die
+    Ensemble-Baseline deutlich, 9 von 10 Strategien (Mittel -3,69 %)
+    nicht — es bleibt **kein robust positiver Edge** (nur 1 von 10
+    Strategien Σ-positiv, im Validierungsjahr 2022 nur noch +0,57 %).
+
+    PromptStrategy-E2E (crash-2021-05, 5m, `local-fast`, `--llm-every
+    60`, Warmup 120): 51 LLM-Aufrufe, 0 Fehler, 1 BUY + 3 SELL-Signale
+    → 1 Round-Trip, -0,19 % (Max-DD 0,53 %). Die Pipeline ist voll
+    funktionsfähig (Snapshot → LLM → Signal → Engine → Artefakte +
+    JSONL-Cache für deterministische Re-Runs); die Handelsqualität liegt
+    auf dem Niveau der übrigen Strategien (kein Edge). Für 1m-Auflösung
+    ist der Prompt-Modus im aktuellen Setup unpraktikabel: ein 1m-
+    Replay desselben Szenarios hätte 5× so viele Bars (15.840) und bei
+    gleichem Rhythmus (~5 Stunden/Aufruf) 5× so viele sequentielle
+    LLM-Aufrufe (~260); der Engine-Teil wächst wegen der O(n²)-
+    Indikatoren zusätzlich überproportional. 5m ist daher die
+    sinnvolle Auflösung für den Prompt-Modus.
+
+    Nebenbefund (Performance): `compute_indicators` in
+    `packages/backtesting/datafeed.py` ist O(n²) (EMA/RSI/MACD werden
+    pro Bar vom ersten Index neu iteriert) — ein 31-Tage-Szenario
+    (8.928 5m-Kerzen) kostet dadurch ~3,5 min pro Backtest statt ~25 s
+    bei 11 Tagen. Kandidat für eine Folge-Optimierung (einmaliger
+    rekursiver Durchlauf, Werte unverändert).
 
 Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
 nie mit `docker compose up`, nur explizit via `docker compose run`.

@@ -496,6 +496,10 @@ services:
       CH_DB: trading_events
       MLFLOW_ENABLED: "true"
       MLFLOW_TRACKING_URI: "http://mlflow:5000"
+      # LLM-Endpoint für den prompt-basierten Agenten (OpenAI-kompatibel);
+      # API-Key als Docker-Secret unter /run/secrets/llm_api_key
+      LITELLM_BASE_URL: "https://ymir-api.ifak.eu/v1"
+      SMITH_LLM_MODEL: "local-fast"
     volumes:
       # Named Volume (kein Bind-Mount): initialisiert mit appuser-Besitz aus
       # dem Image; ein root-eigenes Host-Verzeichnis wäre nicht schreibbar.
@@ -507,6 +511,7 @@ services:
         condition: service_started
     secrets:
       - clickhouse_password
+      - llm_api_key
     networks:
       - backend
 
@@ -557,3 +562,5 @@ secrets:
     file: ./configs/secrets/grafana_password.txt
   api_secret_key:
     file: ./configs/secrets/api_secret_key.txt
+  llm_api_key:
+    file: ./configs/secrets/llm_api_key.txt

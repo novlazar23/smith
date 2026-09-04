@@ -29,15 +29,19 @@ from pathlib import Path
 from typing import Any
 
 from packages.backtesting.core import BacktestConfig
+from packages.backtesting.strategies import BaseStrategy
+from packages.llm.client import LLMClient
 from packages.persistence.clickhouse.engine import (
     ClickHouseConfig,
     ClickHouseEngine,
     create_ch_engine,
 )
+from packages.strategies import create_strategy, describe, list_strategies
 
 from .agent_strategy import AgentEnsembleStrategy
 from .ch_feed import ClickHouseDataFeed
 from .mlflow_report import log_backtest_to_mlflow
+from .prompt_strategy import PromptStrategy
 from .report import render_markdown, resolve_output_dir, write_artifacts
 from .runner import confidence_buckets, extra_metrics, gate_sweep, run_backtest
 from .scenarios import parse_scenarios
@@ -93,6 +97,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="Kommagetrennte Agent-IDs, die für einen BUY alle selbst LONG votieren müssen "
         "(z.B. 'trend' oder 'trend,volatility_regime'; Default: aus)",
     )
+    parser.add_argument(
+        "--strategy",
+        default=None,
+        help="Regel-Strategie aus der Bibliothek statt Agenten-Ensemble "
+        "(Namen via --list-strategies, z.B. 'ema_cross')",
+    )
+    parser.add_argument(
+        "--params",
+        default=None,
+        help="Strategie-Parameter 'k=v,k=v' (nur mit --strategy, z.B. 'fast=8,slow=30')",
+    )
+    parser.add_argument(
+        "--sweep-library",
+        action="store_true",
+        help="Alle Bibliotheks-Strategien x alle Szenarien durchlaufen (je Run ein Artefakt-Verzeichnis)",
+    )
+    parser.add_argument(
+        "--list-strategies",
+        action="store_true",
+        help="Verfügbare Bibliotheks-Strategien mit Parametern auflisten und beenden",
+    )
+    parser.add_argument(
+        "--prompt-strategy",
+        action="store_true",
+        help="LLM-PromptStrategy statt Agenten-Ensemble (braucht LITELLM_*-Umgebung)",
+    )
+    parser.add_argument(
+        "--llm-every",
+        type=int,
+        default=15,
+        help="PromptStrategy: LLM-Abfrage alle N Bars (Default: 15)",
+    )
+    parser.add_argument(
+        "--llm-model",
+        default=None,
+        help="PromptStrategy: Modellname (Default: Env SMITH_LLM_MODEL)",
+    )
+    parser.add_argument(
+        "--llm-cache",
+        default=None,
+        help="PromptStrategy: JSONL-Cache-Pfad für LLM-Antworten (Default: aus)",
+    )
     parser.add_argument("--output", default="./backtest_reports", help="Artefakt-Verzeichnis (Default: ./backtest_reports)")
     parser.add_argument("--ch-host", default=None, help="ClickHouse-Host (Env CH_HOST, Default: clickhouse)")
     parser.add_argument("--ch-port", type=int, default=None, help="ClickHouse-Port (Env CH_PORT, Default: 8123)")
@@ -134,8 +180,50 @@ def parse_agent_ids(value: str) -> tuple[str, ...]:
     return tuple(agent_id.strip() for agent_id in value.split(",") if agent_id.strip())
 
 
-def make_strategy(args: argparse.Namespace) -> AgentEnsembleStrategy:
-    """Erzeugt die Agent-Ensemble-Strategie aus den CLI-Argumenten."""
+def parse_params(value: str) -> dict[str, float]:
+    """Parst ``'k=v,k=v'`` in ein Float-Parameter-Dict (für --params)."""
+    params: dict[str, float] = {}
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        key, sep, raw = item.partition("=")
+        if not sep:
+            raise ValueError(f"Parameter {item!r} im Format k=v erwartet")
+        try:
+            params[key.strip()] = float(raw)
+        except ValueError:
+            raise ValueError(f"Parameter {key.strip()!r}: Wert {raw!r} ist keine Zahl") from None
+    return params
+
+
+def make_strategy(args: argparse.Namespace, strategy_name: str | None = None) -> BaseStrategy:
+    """Erzeugt die Strategie je Modus: PromptStrategy, Regel-Strategie oder Ensemble.
+
+    Args:
+        args: CLI-Argumente.
+        strategy_name: Expliziter Registry-Name (nur im ``--sweep-library``-Loop
+            gesetzt); überschreibt ``args.strategy``.
+    """
+    if args.prompt_strategy:
+        return PromptStrategy(
+            instrument=args.instrument,
+            client=LLMClient.from_env(model=args.llm_model),
+            cache_path=args.llm_cache,
+            llm_every=args.llm_every,
+            min_candles=args.min_candles,
+            initial_capital=args.initial_capital,
+            trade_notional=args.trade_notional,
+        )
+    name = strategy_name or args.strategy
+    if name:
+        return create_strategy(
+            name,
+            args.instrument,
+            parse_params(args.params) if args.params else None,
+            initial_capital=args.initial_capital,
+            trade_notional=args.trade_notional,
+        )
     return AgentEnsembleStrategy(
         instrument=args.instrument,
         horizon=args.horizon,
@@ -160,18 +248,18 @@ def backtest_config(args: argparse.Namespace) -> BacktestConfig:
     )
 
 
-def run_scenario(
+def load_feed(
     args: argparse.Namespace,
     ch_engine: ClickHouseEngine,
     label: str,
     start: datetime | date | None,
     end: datetime | date | None,
-) -> tuple[str, Any, Any, dict[str, Any]] | None:
-    """Führt ein Szenario aus (Feed → Backtest → Analytics → Artefakte).
+) -> tuple[ClickHouseDataFeed, list[Any]] | None:
+    """Lädt den Szenario-Feed (einmalig; ``get_candles`` cached intern).
 
     Returns:
-        (label, Feed, BacktestResult, extra) oder None, wenn keine Daten
-        verfügbar sind (Warnung, nicht fatal).
+        (feed, candles) oder None, wenn keine ausreichend Kerzen verfügbar
+        sind (Warnung, nicht fatal).
     """
     feed = ClickHouseDataFeed(
         ch_engine,
@@ -199,14 +287,33 @@ def run_scenario(
             args.min_candles,
         )
         return None
+    return feed, candles
 
-    strategy = make_strategy(args)
+
+def run_on_feed(
+    args: argparse.Namespace,
+    feed: ClickHouseDataFeed,
+    label: str,
+    candles: list[Any],
+    strategy_name: str | None = None,
+) -> tuple[str, Any, Any, dict[str, Any]]:
+    """Führt einen Backtest auf dem geladenen Feed aus (Analytics → Artefakte)."""
+    strategy = make_strategy(args, strategy_name)
     result = run_backtest(feed, lambda: strategy, config=backtest_config(args), label=label)
-    extra = extra_metrics(result, strategy)
-    extra["buckets"] = confidence_buckets(result, strategy)
-    extra["evaluations"] = strategy.evaluations_to_dicts()
+    if isinstance(strategy, AgentEnsembleStrategy):
+        extra = extra_metrics(result, strategy)
+        extra["buckets"] = confidence_buckets(result, strategy)
+        extra["evaluations"] = strategy.evaluations_to_dicts()
+    else:
+        extra: dict[str, Any] = {
+            "n_evaluations": 0,
+            "gate_pass_rate": None,
+            "per_agent": {},
+            "buckets": [],
+            "evaluations": [],
+        }
     extra["strategy"] = strategy.to_dict()
-    extra["warmup_bars"] = args.candle_limit
+    extra["warmup_bars"] = strategy.candle_limit
     extra["round_trips"] = [
         {
             "entry_time": _iso(rt["entry_time"]),
@@ -248,6 +355,11 @@ def run_scenario(
         "trade_notional": args.trade_notional,
         "initial_capital": args.initial_capital,
         "resample": args.resample or "none",
+        "strategy_mode": (
+            "prompt" if args.prompt_strategy else "library" if (strategy_name or args.strategy) else "ensemble"
+        ),
+        "strategy_name": strategy_name or args.strategy,
+        "strategy_params": parse_params(args.params) if args.params else None,
         "data_start": candles[0].timestamp.isoformat(),
         "data_end": candles[-1].timestamp.isoformat(),
     }
@@ -262,6 +374,27 @@ def run_scenario(
         {name: str(path) for name, path in paths.items()},
     )
     return label, feed, result, extra
+
+
+def run_scenario(
+    args: argparse.Namespace,
+    ch_engine: ClickHouseEngine,
+    label: str,
+    start: datetime | date | None,
+    end: datetime | date | None,
+    strategy_name: str | None = None,
+) -> tuple[str, Any, Any, dict[str, Any]] | None:
+    """Führt ein Szenario aus (Feed laden → Backtest → Analytics → Artefakte).
+
+    Returns:
+        (label, Feed, BacktestResult, extra) oder None, wenn keine Daten
+        verfügbar sind (Warnung, nicht fatal).
+    """
+    loaded = load_feed(args, ch_engine, label, start, end)
+    if loaded is None:
+        return None
+    feed, candles = loaded
+    return run_on_feed(args, feed, label, candles, strategy_name)
 
 
 def run_sweep(args: argparse.Namespace, last: tuple[str, Any, AgentEnsembleStrategy, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -285,12 +418,50 @@ def run_sweep(args: argparse.Namespace, last: tuple[str, Any, AgentEnsembleStrat
     return rows
 
 
+def list_strategy_report() -> None:
+    """Gibt die Bibliotheks-Strategien mit Parametern als Markdown-Tabelle aus."""
+    rows = ["| Strategie | Warmup | Parameter (Default) | Beschreibung |", "|---|---:|---|---|"]
+    for name in list_strategies():
+        info = describe(name)
+        params = ", ".join(
+            f"{key}={spec['default']:g}" for key, spec in info["params"].items()
+        ) or "—"
+        rows.append(f"| {name} | {info['min_bars']} | {params} | {info['description']} |")
+    print("\n".join(rows))
+
+
+def validate_strategy_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Prüft die Modi-Exklusivität (Ensemble vs. Bibliothek vs. Prompt)."""
+    if args.prompt_strategy and (args.strategy or args.sweep_library):
+        parser.error("--prompt-strategy ist inkompatibel mit --strategy/--sweep-library")
+    if args.strategy and args.sweep_library:
+        parser.error("--strategy und --sweep-library sind inkompatibel (der Sweep läuft die ganze Bibliothek)")
+    if args.sweep_gates and (args.strategy or args.prompt_strategy or args.sweep_library):
+        parser.error("--sweep-gates ist nur mit dem Agenten-Ensemble kombinierbar")
+    if args.entry_gate is not None and (args.strategy or args.prompt_strategy or args.sweep_library):
+        parser.error("--entry-gate ist nur mit dem Agenten-Ensemble kombinierbar")
+    if args.entry_required_agents and (args.strategy or args.prompt_strategy or args.sweep_library):
+        parser.error("--entry-required-agents ist nur mit dem Agenten-Ensemble kombinierbar")
+    if args.params and not (args.strategy or args.sweep_library):
+        parser.error("--params erfordert --strategy (oder --sweep-library)")
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI-Hauptfunktion. Returns: 0 (Erfolg), 2 (ungültige Argumente)."""
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+    if args.list_strategies:
+        list_strategy_report()
+        return 0
+    try:
+        validate_strategy_args(parser, args)
+        if args.params:
+            parse_params(args.params)  # frühes Fehlermelden vor dem DB-Setup
+    except ValueError as exc:
+        parser.error(str(exc))
     try:
         if args.from_date is not None or args.to_date is not None:
             scenarios = [("custom", parse_bound(args.from_date), parse_bound(args.to_date))]
@@ -307,6 +478,18 @@ def main(argv: list[str] | None = None) -> int:
     runs: list[tuple[str, Any, dict[str, Any]]] = []
     last: tuple[str, Any, AgentEnsembleStrategy, dict[str, Any]] | None = None
     for label, start, end in scenarios:
+        if args.sweep_library:
+            loaded = load_feed(args, ch_engine, label, start, end)
+            if loaded is None:
+                continue
+            feed, candles = loaded
+            for name in list_strategies():
+                outcome = run_on_feed(args, feed, f"{label}__{name}", candles, strategy_name=name)
+                if outcome is None:
+                    continue
+                outcome_label, _feed, result, extra = outcome
+                runs.append((outcome_label, result, extra))
+            continue
         outcome = run_scenario(args, ch_engine, label, start, end)
         if outcome is None:
             continue
