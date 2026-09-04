@@ -471,6 +471,36 @@ Konfidenz-Gate), nur rückwärts auf Kerzen-Historik.
     Exit-Varianten auf den Vollperioden (nicht auf überlappenden
     Fenstern), oder Multi-Asset-Check (ETH) zur Robustheitsprüfung.
 
+    **Siebter Kalibrierungslauf (04.09.2026, Multi-Asset-Konfirmation
+    auf ETH/USDT):** D wurde unverändert (p30/b20/s80, Flatsize,
+    10 %, ohne Stop) auf denselben drei zusammenhängenden Perioden für
+    ETH/USDT (BINANCE_FUTURES) getestet, um zu prüfen, ob der
+    Mechanismus an BTC gebunden ist oder generalisiert:
+
+    | Periode | Buy-&-Hold | D (ETH) | Round-Trips | Max-DD |
+    |---|---:|---:|---:|---:|
+    | 2021-05 → 2021-11 | +66,8 % | +1,74 % | 3 | 6,30 % |
+    | 2022-02 → 2022-07 | -42,8 % | -1,21 % | 4 | 8,16 % |
+    | 2026-03 → 2026-09 | +24,7 % | +4,13 % | 5 | 0,99 % |
+    | gesamt (565 Tage) | ≈ +19 % | **+4,66 %** | 12 | 8,16 % |
+
+    Befund: Der Mechanismus **generalisiert cross-Asset** — auf ETH
+    ist D in 2021 und 2026 positiv (2026: 5/5 Trades gewonnen), im
+    2022-Bear nahezu flat (-1,21 % bei B&H -42,8 %) und bleibt unter
+    8,2 % Max-DD. Wie auf BTC unterperformt er in starken Bullen
+    (2021: +1,74 % vs. B&H +66,8 %), weil er nur bei extremem
+    Oversold kauft. Zusammenfassung über beide Assets: D ist in
+    4 von 6 Asset-Perioden positiv, in den Bear-/Neutral-Phasen
+    nahezu flat, mit konstant niedrigen Drawdowns — ein defensiver
+    Mean-Reversion-Long, der Kapital in Bärenphasen erhält und
+    moderat positive Drift in Seitwärts/OOS-Phasen liefert. Er ist
+    **kein Alpha-Generator** (in Aufwärtsmärkten strukturell
+    underperformend), aber der robusteste, über Asset und
+    Out-of-Sample beständige Kandidat aller sieben Läufe.
+    Verbleibender Hebel: die fehlende Historie 2022-08 → 2026-02
+    backfillen, um die längere Lücke zu schließen und die Stichprobe
+    (aktuell 12 Round-Trips pro Asset) zu verdichten.
+
 Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
 nie mit `docker compose up`, nur explizit via `docker compose run`.
 
