@@ -124,6 +124,7 @@ class BacktestEngine:
             trade_data.append(
                 {
                     "pnl": rt["pnl"],
+                    "entry_price": rt["entry_price"],
                     "quantity": rt["quantity"],
                     "price": rt["exit_price"],
                     "timestamp": rt["exit_time"],
@@ -147,6 +148,7 @@ class BacktestEngine:
                 trade_data.append(
                     {
                         "pnl": (price - pos.avg_price) * pos.quantity,
+                        "entry_price": pos.avg_price,
                         "quantity": pos.quantity,
                         "price": price,
                         "timestamp": current_ts.isoformat() if current_ts else "",
@@ -335,6 +337,14 @@ class BacktestEngine:
         equity = self._marked_equity(candle)
 
         if action_str in ("buy", "BUY"):
+            had_position = (
+                self.config.symbol in self._account.positions
+                and self._account.positions[self.config.symbol].quantity > 0
+            )
+            if had_position and not self.config.allow_pyramiding:
+                # Flatsize: eine Position pro Symbol, kein Nachkauf
+                return
+
             size_pct = getattr(signal, "position_size", 0.1)
             if size_pct <= 0:
                 size_pct = 0.1
@@ -345,10 +355,6 @@ class BacktestEngine:
             if quantity <= 0:
                 return
 
-            had_position = (
-                self.config.symbol in self._account.positions
-                and self._account.positions[self.config.symbol].quantity > 0
-            )
             try:
                 trade = self.executor.submit_order(
                     account=self._account,

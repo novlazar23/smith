@@ -170,16 +170,26 @@ def calculate_backtest_metrics(
         metrics.total_trades = len(trades)
 
         pnls = [t.get("pnl", 0) for t in trades]
-        metrics.avg_trade_return = sum(pnls) / len(pnls) if pnls else 0
-        metrics.best_trade = max(pnls) if pnls else 0
-        metrics.worst_trade = min(pnls) if pnls else 0
+        # Trade-Return als Anteil am Handelsnotional (0.05 = +5 %);
+        # Win-Rate/Profit-Factor bleiben PnL-basiert (Absolutbeträge).
+        trade_pairs: list[tuple[float, float]] = [
+            (t.get("pnl", 0), (t.get("price", 0.0) - t["entry_price"]) / t["entry_price"])
+            for t in trades
+            if t.get("entry_price")
+        ]
+        rets = [r for _, r in trade_pairs]
+        metrics.avg_trade_return = sum(rets) / len(rets) if rets else 0
+        metrics.best_trade = max(rets) if rets else 0
+        metrics.worst_trade = min(rets) if rets else 0
 
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p <= 0]
 
         metrics.win_rate = len(wins) / len(pnls) if pnls else 0
-        metrics.avg_win_return = sum(wins) / len(wins) if wins else 0
-        metrics.avg_loss_return = sum(losses) / len(losses) if losses else 0
+        win_rets = [r for p, r in trade_pairs if p > 0]
+        loss_rets = [r for p, r in trade_pairs if p <= 0]
+        metrics.avg_win_return = sum(win_rets) / len(win_rets) if win_rets else 0
+        metrics.avg_loss_return = sum(loss_rets) / len(loss_rets) if loss_rets else 0
 
         gross_profit = sum(wins) if wins else 0
         gross_loss = abs(sum(losses)) if losses else 1

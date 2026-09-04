@@ -60,6 +60,14 @@ class BaseStrategy(ABC):
     def __init__(self, name: str = "custom") -> None:
         self.name = name
         self._history: list[Candle] = []
+        # Von allen konkreten Strategien überschrieben (Ensemble/Regel/Prompt)
+        self.instrument: str = ""
+        self.initial_capital: float = 0.0
+        self.candle_limit: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialisiert die Strategie-Instanz für Reports (Subklassen erweitern)."""
+        return {"name": self.name}
 
     @property
     def history(self) -> list[Candle]:

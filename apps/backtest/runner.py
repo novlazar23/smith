@@ -45,6 +45,7 @@ from packages.backtesting.engine import BacktestEngine
 from packages.backtesting.strategies import BaseStrategy, SignalAction, StrategySignal
 
 from .agent_strategy import (
+    AgentEnsembleStrategy,
     SignalEvent,
     derive_action,
     entry_allowed,
@@ -53,8 +54,6 @@ from .agent_strategy import (
 if TYPE_CHECKING:
     from packages.backtesting.core import BacktestResult, Candle
     from packages.backtesting.datafeed import DataFeed
-
-    from .agent_strategy import AgentEnsembleStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +78,7 @@ def bucket_label(low: float, high: float) -> str:
 
 
 def default_config(
-    strategy: AgentEnsembleStrategy, config: BacktestConfig | None = None
+    strategy: BaseStrategy, config: BacktestConfig | None = None
 ) -> BacktestConfig:
     """BacktestConfig mit den Runner-Defaults (Symbol, Kapital, Kosten, Warmup)."""
     base = config if config is not None else BacktestConfig()
@@ -96,7 +95,7 @@ def default_config(
 
 def run_backtest(
     feed: DataFeed,
-    strategy_factory: Callable[[], AgentEnsembleStrategy],
+    strategy_factory: Callable[[], BaseStrategy],
     config: BacktestConfig | None = None,
     label: str = "backtest",
 ) -> BacktestResult:
@@ -382,7 +381,7 @@ def _sweep_row(
 
 def gate_sweep(
     feed: DataFeed,
-    strategy_factory: Callable[[], AgentEnsembleStrategy],
+    strategy_factory: Callable[[], BaseStrategy],
     gates: list[float],
     config: BacktestConfig | None = None,
     warm_strategy: AgentEnsembleStrategy | None = None,
@@ -400,6 +399,8 @@ def gate_sweep(
         final_equity, gate_pass_rate (Anteil gecachter Konsense ≥ gate).
     """
     base = warm_strategy if warm_strategy is not None else strategy_factory()
+    if not isinstance(base, AgentEnsembleStrategy):
+        raise TypeError("gate_sweep benötigt ein AgentEnsembleStrategy (consensus_cache)")
     if warm_strategy is None:
         engine = BacktestEngine(default_config(base, config))
         engine.run(feed, base, warmup_bars=base.candle_limit)

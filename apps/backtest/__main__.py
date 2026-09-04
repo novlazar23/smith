@@ -86,6 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximale Haltezeit in Bars, danach wird die Position geschlossen (Default: aus)",
     )
     parser.add_argument(
+        "--no-pyramiding",
+        action="store_true",
+        help="Flatsize: BUYs bei bestehender Position ignorieren statt aufzustapeln "
+        "(empfohlen für Bibliotheks-Strategien; Default: Pyramiding wie Läufe 1-5)",
+    )
+    parser.add_argument(
         "--entry-gate",
         type=float,
         default=None,
@@ -245,6 +251,7 @@ def backtest_config(args: argparse.Namespace) -> BacktestConfig:
         timeframe="5m" if args.resample == "5m" else "1m",
         stop_loss_pct=args.stop_loss,
         max_holding_bars=args.max_holding_bars,
+        allow_pyramiding=not args.no_pyramiding,
     )
 
 
@@ -352,6 +359,7 @@ def run_on_feed(
         "entry_required_agents": list(parse_agent_ids(args.entry_required_agents)),
         "stop_loss_pct": args.stop_loss,
         "max_holding_bars": args.max_holding_bars,
+        "allow_pyramiding": not args.no_pyramiding,
         "trade_notional": args.trade_notional,
         "initial_capital": args.initial_capital,
         "resample": args.resample or "none",

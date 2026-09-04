@@ -159,6 +159,10 @@ class BacktestConfig(BaseModel):
     max_total_exposure: float = Field(default=1.0, gt=0, le=1)
     initial_cash_ratio: float = Field(default=0.1, gt=0, le=1)
     allow_short: bool = True
+    # True (Default): BUYs stapeln auf (Pyramiding, Verhalten der
+    # Kalibrierungsläufe 1-5). False: Flatsize - ein BUY bei bereits
+    # bestehender Position wird ignoriert.
+    allow_pyramiding: bool = True
     date_start: datetime | None = None
     date_end: datetime | None = None
     warmup_bars: int = Field(default=50, ge=0)
