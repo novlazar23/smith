@@ -420,22 +420,56 @@ Konfidenz-Gate), nur rückwärts auf Kerzen-Historik.
     Befund: (1) Der Zoo-„Gewinner" des 5. Laufs (A, +1,49 %) kollabiert
     unter echtem Flatsize auf Σ -6,46 % — seine damalige Robustheit war
     pyramiding-getrieben. (2) **D** (nur tiefe Oversold: RSI30 < 20)
-    ist der robusteste Kandidat: 6/10 Fenster positiv, in den
-    2026-OOS-Hälften +1,20 % bzw. +0,97 %, worst Window -1,80 %
-    (range-2022-q2, LUNA-Crash; Buy-&-Hold dort -44,6 %). (3) **E**
-    (neue Strategie `rsi_vol_gate`: RSI-Reversion + ATR-Gate, BUY nur
-    bei ATR/close ≥ 0,8 %) hat das niedrigste Max-DD, handelte aber in
+    ist der robusteste Kandidat im Fenstergitter. (3) **E** (neue
+    Strategie `rsi_vol_gate`: RSI-Reversion + ATR-Gate, BUY nur bei
+    ATR/close ≥ 0,8 %) hat das niedrigste Max-DD, handelte aber in
     beiden 2026-Fenstern gar nicht (Gate zu restriktiv im ruhigen
-    Regime). (4) Ehrliche Einordnung: D erzeugt über ~446 Fenster-
-    tage nur 13 Round-Trips — statistisch dünn; der Mechanismus
-    (kaufen nur bei extremem Oversold-Ausschlag) ist aber konsistent
-    positiv, schlägt Buy-&-Hold in allen Crash-/Bear-Fenstern um
-    Größenordnungen und unterperformt strukturell nur in starken
-    Bullen (oos-2026-h2: +0,97 % vs. B&H +18,3 %). **Verdikt: kein
-    deployment-reifer Edge, aber D ist der erste Kandidat mit
-    OOS-bestätigtem, mechanismusplausibel positivem Flatsize-Ergebnis.**
-    Nächster Hebel: Regime-Router (Mean-Reversion in Crash/Range,
-    Trendfolge im Pump — das im 5. Lauf beobachtete Regime-Muster).
+    Regime).
+
+    **Korrektur 1 (Fenster-Überlappung):** Der Fenstergitter-Summe
+    werden sich überlappende 2022-Fenster (range-2022-03 ⊂
+    bear-2022-q1, crash-2022-06 ⊂ luna-2022) doppelt angerechnet.
+    Maßgeblich sind daher die **zusammenhängenden Vollperioden**
+    (D = rsi p30/b20/s80, Flatsize, 10 % Position):
+
+    | Periode | Buy-&-Hold | D (ohne Stop) | D + 10-%-Stop |
+    |---|---:|---:|---:|
+    | 2021-05-01 → 2021-11-30 | -1,4 % | -0,80 % | -2,26 % |
+    | 2022-02-15 → 2022-07-31 | -45,3 % | -0,06 % | +1,20 % |
+    | 2026-03-02 → 2026-09-02 | +17,4 % | +2,18 % | +2,18 % |
+    | gesamt (565 Tage) | ≈ -29 % | **+1,32 %** | +1,12 % |
+
+    **Korrektur 2 (Stop-Loss-Experiment):** Ein 10-%-Stop verbessert
+    die LUNA-Periode (2022: +1,20 statt -0,06 %), verschlechtert aber
+    2021 (-2,26 statt -0,80 %): Der 07.-09.-2021-Abverkauf (49k → 43k)
+    raste durch den Stop (Gap), die Re-Entry 15 min später wurde
+    zwei Wochen später erneut gestoppt. Stops 8/12/15/20 % zeigen
+    dasselbe Muster; Time-Stops (Max-Haltezeit) schneiden gewinnende
+    Reversionen ab und sind klar schlechter. **Ohne Stop ist die
+    bessere Variante.**
+
+    Weitere Experimente (alle schlechter als D): Regime-Router
+    (Mean-Reversion im Crash/Range, Breakout-Trendfolge im
+    Aufwärtstrend nach SMA100+ROC100-Kriterium): Σ +0,68 % auf dem
+    Fenstergitter — der Trend-Arm feuert in 2022-Rebounds falsch
+    (crash-2022-06: -0,65 % vs. +1,01 % bei D). Das im 5. Lauf
+    beobachtete Regime-Muster „Trend gewinnt im Pump" trägt nicht in
+    einen einfachen Detector über.
+
+    **Ehrliches Gesamturteil:** D ist ein defensiver Long: über 565
+    Tage (3 zusammenhängende Perioden, ~11 Round-Trips, 10 %
+    Position) +1,32 % bei Max-DD ≤ 4,1 % — während Buy-&-Hold in
+    derselben Zeit ≈ -29 % und 70 %+ Drawdown hatte. Die Wertstellung
+    ist also **Risikoreduktion, kein Alpha**: 2021 leicht negativ
+    (September-Dip), 2022/Bear ungefährlich, 2026/OOS positiv, in
+    starken Bullen strukturell unterperformend (+2,18 % vs. +17,4 %).
+    Die Stichprobe (11 Round-Trips) ist zu dünn für statistische
+    Signifikanz. **Verdikt: kein deployment-reifer Edge; D ist der
+    beste dokumentierte Kandidat (mechanismusplausibel, OOS-2026
+    positiv, risikoarm).** Nächste sinnvolle Hebel: längere OOS-
+    Historie backfillen (2022-08 → 2026-02 fehlt), mehr Sizing-/
+    Exit-Varianten auf den Vollperioden (nicht auf überlappenden
+    Fenstern), oder Multi-Asset-Check (ETH) zur Robustheitsprüfung.
 
 Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
 nie mit `docker compose up`, nur explizit via `docker compose run`.
