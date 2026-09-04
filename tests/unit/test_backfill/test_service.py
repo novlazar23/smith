@@ -30,7 +30,6 @@ T0 = datetime(2025, 1, 1, tzinfo=UTC)
 T1 = datetime(2025, 6, 1, tzinfo=UTC)
 NOW = datetime(2026, 9, 2, 8, 15, tzinfo=UTC)
 _DT = "%Y-%m-%d %H:%M:%S"
-_DT_SHORT = "%Y-%m-%d %H:%M"
 
 
 class FakeClient:
@@ -90,8 +89,8 @@ class FakeEngine:
     @staticmethod
     def _between(sql: str) -> tuple[datetime, datetime]:
         matches = re.findall(r"BETWEEN '([^']+)' AND '([^']+)'", sql)
-        start = datetime.strptime(matches[-1][0], _DT_SHORT).replace(tzinfo=UTC)
-        end = datetime.strptime(matches[-1][1], _DT_SHORT).replace(tzinfo=UTC)
+        start = datetime.strptime(matches[-1][0], _DT).replace(tzinfo=UTC)
+        end = datetime.strptime(matches[-1][1], _DT).replace(tzinfo=UTC)
         return start, end
 
     def _coverage_intervals(self) -> list[tuple[datetime, datetime]]:

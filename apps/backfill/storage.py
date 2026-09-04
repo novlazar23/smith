@@ -187,7 +187,7 @@ def existing_day_coverage(
         "max(open_time) AS mx, uniqExact(open_time) AS n "
         f"FROM {TABLE_NAME} "
         f"WHERE instrument = {_sql_str(instrument)} AND venue = {_sql_str(venue)} "
-        f"AND open_time BETWEEN '{_fmt(start)}' AND '{_fmt(end)}' "
+        f"AND open_time BETWEEN '{start.strftime(_DT_FORMAT)}' AND '{end.strftime(_DT_FORMAT)}' "
         "GROUP BY d ORDER BY d"
     )
     names, rows = engine.query(sql)
@@ -232,7 +232,7 @@ def existing_minutes(
         "SELECT open_time "
         f"FROM {TABLE_NAME} "
         f"WHERE instrument = {_sql_str(instrument)} AND venue = {_sql_str(venue)} "
-        f"AND open_time BETWEEN '{_fmt(start)}' AND '{_fmt(end)}'"
+        f"AND open_time BETWEEN '{start.strftime(_DT_FORMAT)}' AND '{end.strftime(_DT_FORMAT)}'"
     )
     names, rows = engine.query(sql)
     if not rows:
