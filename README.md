@@ -574,6 +574,67 @@ mehr Entries, Diversifikation der Idiosynkrasie, dichtere
 Stichprobe) und eine Portfolio-Variante (gleiche Gewichtung, Flatsize
 pro Asset).
 
+**Neunter Kalibrierungslauf (04.09.2026, Cross-Sectional-Ausweitung auf
+6 Assets):** Nach dem Backfill von SOL, BNB, XRP und ADA (2021-05-01 →
+2026-02-28, je 2.541.600 Kerzen, lückenlos; SOL musste wegen eines
+Binance-Backend-Timeouts einmal neu gestartet werden — der reparierte
+Planner hatte korrekt „keine Kerzen im Fenster" geplant) wurde D
+unverändert auf **sechs Assets × sieben Perioden** getestet. Die
+Portfolio-Variante ist das gleichgewichtigte Mittel der Asset-Renditen
+pro Periode (unabhängige Konten, je 100k, je 10 % Flatsize):
+
+| Periode | Ø B&H (6 Assets) | Ø D-Portfolio | D schlägt B&H |
+|---|---:|---:|:---:|
+| 2021-05 → 2021-11 | +71,54 % | +7,94 % | nein |
+| 2022-02 → 2022-07 (LUNA) | -46,21 % | -2,48 % | ja |
+| 2022-08 → 2022-12 (Bear) | -35,04 % | -1,42 % | ja |
+| 2023 (Bull) | +236,31 % | +0,28 % | nein |
+| 2024 (Bull) | +109,87 % | +3,82 % | nein |
+| 2025 (Down) | -16,75 % | -0,33 % | ja |
+| 2026-01 → 2026-02 (Down) | -26,59 % | -2,93 % | ja |
+| **Σ** | **+293,12 %** | **+4,87 %** | **4/7** |
+
+Σ 170 Legs (~85 Round-Trips) über 5,4 Jahre, Ø Max-DD 5,20 % pro
+Periode. D schlägt B&H **in allen vier Down-/Bear-Perioden** (2026-H1:
+alle 6 Assets einzeln über B&H, z. B. XRP -2,93 % vs. B&H -25,31 %)
+und underperformed in allen drei Bull-Perioden — das defensive Profil
+hat sich auf die vier vorher unbekannten Assets übertragen.
+
+Edge pro Asset (Σ über 7 Perioden, 10 % Flatsize): **SOL +44,6 %**,
+**XRP +11,9 %**, ETH +3,8 %, BTC +0,5 %, **BNB -6,2 %**, **ADA -18,5 %**.
+Der Mean-Reversion-Edge ist **asset-spezifisch** — er hält auf BTC/ETH
+und (stärker) auf SOL/XRP, nicht auf BNB/ADA. Eine Portfolio-Auswahl
+nach in-sample-Performance wäre Data-Snooping und wird hier nicht
+empfohlen; der Befund dokumentiert nur, wo der Mechanismus trägt.
+
+Zwei weitere Befunde aus dem Lauf:
+
+- **Positions-Gewichts-Drift:** Flatsize bedeutet „10 % der Equity zum
+  Entry" — ein Gewinner vergrößert seinen Gewichtungsanteil
+  automatisch. SOL 2021: Entry 10 % (317 SOL @ 31,5 $), Gewichtsanteil
+  beim September-Peak 43 % der Equity, danach 19,65 % Max-DD bei der
+  SOL-Korrektur (verifiziert: Equity-Kurve konsistent, kein
+  Engine-Fehler). Der dokumentierte Max-DD ≤ 8,2 % der Läufe 6-8 gilt
+  für BTC/ETH; auf hochvolatilen Alts kann derselbe Entry deutlich
+  größere Drawdowns erzeugen.
+- **Engine-Fix:** `max_drawdown_duration_days` in `result.metrics`
+  zählte Bars (Perioden der Equity-Kurve), keine Tage — Label-Irrtum,
+  Wert selbst konsistent. Das Feld wurde zu
+  `max_drawdown_duration_bars` umbenannt (keine Consumer im Repo);
+  Unit-Test-Regressionsabdeckung über die Metrik-Suite.
+
+**Gesamtbild nach 9 Läufen:** D (p30/b20/s80, Flatsize, ohne Stop) ist
+der robusteste dokumentierte Kandidat: mechanismusplausibel,
+cross-Asset und cross-Jahres beständig, in 9 von 9
+Down-/Seitwärts-Asset-Perioden-Gruppen defensiv (≤ ±3 %), OOS-2026
+über B&H. Grenzen: kein Alpha in Bullmärkten (strukturell),
+asset-spezifischer Edge (BNB/ADA negativ), enger Parameter-Topf
+(b20/s80), Gewichts-Drift auf Volatilen. **Fazit: defensives
+Mean-Reversion-Sleeve mit dokumentierten Grenzen — kein
+deployment-reifer Alpha-Edge; weitere Hebel (Cross-Section-Portfolio
+mit Asset-Auswahl, Vol-Targeting gegen den Gewichts-Drift) sind
+erforschte, aber nicht valide Optionen.**
+
 Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
 nie mit `docker compose up`, nur explizit via `docker compose run`.
 

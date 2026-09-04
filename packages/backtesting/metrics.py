@@ -32,7 +32,7 @@ class BacktestMetrics:
     sortino_ratio: float = 0.0
     calmar_ratio: float = 0.0
     max_drawdown: float = 0.0
-    max_drawdown_duration_days: int = 0
+    max_drawdown_duration_bars: int = 0
 
     # Trade statistics
     total_trades: int = 0
@@ -70,7 +70,7 @@ class BacktestMetrics:
             "sortino_ratio": round(self.sortino_ratio, 4),
             "calmar_ratio": round(self.calmar_ratio, 4),
             "max_drawdown_pct": round(self.max_drawdown * 100, 4),
-            "max_drawdown_duration_days": self.max_drawdown_duration_days,
+            "max_drawdown_duration_bars": self.max_drawdown_duration_bars,
             "total_trades": self.total_trades,
             "win_rate_pct": round(self.win_rate * 100, 2),
             "profit_factor": round(self.profit_factor, 4),
@@ -159,7 +159,7 @@ def calculate_backtest_metrics(
         # Drawdown metrics
         drawdown = calculate_drawdown(equity_curve)
         metrics.max_drawdown = max(drawdown) if drawdown else 0
-        metrics.max_drawdown_duration_days = _max_drawdown_duration(drawdown)
+        metrics.max_drawdown_duration_bars = _max_drawdown_duration(drawdown)
 
         # Calmar ratio
         if metrics.max_drawdown > 0:
@@ -321,7 +321,12 @@ def _compute_returns(equity_curve: list[float]) -> list[float]:
 
 
 def _max_drawdown_duration(drawdowns: list[float]) -> int:
-    """Calculate the maximum drawdown duration in periods."""
+    """Calculate the maximum drawdown duration in bars.
+
+    One unit is one entry of the drawdown series, i.e. one bar of the
+    equity curve (5m, 1m, or whatever the feed was resampled to) — not
+    calendar days.
+    """
     if not drawdowns:
         return 0
 
