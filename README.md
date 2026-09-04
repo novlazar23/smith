@@ -670,11 +670,38 @@ XRP/SOL-Edge). Pro Periode schlägt s55 s80 in 5 von 7 (nur 2021 und
 überlegene Variante: Wer den Sleeve rein zur Kapitalerhaltung nutzt,
 für den ist s55 die riskosärmere Ausführung desselben Mechanismus.
 
-**Gesamtbild nach 10 Läufen (Endzustand der Strategie-Untersuchung):**
+**Elfter Kalibrierungslauf (04.09.2026, 2026-OOS-Vollperiode auf 6
+Assets):** Im 9. Lauf war die 2026-Periode auf 01-01 → 02-28 begrenzt
+(die vier neuen Assets hatten kein Live-Ingest). Nach Backfill von
+2026-03 → 2026-09-03 (je 270 Requests, lückenlos) ist die **volle
+Out-of-Sample-Periode 2026-01-01 → 2026-09-02** (nie kalibriert) für
+alle sechs Assets möglich. D unverändert (p30/b20/s80, 10 % Flatsize,
+5m):
+
+| Asset | Buy-&-Hold | D | Max-DD |
+|---|---:|---:|---:|
+| BTC/USDT | -11,39 % | -0,43 % | 3,59 % |
+| ETH/USDT | -18,44 % | +1,19 % | 4,61 % |
+| SOL/USDT | -19,43 % | -2,02 % | 5,60 % |
+| BNB/USDT | -20,29 % | -1,32 % | 3,91 % |
+| XRP/USDT | -26,64 % | -2,97 % | 4,53 % |
+| ADA/USDT | -39,69 % | -2,22 % | 6,79 % |
+| **Portfolio (Ø)** | **-22,65 %** | **-1,30 %** | 4,84 % |
+
+Befund: In der vollen 2026-OOS-Periode (Bear, B&H zwischen -11 % und
+-40 %) schlägt D **Buy-&-Hold bei allen 6 Assets** (6/6), bleibt in
+jedem Asset zwischen -3,0 % und +1,2 % bei Max-DD ≤ 6,8 %. BTC/ETH
+replizieren den 8. Lauf exakt (-0,43 %/+1,19 %); die vier neuen
+Assets bestätigen das defensive Profil auf dem bislang stärksten
+OOS-Fenster. Das ist die klarste Einzelbestätigung des
+Kapitalerhaltungs-Charakters über alle elf Läufe.
+
+**Gesamtbild nach 11 Läufen (Endzustand der Strategie-Untersuchung):**
 D (p30/b20/s80, Flatsize 10 %, ohne Stop, 5m, Kosten 0,1 %/Seite) ist
 der robusteste dokumentierte Kandidat: mechanismusplausibel, auf 6
 Assets und 5,4 Jahren (170 Legs) beständig, in allen 9
-Down-/Seitwärts-Regime-Gruppen defensiv, OOS-2026 über B&H. Geprüfte
+Down-/Seitwärts-Regime-Gruppen defensiv, OOS-2026 (Vollperiode) über
+B&H bei allen 6 Assets (6/6). Geprüfte
 und abgelehnte Hebel: Sizing (linear, kein Edge), Entry-/Exit-Grid
 (b20/s80 enges Optimum), Stops/Time-Stops (schlechter), Regime-Router
 (schlechter), Vol-Gate (dormant), Agenten-Ensemble (negativ),
