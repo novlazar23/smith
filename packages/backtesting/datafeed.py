@@ -291,10 +291,20 @@ def compute_indicators(candles: list[Candle]) -> list[Candle]:
     - MACD(12, 26, 9)
 
     Note: First `warmup_bars` candles will have None values for slow indicators.
+
+    Komplexität: O(n · max_period). Die EMA-/MACD-Serien werden in einem
+    einzigen Durchlauf berechnet (die frühere pro-Bar-Neuiteration war
+    O(n²) und machte Runs mit >20k Kerzen unpraktikabel). Die Werte sind
+    bit-identisch zur früheren pro-Bar-Implementierung.
     """
     closes = [c.close for c in candles]
     highs = [c.high for c in candles]
     lows = [c.low for c in candles]
+
+    # Einmalig: O(n)-Serien (bit-identisch zu _ema(closes, i, period))
+    ema_12 = _ema_series(closes, 12)
+    ema_26 = _ema_series(closes, 26)
+    macd_line_s, macd_signal_s, macd_hist_s = _macd_series(ema_12, ema_26)
 
     result: list[Candle] = []
 
@@ -303,18 +313,11 @@ def compute_indicators(candles: list[Candle]) -> list[Candle]:
         sma_20 = _sma(closes, i, 20)
         sma_50 = _sma(closes, i, 50)
 
-        # EMA
-        ema_12 = _ema(closes, i, 12)
-        ema_26 = _ema(closes, i, 26)
-
         # RSI
         rsi_14 = _rsi(closes, i, 14)
 
         # ATR
         atr_14 = _atr(highs, lows, closes, i, 14)
-
-        # MACD
-        macd_line, macd_signal, macd_histogram = _macd(closes, i)
 
         # Create a new Candle with indicators attached (copy with extra attrs)
         new_candle = Candle(
@@ -328,13 +331,13 @@ def compute_indicators(candles: list[Candle]) -> list[Candle]:
         )
         object.__setattr__(new_candle, "sma_20", sma_20)
         object.__setattr__(new_candle, "sma_50", sma_50)
-        object.__setattr__(new_candle, "ema_12", ema_12)
-        object.__setattr__(new_candle, "ema_26", ema_26)
+        object.__setattr__(new_candle, "ema_12", ema_12[i])
+        object.__setattr__(new_candle, "ema_26", ema_26[i])
         object.__setattr__(new_candle, "rsi_14", rsi_14)
         object.__setattr__(new_candle, "atr_14", atr_14)
-        object.__setattr__(new_candle, "macd_line", macd_line)
-        object.__setattr__(new_candle, "macd_signal", macd_signal)
-        object.__setattr__(new_candle, "macd_histogram", macd_histogram)
+        object.__setattr__(new_candle, "macd_line", macd_line_s[i])
+        object.__setattr__(new_candle, "macd_signal", macd_signal_s[i])
+        object.__setattr__(new_candle, "macd_histogram", macd_hist_s[i])
 
         result.append(new_candle)
 
@@ -347,23 +350,26 @@ def _sma(values: list[float], idx: int, period: int) -> float | None:
     return sum(values[idx - period + 1 : idx + 1]) / period
 
 
-def _ema(values: list[float], idx: int, period: int) -> float | None:
-    if idx < period - 1:
-        return None
-    if idx == 0:
-        return values[0]
+def _ema_series(values: list[float], period: int) -> list[float | None]:
+    """Vollständige EMA-Serie in einem Durchlauf.
 
+    Bit-identisch zum früheren pro-Bar-``_ema``: Seed = Summe der ersten
+    period-1 Werte / period, danach Rekurrenz
+    ``v[i] * k + ema[i-1] * (1 - k)`` ab Index period-1.
+    """
+    n = len(values)
+    out: list[float | None] = [None] * n
     k = 2.0 / (period + 1)
-    # Compute iteratively
-    result = None
-    for i in range(idx + 1):
+    result: float | None = None
+    for i in range(n):
         if i < period - 1:
             result = (result if result is not None else 0.0) + values[i]
             if i == period - 2:
                 result /= period
         else:
             result = values[i] if result is None else values[i] * k + result * (1 - k)
-    return result
+            out[i] = result
+    return out
 
 
 def _rsi(values: list[float], idx: int, period: int) -> float | None:
@@ -411,34 +417,42 @@ def _atr(
     return sum(trs) / period
 
 
-def _macd(
-    values: list[float],
-    idx: int,
-) -> tuple[float | None, float | None, float | None]:
-    """Simple MACD (12, 26, 9)."""
-    if idx < 33:  # Need at least 33 bars for reliable MACD
-        return None, None, None
+def _macd_series(
+    ema_12: list[float | None],
+    ema_26: list[float | None],
+) -> tuple[list[float | None], list[float | None], list[float | None]]:
+    """MACD (12, 26, 9) über vorgefertigte EMA-Serien.
 
-    # Compute EMA(12)
-    ema12 = _ema(values, idx, 12)
-    ema26 = _ema(values, idx, 26)
+    Bit-identisch zum früheren pro-Bar-``_macd``: Gleitendes 9er-Mittel
+    über die letzten definierten MACD-Werte (Fenster ≤ 34 Bars).
+    """
+    n = len(ema_12)
+    line_s: list[float | None] = [None] * n
+    signal_s: list[float | None] = [None] * n
+    hist_s: list[float | None] = [None] * n
 
-    if ema12 is None or ema26 is None:
-        return None, None, None
+    for idx in range(33, n):  # Need at least 33 bars for reliable MACD
+        ema12 = ema_12[idx]
+        ema26 = ema_26[idx]
+        if ema12 is None or ema26 is None:
+            continue
 
-    macd_line = ema12 - ema26
+        macd_line = ema12 - ema26
+        line_s[idx] = macd_line
 
-    # Approximate signal line (9-period EMA of MACD)
-    # For simplicity, use a rolling average
-    macd_values = []
-    for j in range(max(0, idx - 33), idx + 1):
-        e12 = _ema(values, j, 12)
-        e26 = _ema(values, j, 26)
-        if e12 is not None and e26 is not None:
-            macd_values.append(e12 - e26)
+        macd_values: list[float] = []
+        for j in range(max(0, idx - 33), idx + 1):
+            e12 = ema_12[j]
+            e26 = ema_26[j]
+            if e12 is not None and e26 is not None:
+                macd_values.append(e12 - e26)
 
-    if len(macd_values) < 9:
-        return macd_line, None, macd_line
+        if len(macd_values) < 9:
+            hist_s[idx] = macd_line
+            continue
 
-    signal = sum(macd_values[-9:]) / min(9, len(macd_values))
-    return macd_line, signal, macd_line - signal
+        signal = sum(macd_values[-9:]) / min(9, len(macd_values))
+        signal_s[idx] = signal
+        hist_s[idx] = macd_line - signal
+
+    return line_s, signal_s, hist_s
