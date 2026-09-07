@@ -114,13 +114,16 @@ class CandleEngine(Protocol):
     INSERTs — identisch genutzt vom Ingestion-Sink).
     """
 
-    config: ClickHouseConfig
+    @property
+    def config(self) -> ClickHouseConfig:
+        """Verbindungskonfiguration (read-only)."""
+        ...
 
     def query(self, sql: str) -> tuple[list[str], list[list[str]]]:
         """Führt eine SELECT-Query aus (TabSeparatedWithNames)."""
         ...
 
-    def _execute(self, sql: str) -> None:
+    def _execute(self, query: str) -> None:
         """Führt eine Nicht-SELECT-Query (z. B. INSERT) aus."""
         ...
 
