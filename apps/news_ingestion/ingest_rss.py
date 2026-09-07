@@ -196,7 +196,7 @@ def _title_similarity(title_a: str, title_b: str) -> float:
     return len(intersection) / len(union) if union else 0.0
 
 
-def deduplicate(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def deduplicate(items: list[Any]) -> list[Any]:
     """Dedupliziert Item-Liste via url_hash und Titel-Ähnlichkeit.
 
     Items mit identischem url_hash oder sehr ähnlichen Titeln werden
@@ -210,7 +210,7 @@ def deduplicate(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     seen_hashes: set[str] = set()
     seen_titles: dict[str, str] = {}  # hash → title for similarity
-    result: list[dict[str, Any]] = []
+    result: list[Any] = []
 
     for item in items:
         if hasattr(item, "get"):

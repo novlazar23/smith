@@ -286,7 +286,7 @@ def _require_live_trading() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _audit_event(event: str, **fields: str) -> str:
+def _audit_event(event: str, **fields: object) -> str:
     """Log an event to the audit trail and return the audit ID.
 
     Args:

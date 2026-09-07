@@ -143,7 +143,7 @@ class DataIngestionService:
 
     def consume(
         self,
-        handler: Callable[[dict[str, Any]], None],
+        handler: Callable[[dict[str, Any]], object],
         max_messages: int | None = None,
     ) -> None:
         """Verbraucht Messages vom Topic und ruft handler für jedes Event auf.

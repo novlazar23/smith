@@ -13,6 +13,7 @@ from apps.orchestrator.stages_enum import AnalysisStage
 from packages.consensus import (
     ConsensusDecision,
     ConsensusResult,
+    VoteDirection,
     WeightedConsensusEngine,
 )
 from packages.strategy.engine import StrategyEngine
@@ -71,13 +72,13 @@ def calculate_consensus(
             agent_reports.append(r)
         elif isinstance(r, dict):
             # Konvertiere dict zu AgentReport für konsens
-            agent_reports.append(AgentReport(report_id=r.get("report_id", "unknown"), run_id=state.run_id, agent_id=r.get("agent_id", "unknown"), agent_version=r.get("agent_version", "0.1.0"), instrument=r.get("instrument", state.instrument), horizon=r.get("horizon", "1h"), as_of=r.get("as_of", datetime.now(UTC)), hypothesis=r.get("hypothesis", ""), probabilities=r.get("probabilities", {"up": 0.33, "down": 0.33, "range": 0.34}), evidence=r.get("evidence", [{"reference": "default", "feature": "default", "value": "default", "direction": "neutral", "relevance": 0.5}]), raw_confidence=r.get("raw_confidence"), calibrated_confidence=r.get("calibrated_confidence"), status=r.get("status", "shadow")))
+            agent_reports.append(AgentReport(report_id=r.get("report_id", "unknown"), run_id=state.run_id, agent_id=r.get("agent_id", "unknown"), agent_version=r.get("agent_version", "0.1.0"), instrument=r.get("instrument", state.instrument), horizon=r.get("horizon", "1h"), as_of=r.get("as_of", datetime.now(UTC)), hypothesis=r.get("hypothesis", ""), probabilities=r.get("probabilities", {"up": 0.33, "down": 0.33, "range": 0.34}), evidence=r.get("evidence", [{"reference": "default", "feature": "default", "value": "default", "direction": "neutral", "relevance": 0.5}]), expected_return=None, raw_confidence=r.get("raw_confidence"), calibrated_confidence=r.get("calibrated_confidence"), status=r.get("status", "shadow")))
 
     # Wenn keine Reports → NO_TRADE
     if not agent_reports:
         consensus = ConsensusResult(
             decision=ConsensusDecision.NO_TRADE,
-            vote_distribution={"long": 0.0, "short": 0.0, "range": 0.0, "abstain": 1.0},
+            vote_distribution={VoteDirection.LONG: 0.0, VoteDirection.SHORT: 0.0, VoteDirection.RANGE: 0.0, VoteDirection.ABSTAIN: 1.0},
             agent_weights={},
             agent_agreements=[],
             agent_disagreements=[],
@@ -90,7 +91,7 @@ def calculate_consensus(
         if not valid_reports:
             consensus = ConsensusResult(
                 decision=ConsensusDecision.NO_TRADE,
-                vote_distribution={"long": 0.0, "short": 0.0, "range": 0.0, "abstain": 1.0},
+                vote_distribution={VoteDirection.LONG: 0.0, VoteDirection.SHORT: 0.0, VoteDirection.RANGE: 0.0, VoteDirection.ABSTAIN: 1.0},
                 agent_weights={},
                 agent_agreements=[],
                 agent_disagreements=[],
@@ -156,7 +157,7 @@ def generate_strategy_step(
     elif consensus is None:
         consensus = ConsensusResult(
             decision=ConsensusDecision.NO_TRADE,
-            vote_distribution={"long": 0.0, "short": 0.0, "range": 0.0, "abstain": 0.0},
+            vote_distribution={VoteDirection.LONG: 0.0, VoteDirection.SHORT: 0.0, VoteDirection.RANGE: 0.0, VoteDirection.ABSTAIN: 0.0},
             agent_weights={},
             agent_agreements=[],
             agent_disagreements=[],

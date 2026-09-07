@@ -304,7 +304,7 @@ class ScoringEngine:
         self,
         predictions: list[float],
         actuals: list[int],
-        thresholds: list[int] | None = None,
+        thresholds: list[float] | None = None,
     ) -> dict[str, Any]:
         """Score an agent's predictions comprehensively.
 
@@ -478,7 +478,7 @@ class ResolutionEngine:
         self,
         predictions: list[dict[str, Any]],
         outcomes: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         """Resolve a batch of predictions against outcomes.
 
         Args:
@@ -486,7 +486,8 @@ class ResolutionEngine:
             outcomes: List of outcome dicts.
 
         Returns:
-            List of resolved prediction dicts.
+            Dict mit aggregierten Statistiken (resolved, total, correct,
+            accuracy, avg_score).
         """
         results: list[dict[str, Any]] = []
         for pred, outcome in zip(predictions, outcomes, strict=True):

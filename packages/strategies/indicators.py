@@ -250,7 +250,7 @@ def keltner(
 
 def supertrend(
     high: FloatArray, low: FloatArray, close: FloatArray, period: int = 10, multiplier: float = 3.0
-) -> tuple[FloatArray, FloatArray]:
+) -> tuple[FloatArray, NDArray[np.int8]]:
     """Supertrend: Trendlinie und Richtung (+1 Aufwärtstrend, -1 Abwärts).
 
     Klassischer Supertrend (Obrigee) auf ATR-Basis; Warmup der ATR-Reihe

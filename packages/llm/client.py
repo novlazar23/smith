@@ -3,7 +3,7 @@
 Der Client kapselt `litellm.completion` mit fester Timeout-Strategie und
 mappt **alle** Ausnahmewege auf `LLMError` mit maschinellen Codes:
 
-- ``timeout``: ``litellm.Timeout``
+- ``timeout``: ``litellm.exceptions.Timeout``
 - ``network``: requests/urllib3- bzw. stdlib-Connectionfehler
 - ``api``: sonstige LiteLLM-/API-Fehler und leere/malformed Completion-Responses
 - ``unknown``: alle übrigen Exceptions
@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 
 import litellm
+from litellm.exceptions import Timeout
 from requests.exceptions import RequestException
 
 from .errors import LLMError
@@ -69,7 +70,7 @@ class LLMClient:
         except Exception as exc:  # wird unten auf LLMError umgemappt
             raise _map_error(exc) from exc
         try:
-            content = response.choices[0].message.content
+            content = response.choices[0].message.content  # type: ignore[union-attr]
         except (AttributeError, IndexError, TypeError) as exc:
             raise LLMError("api", "malformed completion response") from exc
         if not content:
@@ -140,7 +141,7 @@ def _is_litellm_exception(exc: BaseException) -> bool:
 
 def _map_error(exc: BaseException) -> LLMError:
     """Mappt eine Exception auf einen `LLMError`-Code (in dieser Reihenfolge)."""
-    if isinstance(exc, litellm.Timeout):
+    if isinstance(exc, Timeout):
         return LLMError("timeout", f"{type(exc).__name__}: {exc}")
     if _is_network_error(exc):
         return LLMError("network", f"{type(exc).__name__}: {exc}")

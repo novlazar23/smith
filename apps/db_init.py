@@ -16,9 +16,11 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import Iterable
+from typing import cast
 
 import packages.persistence.sqlalchemy.models
-from confluent_kafka.admin import AdminClient, NewTopic
+from confluent_kafka.admin import AdminClient, NewTopic  # pyright: ignore[reportPrivateImportUsage]
 from packages.persistence.clickhouse.engine import ClickHouseConfig, create_ch_engine
 from packages.persistence.sqlalchemy.engine import DatabaseConfig, SQLAlchemyEngine
 from sqlalchemy import inspect
@@ -82,7 +84,7 @@ def init_redpanda() -> None:
     # confluent-kafka >= 2.x liefert ClusterMetadata (dict in .topics), ältere
     # Versionen ein iterables von Topic-Namen.
     topics_attr = getattr(metadata, "topics", None)
-    topic_names = set(topics_attr) if topics_attr is not None else set(metadata)
+    topic_names = set(topics_attr) if topics_attr is not None else set(cast("Iterable[str]", metadata))
     if TOPIC_NAME in topic_names:
         logger.info("redpanda topic exists", extra={"topic": TOPIC_NAME})
         return

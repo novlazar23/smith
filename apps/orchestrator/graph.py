@@ -149,7 +149,7 @@ class StageManager:
         return self._current_stage
 
     @property
-    def audit_events(self) -> list[AuditEvent]:
+    def audit_events(self) -> tuple[AuditEvent, ...]:
         """Audit-Event-Liste (unveränderbar)."""
         return tuple(self._audit_events)
 

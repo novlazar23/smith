@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from confluent_kafka import KafkaError, KafkaException, Message, Producer
-from confluent_kafka.admin import AdminClient, NewTopic
+from confluent_kafka.admin import AdminClient, NewTopic  # pyright: ignore[reportPrivateImportUsage]
 from packages.ingestion.adapter.binance import BinanceAdapter
 from packages.ingestion.adapter.dummy import INSTRUMENT_BASE_PRICES, DummyAdapter
 

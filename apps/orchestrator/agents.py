@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 from apps.orchestrator.graph import StageManager, TradingGraphState
 from apps.orchestrator.stages_enum import AnalysisStage
-from packages.consensus import ConsensusResult
+from packages.consensus import ConsensusDecision, ConsensusResult, VoteDirection
 
 
 class AgentRegistry(Protocol):
@@ -166,8 +166,8 @@ def run_contrarian_review(
     """
     if consensus_result is None:
         consensus_result = ConsensusResult(
-            decision="NO_TRADE",
-            vote_distribution={"long": 0.0, "short": 0.0, "range": 0.0, "abstain": 0.0},
+            decision=ConsensusDecision.NO_TRADE,
+            vote_distribution={VoteDirection.LONG: 0.0, VoteDirection.SHORT: 0.0, VoteDirection.RANGE: 0.0, VoteDirection.ABSTAIN: 0.0},
             agent_weights={},
             agent_agreements=[],
             agent_disagreements=[],

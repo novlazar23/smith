@@ -56,11 +56,11 @@ class SQLAlchemyRepository(Repository[_T]):
         if entity is None:
             return None
         try:
+            if hasattr(entity, "updated_at"):
+                data = {**data, "updated_at": datetime.now(UTC)}
             for key, value in data.items():
                 if hasattr(entity, key):
                     setattr(entity, key, value)
-            if hasattr(entity, "updated_at"):
-                entity.updated_at = datetime.now(UTC)
             self._session.commit()
             self._session.refresh(entity)
             return entity

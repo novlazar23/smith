@@ -19,7 +19,7 @@ import os
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from apps.api.endpoints import status_endpoint
 from fastapi import APIRouter
@@ -94,7 +94,7 @@ def _float(value: object) -> float | None:
     if value is None:
         return None
     try:
-        return float(value)
+        return float(cast("Any", value))
     except (TypeError, ValueError):
         return None
 
@@ -367,6 +367,8 @@ async def dashboard() -> dict[str, Any]:
         _run_source(_fetch_recent_decisions, []),
         _run_source(_fetch_recent_news, []),
     )
+    status_data = cast("dict[str, Any]", status_data)
+    data_source = cast("str", data_source)
     positions = await _run_source(_fetch_positions, [], market)
 
     return {

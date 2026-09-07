@@ -69,7 +69,7 @@ def create_rate_limit_middleware() -> Callable:
         client_host = request.client.host if request.client else "unknown"
         allowed = await _cleanup_and_check(client_host)
         if not allowed:
-            return JSONResponse(
+            return JSONResponse(  # pyright: ignore[reportOptionalCall]
                 content={"error": "rate limited"},
                 status_code=429,
             )
@@ -121,7 +121,7 @@ def create_auth_middleware() -> Callable | None:
             return await call_next(request)
         api_key = request.headers.get("X-API-Key")
         if not api_key or api_key != expected_key:
-            return JSONResponse(
+            return JSONResponse(  # pyright: ignore[reportOptionalCall]
                 content={"error": "unauthorized"},
                 status_code=401,
             )
