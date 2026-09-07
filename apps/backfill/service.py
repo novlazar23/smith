@@ -189,6 +189,31 @@ def estimate_requests(ranges: Sequence[tuple[datetime, datetime]]) -> int:
     return total
 
 
+def covered_intervals(
+    engine: storage.CandleEngine,
+    instrument: str,
+    venue: str,
+    start: datetime,
+    end: datetime,
+) -> list[tuple[datetime, datetime]]:
+    """Exakt vorhandene Intervalle des Fensters (read-only, keine Downloads).
+
+    Voller Tage (Kerzenzahl = erwartete Minutenzahl) zählen als ganztags
+    abgedeckt; unvollständige Tage werden minutengenau nachgefragt.
+    """
+    day_rows = storage.existing_day_coverage(engine, instrument, venue, start, end)
+    covered: list[tuple[datetime, datetime]] = []
+    for day, first, last, count in day_rows:
+        coverage = DayCoverage(day, first, last, count)
+        if day_is_complete(start, end, coverage):
+            covered.append(day_window(start, end, day))
+        else:
+            probe_start, probe_end = day_window(start, end, day)
+            minutes = storage.existing_minutes(engine, instrument, venue, probe_start, probe_end)
+            covered.extend(minutes_to_intervals(minutes))
+    return covered
+
+
 class BackfillService:
     """Führt den Backfill für alle konfigurierten Instrumente aus."""
 
@@ -234,43 +259,41 @@ class BackfillService:
         """Führt den Backfill für alle Instrumente aus.
 
         Ein Fehler bei einem Instrument beendet nicht den gesamten Lauf
-        (Exception wird geloggt, nächstes Instrument weiter); die
-        gesammelten Fehler stehen in ``BackfillResult.failures``.
+        (Exception wird geloggt, nächstes Instrument weiter). Nach dem
+        ersten Durchlauf werden die fehlgeschlagenen Instrumente **einmal
+        automatisch wiederholt** (z. B. Binance-Timeouts: der Backfill ist
+        idempotent, der Retry plant nur die verbliebenen Lücken); erst nach
+        dem zweiten Fehlschlag steht das Instrument in
+        ``BackfillResult.failures``.
         """
         summaries: list[InstrumentSummary] = []
         failures: list[tuple[str, str]] = []
-        for instrument in self._config.instruments:
-            try:
-                summaries.append(self._run_instrument(instrument))
-            except Exception as exc:
-                logger.exception("Backfill für %s fehlgeschlagen: %s", instrument, exc)
-                failures.append((instrument, str(exc)))
+        pending = list(self._config.instruments)
+        for attempt in (1, 2):
+            still_failing: list[str] = []
+            for instrument in pending:
+                try:
+                    summaries.append(self._run_instrument(instrument))
+                except Exception as exc:
+                    logger.exception(
+                        "Backfill für %s fehlgeschlagen (Versuch %d): %s",
+                        instrument, attempt, exc,
+                    )
+                    still_failing.append(instrument)
+                    failures.append((instrument, str(exc)))
+            if not still_failing:
+                break
+            if attempt == 1:
+                logger.warning("Automatischer Retry für: %s", still_failing)
+                pending = still_failing
+                failures.clear()
         return BackfillResult(summaries=tuple(summaries), failures=tuple(failures))
 
     def _covered_intervals(
         self, instrument: str, start: datetime, end: datetime
     ) -> list[tuple[datetime, datetime]]:
-        """Baut die exakt vorhandenen Intervalle des Fensters.
-
-        Voller Tage (Kerzenzahl = erwartete Minutenzahl) zählen als
-        ganztags abgedeckt; unvollständige Tage werden minutengenau
-        nachgefragt, um auch intra-tägige Lücken zu finden.
-        """
-        day_rows = storage.existing_day_coverage(
-            self._engine, instrument, self._config.venue, start, end
-        )
-        covered: list[tuple[datetime, datetime]] = []
-        for day, first, last, count in day_rows:
-            coverage = DayCoverage(day, first, last, count)
-            if day_is_complete(start, end, coverage):
-                covered.append(day_window(start, end, day))
-            else:
-                probe_start, probe_end = day_window(start, end, day)
-                minutes = storage.existing_minutes(
-                    self._engine, instrument, self._config.venue, probe_start, probe_end
-                )
-                covered.extend(minutes_to_intervals(minutes))
-        return covered
+        """Baut die exakt vorhandenen Intervalle des Fensters (s. ``covered_intervals``)."""
+        return covered_intervals(self._engine, instrument, self._config.venue, start, end)
 
     def _run_instrument(self, instrument: str) -> InstrumentSummary:
         """Berechnet, lädt und persistiert die fehlenden Kerzen eines Instruments."""

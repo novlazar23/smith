@@ -6,7 +6,16 @@ __pycache__/
 .mypy_cache/
 .qwen/
 .codegraph/
+.omo/
 .omo/run-continuation
+
+# Agent-/Tooling-Zustand & lokaler Junk (Inhalt geprüft, 07.09.2026)
+.harness/
+.opencode/
+.dockerignore.local-bak
+=2.0
+Docker/
+mitarbeiterfoto.sh
 
 # Secrets & Env — nie committen
 .env

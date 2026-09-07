@@ -30,7 +30,14 @@ from datetime import UTC, date, datetime
 
 from apps.backfill import storage
 from apps.backfill.client import KlineClient
-from apps.backfill.service import BackfillConfig, BackfillService
+from apps.backfill.service import (
+    BackfillConfig,
+    BackfillService,
+    candle_count,
+    compute_missing_intervals,
+    covered_intervals,
+    months_ago,
+)
 from apps.orchestrator_service.service import parse_instruments
 from packages.ingestion.adapter.binance import BINANCE_FUTURES_VENUE
 from packages.persistence.clickhouse.engine import ClickHouseConfig, create_ch_engine
@@ -45,6 +52,16 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Backfillt historische Binance-Futures-1m-Kerzen idempotent "
             "in die ClickHouse-Tabelle candles_history (Venue BINANCE_FUTURES)."
+        ),
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default=None,
+        choices=(None, "check-coverage"),
+        help=(
+            "Subkommando (Default: Backfill). 'check-coverage' prüft "
+            "read-only die Datenabdeckung (ohne Downloads)."
         ),
     )
     parser.add_argument(
@@ -95,6 +112,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="ClickHouse-Passwort (Default: $CH_PASSWORD)",
     )
     return parser
+
+
+_REPORT_FMT = "%Y-%m-%d %H:%M"
+
+
+def check_coverage(
+    engine: storage.CandleEngine,
+    instruments: Sequence[str],
+    start: datetime | None,
+    end: datetime | None,
+    months: int,
+) -> int:
+    """Read-only-Abdeckungsbericht (keine Downloads, keine Schreibzugriffe).
+
+    Exit-Code: 0 = lückenlos, 1 = mindestens eine Lücke, 2 = Aufruffehler.
+    """
+    now = datetime.now(UTC)
+    window_start = start if start is not None else months_ago(now, months)
+    window_end = end if end is not None else now
+    total_missing = 0
+    print(f"Abdeckungsbericht {window_start.strftime(_REPORT_FMT)} → "
+          f"{window_end.strftime(_REPORT_FMT)} (1m, Venue {BINANCE_FUTURES_VENUE})")
+    for instrument in instruments:
+        covered = covered_intervals(engine, instrument, BINANCE_FUTURES_VENUE, window_start, window_end)
+        missing = compute_missing_intervals(window_start, window_end, covered)
+        expected = candle_count(window_start, window_end)
+        missing_candles = sum(candle_count(a, b) for a, b in missing)
+        covered_candles = expected - missing_candles
+        pct = covered_candles / expected * 100 if expected else 100.0
+        total_missing += missing_candles
+        print(f"{instrument:<12} {covered_candles:>12,}/{expected:,} Kerzen "
+              f"({pct:.2f} %) | {len(missing)} Lücke(n)")
+        for number, (gap_start, gap_end) in enumerate(missing[:20], start=1):
+            print(f"  Lücke {number}: {gap_start.strftime(_REPORT_FMT)} → "
+                  f"{gap_end.strftime(_REPORT_FMT)} ({candle_count(gap_start, gap_end):,} Kerzen)")
+        if len(missing) > 20:
+            print(f"  … {len(missing) - 20} weitere Lücken")
+    print(f"Gesamt: {total_missing:,} fehlende Kerzen")
+    return 1 if total_missing else 0
 
 
 def _parse_day(value: str, *, at_day_end: bool = False) -> datetime:
@@ -179,6 +235,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as exc:
         logger.error("candles_history nicht anlegbar: %s", exc)
         return 1
+
+    if args.command == "check-coverage":
+        try:
+            return check_coverage(engine, instruments, start, end, args.months)
+        except Exception as exc:
+            logger.exception("check-coverage fehlgeschlagen: %s", exc)
+            return 1
 
     logger.info(
         "Backfill gestartet: months=%d instruments=%s venue=%s dry_run=%s",

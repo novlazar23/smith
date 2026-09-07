@@ -10,6 +10,7 @@ from apps.backtest.agent_strategy import AgentEnsembleStrategy
 from apps.backtest.runner import (
     CONFIDENCE_BUCKETS,
     confidence_buckets,
+    default_config,
     extra_metrics,
     gate_sweep,
     run_backtest,
@@ -77,6 +78,45 @@ class TestRunBacktest:
         for key in ("final_equity", "total_return_pct", "sharpe_ratio", "max_drawdown_pct",
                     "win_rate_pct", "total_trades", "profit_factor"):
             assert key in extra
+
+
+class TestCostConfigRespected:
+    """Regression: explizite Kosten-Konfiguration darf nicht überschrieben werden.
+
+    Frühere Versionen von ``default_config`` setzten ``commission_rate``/
+    ``slippage_bps`` bedingungslos auf 0,001/5 bps — Kosten-Sensitivitäts-
+    Läufe liefen dadurch still mit 0,15 %/Seite statt der gewählten Kosten.
+    """
+
+    def test_default_config_keeps_explicit_costs(self) -> None:
+        strategy = _strategy_for(make_pipeline_result("LONG_BIAS", 0.9))
+        config = BacktestConfig(symbol=BTC, commission_rate=0.002, slippage_bps=20.0)
+        result = default_config(strategy, config)
+        assert result.commission_rate == 0.002
+        assert result.slippage_bps == 20.0
+        assert result.symbol == BTC
+        assert result.warmup_bars == 50
+
+    def test_default_config_without_config_uses_model_defaults(self) -> None:
+        strategy = _strategy_for(make_pipeline_result("LONG_BIAS", 0.9))
+        result = default_config(strategy, None)
+        assert result.commission_rate == 0.001
+        assert result.slippage_bps == 5.0
+
+    def test_higher_costs_reduce_equity(self) -> None:
+        # Derselbe Uptrend-Run mit 2x Kosten muss messbar weniger Equity
+        # liefern (vor dem Fix waren beide Läufe identisch).
+        strategy_low = _strategy_for(make_pipeline_result("LONG_BIAS", 0.9), min_confidence=0.3)
+        strategy_high = _strategy_for(make_pipeline_result("LONG_BIAS", 0.9), min_confidence=0.3)
+        low = run_backtest(
+            _uptrend_feed(), lambda: strategy_low,
+            BacktestConfig(symbol=BTC, commission_rate=0.001, slippage_bps=10.0), "low",
+        )
+        high = run_backtest(
+            _uptrend_feed(), lambda: strategy_high,
+            BacktestConfig(symbol=BTC, commission_rate=0.002, slippage_bps=20.0), "high",
+        )
+        assert low.metadata["final_equity"] > high.metadata["final_equity"]
 
 
 class TestConfidenceBuckets:

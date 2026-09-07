@@ -272,6 +272,60 @@ class TestIdempotency:
         assert [name for name, _ in result.failures] == ["ETH/USDT"]
         assert "simulierter Download-Fehler" in result.failures[0][1]
 
+    def test_transient_failure_is_retried_once(self) -> None:
+        class FlakyClient(FakeClient):
+            def fetch_range(
+                self,
+                instrument: str,
+                start: datetime,
+                end: datetime,
+                on_chunk: Callable[[datetime, datetime, int], None] | None = None,
+            ) -> list[BackfillCandle]:
+                if instrument == "ETH/USDT" and not getattr(self, "_eth_done", False):
+                    self._eth_done = True
+                    raise RuntimeError("simulierter Binance-Timeout")
+                return super().fetch_range(instrument, start, end, on_chunk)
+
+        client = FlakyClient()
+        engine = FakeEngine(existing=None)
+        config = BackfillConfig(
+            months=12, instruments=("BTC/USDT", "ETH/USDT"), start=T0, end=T1
+        )
+        service = BackfillService(config, client, engine, now=NOW)
+        result = service.run()
+
+        assert [summary.instrument for summary in result.summaries] == ["BTC/USDT", "ETH/USDT"]
+        assert result.failures == ()
+        assert [call[0] for call in client.calls] == ["BTC/USDT", "ETH/USDT"]
+
+    def test_persistent_failure_is_reported_after_single_retry(self) -> None:
+        class CountingClient(FakeClient):
+            attempts: dict[str, int]
+
+            def fetch_range(
+                self,
+                instrument: str,
+                start: datetime,
+                end: datetime,
+                on_chunk: Callable[[datetime, datetime, int], None] | None = None,
+            ) -> list[BackfillCandle]:
+                self.attempts[instrument] = self.attempts.get(instrument, 0) + 1
+                return super().fetch_range(instrument, start, end, on_chunk)
+
+        client = CountingClient()
+        client.raise_for = frozenset({"ETH/USDT"})
+        client.attempts = {}
+        engine = FakeEngine(existing=None)
+        config = BackfillConfig(
+            months=12, instruments=("BTC/USDT", "ETH/USDT"), start=T0, end=T1
+        )
+        service = BackfillService(config, client, engine, now=NOW)
+        result = service.run()
+
+        assert [name for name, _ in result.failures] == ["ETH/USDT"]
+        assert client.attempts["ETH/USDT"] == 2  # Initialversuch + ein automatischer Retry
+        assert client.attempts["BTC/USDT"] == 1
+
 
 class TestDryRun:
     def test_performs_no_downloads_or_writes(self) -> None:

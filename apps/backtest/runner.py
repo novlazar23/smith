@@ -1,8 +1,14 @@
 """Backtest-Runner: Engine-Wrapper, Analytics und Gate-Sweep.
 
 ``run_backtest`` ist ein dünner Wrapper um ``BacktestEngine`` mit
-sinnvollen Defaults (Startkapital der Strategie, Commission 0,1 %,
-Slippage 5 bps, Warmup = candle_limit, Symbol = Instrument).
+sinnvollen Defaults (Symbol = Instrument, Startkapital = Startkapital
+der Strategie, Warmup = candle_limit). Kosten (`commission_rate`,
+`slippage_bps`) erbt die Engine-Konfiguration von der übergebenen
+``BacktestConfig`` bzw. deren Modell-Defaults (Commission 0,1 %,
+Slippage 5 bps) — eine explizit übergebene Kosten-Konfiguration wird
+**nicht** überschrieben (Regression: Läufe 6-11 liefen unbeabsichtigt
+mit 5 bps Slippage, weil frühere Versionen die Config-Values
+überschrieben haben).
 
 Der Gate-Sweep rechnet die Pipeline **nicht** je Gate neu, sondern in zwei
 Phasen:
@@ -57,9 +63,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COMMISSION_RATE = 0.001
-DEFAULT_SLIPPAGE_BPS = 5.0
-
 CONFIDENCE_BUCKETS: tuple[tuple[float, float], ...] = (
     (0.3, 0.4),
     (0.4, 0.5),
@@ -80,14 +83,18 @@ def bucket_label(low: float, high: float) -> str:
 def default_config(
     strategy: BaseStrategy, config: BacktestConfig | None = None
 ) -> BacktestConfig:
-    """BacktestConfig mit den Runner-Defaults (Symbol, Kapital, Kosten, Warmup)."""
+    """BacktestConfig mit den Runner-Defaults (Symbol, Kapital, Warmup).
+
+    Kosten (``commission_rate``, ``slippage_bps``) bleiben, wie übergeben
+    (oder als ``BacktestConfig``-Modell-Defaults: 0,1 % / 5 bps) — der
+    Runner überschreibt sie nicht, sonst gingen explizite
+    Kosten-Sensitivitäts-Configs (z. B. 2x Kosten) verloren.
+    """
     base = config if config is not None else BacktestConfig()
     return base.model_copy(
         update={
             "symbol": strategy.instrument,
             "initial_capital": strategy.initial_capital,
-            "commission_rate": DEFAULT_COMMISSION_RATE,
-            "slippage_bps": DEFAULT_SLIPPAGE_BPS,
             "warmup_bars": strategy.candle_limit,
         }
     )

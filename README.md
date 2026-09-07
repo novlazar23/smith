@@ -696,12 +696,85 @@ Assets bestätigen das defensive Profil auf dem bislang stärksten
 OOS-Fenster. Das ist die klarste Einzelbestätigung des
 Kapitalerhaltungs-Charakters über alle elf Läufe.
 
-**Gesamtbild nach 11 Läufen (Endzustand der Strategie-Untersuchung):**
-D (p30/b20/s80, Flatsize 10 %, ohne Stop, 5m, Kosten 0,1 %/Seite) ist
+**Zwölfter Kalibrierungslauf (07.09.2026, Evidenzbank: Engine-Fix,
+Kosten-Sensitivität, Bootstrap):** Vor der Evidenzaufbereitung wurde
+ein Engine-Fehler gefunden und korrigiert: ``default_config`` in
+``apps/backtest/runner.py`` überschrieb ``commission_rate``/
+``slippage_bps`` einer explizit übergebenen BacktestConfig
+bedingungslos mit 0,001/5 bps — die Läufe 6-11 liefen dadurch
+**de-fakti mit 0,15 %/Seite** (Commission 0,1 % + Slippage 0,05 %),
+nicht mit dem dokumentierten 0,1 %/Seite; ein erster
+Kosten-Sensitivitäts-Versuch lief deshalb stumm mit identischen
+Zahlen. Der Runner erbt die Kosten jetzt von der Config (Regression
+als Unit-Tests). Nach dem Fix reproduziert ein Lauf mit den
+De-fakti-Kosten 0,15 %/Seite den 11. Lauf **exakt** (Sanity-Check).
+
+**Kosten-Sensitivität (0,20 %/Seite = Commission 0,1 % + Slippage
+10 bps, D unverändert):**
+
+| Periode | Portfolio D (0,15 %) | Portfolio D (0,20 %) | Max-DD | D > B&H |
+|---|---:|---:|---:|:---:|
+| 2026-OOS (11. Lauf) | -1,30 % | -1,34 % | 4,85 % | 6/6 |
+| Vollhistorie (8./9. Lauf) | +2,73 % | +2,42 % | 15,06 % | 3/6 |
+
+Der Kostenzuschlag verschiebt die Kernergebnisse um ≤ 0,31 pp
+(23-41 Legs pro Asset) — die Headline-Befunde (OOS: 6/6 über B&H;
+Vollhistorie: positiv, 3/6 über B&H) sind **robust gegen +33 %
+Kosten**.
+
+**Bootstrap-Confidence-Intervals** (Block-Bootstrap: Blöcke à 1 Tag
+288 5m-Bars, 2000 Wiederholungen, Seed 42, 95 %-Prozentile auf die
+Gesamtrendite; De-fakti-Kosten):
+
+2026-OOS-Vollperiode (6 Assets, 3-6 Legs je Asset):
+
+| Asset | D % | CI 2,5 % | CI 97,5 % | P(neg) | B&H % |
+|---|---:|---:|---:|---:|---:|
+| BTC/USDT | -0,43 | -5,37 | 4,43 | 56,4 % | -11,39 |
+| ETH/USDT | +1,19 | -5,49 | 8,11 | 36,0 % | -18,44 |
+| SOL/USDT | -2,02 | -8,20 | 4,68 | 72,7 % | -19,43 |
+| BNB/USDT | -1,32 | -5,60 | 2,78 | 72,4 % | -20,29 |
+| XRP/USDT | -2,97 | -8,62 | 2,83 | 84,7 % | -26,64 |
+| ADA/USDT | -2,22 | -9,38 | 5,66 | 72,5 % | -39,69 |
+
+Vollhistorie 2021-05 → 2026-09 (22-41 Legs je Asset):
+
+| Asset | D % | CI 2,5 % | CI 97,5 % | P(neg) | B&H % |
+|---|---:|---:|---:|---:|---:|
+| BTC/USDT | -1,35 | -15,59 | 15,04 | 57,5 % | 34,57 |
+| ETH/USDT | +3,73 | -16,75 | 30,26 | 37,8 % | -12,64 |
+| SOL/USDT | +33,38 | -19,50 | 128,41 | 15,2 % | 134,11 |
+| BNB/USDT | -4,98 | -22,05 | 14,43 | 70,0 % | 10,53 |
+| XRP/USDT | +7,19 | -15,93 | 36,80 | 29,5 % | -15,70 |
+| ADA/USDT | -21,61 | -40,17 | 1,11 | 96,6 % | -85,16 |
+
+Befund: Die **absoluten** D-Renditen sind statistisch nicht von null
+unterscheidbar (P(neg) 36-97 %, weite CIs — die Stichprobe von 3-41
+Legs pro Asset ist dafür zu dünn). Die für die Wertstellung
+maßgebliche Aussage ist dagegen beständig: In der 2026-OOS-Periode
+liegt selbst das 2,5 %-Quantil von D (schlechtes Asset: -9,38 %)
+deutlich über dem Buy-&-Hold-Ergebnis (zwischen -11,39 % und
+-39,69 %) — der Kapitalerhaltungs-Charakter gegenüber B&H im
+Bear-Regime übersteht auch die Stichprobenunsicherheit. Ein
+Deployment als Renditequelle bleibt damit ausgeschlossen; als
+Risikoreduktions-Position bestätigt der Lauf das Bild des 11. Laufs.
+
+**Betriebshärtung (im Zuge dieses Laufs):** (1) Der Backfill wiederholt
+fehlgeschlagene Instrumente jetzt **einmal automatisch** (idempotenter
+Planner → der Retry plant nur die verbliebenen Lücken; Regressionstests
+für Transient- und Dauerfehler). (2) Neues Subkommando
+``python -m apps.backfill check-coverage --start --end --instruments``
+prüft read-only die Datenabdeckung (Kerzenzahlen, Lücken, Exit-Code
+0/1 — ohne Binance-API). (3) `.gitignore`-Housekeeping für
+Agent-/Tooling-Zustand und lokalen Junk.
+
+**Gesamtbild nach 12 Läufen (Endzustand der Strategie-Untersuchung):**
+D (p30/b20/s80, Flatsize 10 %, ohne Stop, 5m, de-fakti-Kosten
+0,15 %/Seite, robust bis 0,20 %) ist
 der robusteste dokumentierte Kandidat: mechanismusplausibel, auf 6
 Assets und 5,4 Jahren (170 Legs) beständig, in allen 9
 Down-/Seitwärts-Regime-Gruppen defensiv, OOS-2026 (Vollperiode) über
-B&H bei allen 6 Assets (6/6). Geprüfte
+B&H bei allen 6 Assets (6/6, auch unter 0,20 %/Seite). Geprüfte
 und abgelehnte Hebel: Sizing (linear, kein Edge), Entry-/Exit-Grid
 (b20/s80 enges Optimum), Stops/Time-Stops (schlechter), Regime-Router
 (schlechter), Vol-Gate (dormant), Agenten-Ensemble (negativ),
