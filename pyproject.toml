@@ -108,6 +108,9 @@ paper = [
     "vectorbt>=0.26.0",
     "empyrical-reloaded>=0.5.10",
 ]
+timesfm = [
+    "timesfm[torch]==3.0.1",
+]
 
 [project.scripts]
 trading-orchestra = "apps.api.main:cli"

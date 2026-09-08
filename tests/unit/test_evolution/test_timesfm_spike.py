@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -13,6 +16,7 @@ from apps.evolution.timesfm_spike import FEATURE_COLUMNS, run_timesfm_spike, saf
 from packages.forecasting.timesfm import (
     FakeProvider,
     QuantileForecast,
+    TimesFMProvider,
     TimesFMUnavailableError,
     load_timesfm_provider,
     provider_label,
@@ -81,11 +85,95 @@ def test_fake_provider_rejects_invalid_context() -> None:
         provider.predict(np.array([100.0, 101.0]), 0)
 
 
-def test_timesfm_provider_is_phase2_gated() -> None:
+class _FakeTimesFMModel:
+    def __init__(self) -> None:
+        self.model_id = ""
+        self.cache_dir: str | None = None
+        self.config: Any = None
+        self.last_inputs: list[np.ndarray] = []
+        self.last_horizon = 0
+
+    def compile(self, config: Any) -> None:
+        self.config = config
+
+    def forecast(
+        self, horizon: int, inputs: list[np.ndarray]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        self.last_horizon = horizon
+        self.last_inputs = [np.asarray(values, dtype=np.float32) for values in inputs]
+        base = float(self.last_inputs[0][-1])
+        point = np.full((1, horizon), base * 1.01, dtype=np.float64)
+        quantiles = np.empty((1, horizon, 10), dtype=np.float64)
+        quantiles[..., 0] = point
+        quantiles[..., 1] = point * 0.99
+        quantiles[..., 5] = point
+        quantiles[..., 9] = point * 1.02
+        return point, quantiles
+
+
+class _FakeForecastConfig:
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+
+def _install_fake_timesfm(monkeypatch: pytest.MonkeyPatch) -> _FakeTimesFMModel:
+    model = _FakeTimesFMModel()
+    fake_module = types.ModuleType("timesfm")
+
+    class _ModelClass:
+        @staticmethod
+        def from_pretrained(model_id: str, cache_dir: str | None = None) -> _FakeTimesFMModel:
+            model.model_id = model_id
+            model.cache_dir = cache_dir
+            return model
+
+    fake_module.TimesFM_2p5_200M_torch = _ModelClass
+    fake_module.ForecastConfig = _FakeForecastConfig
+    monkeypatch.setitem(sys.modules, "timesfm", fake_module)
+    return model
+
+
+def test_timesfm_provider_unavailable_without_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "timesfm", None)
     provider = load_timesfm_provider("test-model")
     assert provider_label(provider) == "timesfm:test-model"
-    with pytest.raises(TimesFMUnavailableError, match="Phase 1"):
-        provider.predict(np.linspace(100.0, 110.0, 10), 3)
+    with pytest.raises(TimesFMUnavailableError, match="nicht installiert"):
+        provider.predict(np.linspace(100.0, 110.0, 40), 3)
+
+
+def test_timesfm_provider_maps_quantiles(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_model = _install_fake_timesfm(monkeypatch)
+    provider = TimesFMProvider(model="test-model", max_context=64, max_horizon=8)
+    context = np.linspace(100.0, 110.0, 40)
+    forecast = provider.predict(context, 6)
+
+    assert fake_model.model_id == "test-model"
+    assert fake_model.last_horizon == 6
+    assert fake_model.last_inputs[0].dtype == np.float32
+    assert fake_model.last_inputs[0].size == 40
+    assert fake_model.config.kwargs["max_context"] == 64
+    assert fake_model.config.kwargs["max_horizon"] == 8
+    assert fake_model.config.kwargs["infer_is_positive"] is True
+    assert forecast.median.shape == (6,)
+    assert np.all(forecast.q10 < forecast.median)
+    assert np.all(forecast.median < forecast.q90)
+
+
+def test_timesfm_provider_truncates_context_to_max(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_model = _install_fake_timesfm(monkeypatch)
+    provider = TimesFMProvider(model="test-model", max_context=32, max_horizon=8)
+    context = np.linspace(100.0, 110.0, 50)
+    provider.predict(context, 3)
+    assert fake_model.last_inputs[0].size == 32
+    assert fake_model.last_inputs[0][0] == pytest.approx(context[18])
+
+
+def test_timesfm_provider_rejects_short_context_and_horizon() -> None:
+    provider = TimesFMProvider(model="test-model", max_context=64, max_horizon=4)
+    with pytest.raises(ValueError, match="32"):
+        provider.predict(np.linspace(100.0, 110.0, 31), 2)
+    with pytest.raises(ValueError, match="horizon"):
+        provider.predict(np.linspace(100.0, 110.0, 40), 5)
 
 
 def test_run_timesfm_spike_writes_features_and_report(tmp_path: Path) -> None:
