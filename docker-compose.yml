@@ -482,6 +482,12 @@ services:
   #     --sweep-gates 0.2,0.3,0.4,0.5,0.6,0.7
   #   docker compose --profile on-demand run --rm backtest \
   #     python -m apps.backtest --scenario full --resample 5m
+  #
+  # Dient auch der Evolutions-Pipeline (State auf dem backtest_reports-Volume,
+  # nächtlicher Zyklus via ops/evolution-nightly.sh):
+  #
+  #   docker compose --profile on-demand run --rm backtest \
+  #     python -m apps.evolution --cycle --with-llm
   backtest:
     profiles: ["on-demand"]
     build:
@@ -494,6 +500,12 @@ services:
       CH_HOST: clickhouse
       CH_PORT: "8123"
       CH_DB: trading_events
+      # PostgreSQL für den Live-Paper-Digest (Demo-Trader-Konto); Passwort
+      # als Docker-Secret unter /run/secrets/postgres_password (entrypoint)
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: trading
+      DB_USER: orchestra
       MLFLOW_ENABLED: "true"
       MLFLOW_TRACKING_URI: "http://mlflow:5000"
       # LLM-Endpoint für den prompt-basierten Agenten (OpenAI-kompatibel);
@@ -512,6 +524,7 @@ services:
     secrets:
       - clickhouse_password
       - llm_api_key
+      - postgres_password
     networks:
       - backend
 

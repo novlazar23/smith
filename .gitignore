@@ -28,3 +28,6 @@ configs/secrets/
 
 # Backtest-Artefakte (einer `apps.backtest`-Läufe)
 backtest_reports/
+
+# Evolutions-Loop: generierte Digests (State-Dir-Nutzung auf dem Host)
+evolution/digests/
