@@ -22,7 +22,40 @@ def test_build_digest_empty_store_has_placeholders(store: EvolutionStore) -> Non
     assert "(noch keine Familien)" in digest
     assert "(noch keiner)" in digest
     assert "(leer)" in digest
+    assert "## TimesFM-Research" in digest
+    assert "(noch keine TimesFM-Reports" in digest
     assert "(nicht abrufbar in dieser Umgebung)" in digest
+
+
+def test_build_digest_renders_timesfm_research_reports(store: EvolutionStore) -> None:
+    report_dir = store.root / "timesfm" / "BTC-USDT"
+    report_dir.mkdir(parents=True)
+    (report_dir / "report.json").write_text(
+        """
+        {
+          "provider": "fake",
+          "n_features": 42,
+          "params": {"context": 512, "horizon": 288, "step": 288},
+          "cache_key": "abcdef1234567890"
+        }
+        """,
+        encoding="utf-8",
+    )
+    digest = build_digest(store)
+    assert "## TimesFM-Research" in digest
+    assert "**BTC-USDT**" in digest
+    assert "provider=fake" in digest
+    assert "n_features=42" in digest
+    assert "context=512" in digest
+    assert "cache=abcdef1234" in digest
+
+
+def test_build_digest_ignores_invalid_timesfm_report(store: EvolutionStore) -> None:
+    report_dir = store.root / "timesfm" / "BTC-USDT"
+    report_dir.mkdir(parents=True)
+    (report_dir / "report.json").write_text("{invalid", encoding="utf-8")
+    digest = build_digest(store)
+    assert "(noch keine TimesFM-Reports" in digest
 
 
 def test_build_digest_renders_state_content(store: EvolutionStore) -> None:

@@ -8,6 +8,7 @@ Familien-Zählung (Deflations-Basis), letzte Verdicts, Grab, Live-Paper.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -183,6 +184,44 @@ def _live_section(live: dict[str, Any] | None) -> list[str]:
     return lines
 
 
+def _timesfm_section(store: EvolutionStore) -> list[str]:
+    """TimesFM-Research-Reports aus ``<state>/timesfm/`` (nur Evidenz)."""
+    lines = ["## TimesFM-Research (nur Evidenz — keine Promotion, kein Live-Entscheider)", ""]
+    timesfm_dir = store.root / "timesfm"
+    reports: list[tuple[float, str, dict[str, Any]]] = []
+    if timesfm_dir.is_dir():
+        for report_path in timesfm_dir.glob("*/report.json"):
+            try:
+                data = json.loads(report_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.info("TimesFM-Report %s übersprungen: %s", report_path, exc)
+                continue
+            if not isinstance(data, dict):
+                continue
+            try:
+                mtime = report_path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            reports.append((mtime, report_path.parent.name, data))
+    if not reports:
+        lines.append("- (noch keine TimesFM-Reports — `python -m apps.evolution --timesfm-spike --timesfm-fake`)")
+        lines.append("")
+        return lines
+    for _mtime, instrument, data in sorted(reports, key=lambda item: item[0], reverse=True):
+        params = data.get("params", {})
+        if not isinstance(params, dict):
+            params = {}
+        cache_key = str(data.get("cache_key", "—"))
+        lines.append(
+            f"- **{instrument}**: provider={data.get('provider', '—')}, "
+            f"n_features={data.get('n_features', '—')}, "
+            f"context={params.get('context', '—')}, horizon={params.get('horizon', '—')}, "
+            f"step={params.get('step', '—')}, cache={cache_key[:12]}"
+        )
+    lines.append("")
+    return lines
+
+
 def build_digest(store: EvolutionStore, *, live: dict[str, Any] | None = None) -> str:
     """Baut den Evidenz-Digest (Markdown) aus dem State."""
     lines = [f"# Evolutions-Digest — {utcnow_iso()}", ""]
@@ -191,6 +230,7 @@ def build_digest(store: EvolutionStore, *, live: dict[str, Any] | None = None) -
     lines += _families_section(store)
     lines += _last_cycle_section(store)
     lines += _graveyard_section(store)
+    lines += _timesfm_section(store)
     lines += _live_section(live)
     return "\n".join(lines)
 
