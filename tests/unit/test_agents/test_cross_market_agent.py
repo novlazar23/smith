@@ -297,7 +297,8 @@ class TestCorrelation:
         assert corr_val > 0
 
     def test_correlation_zero(self) -> None:
-        data = {"eth_btc": 0.045, "eth_btc_arr": np.random.randn(50)}
+        zero_trend_signal = np.where(np.arange(50) % 2 == 0, 1.0, -1.0)
+        data = {"eth_btc": 0.045, "eth_btc_arr": zero_trend_signal}
         report = CrossMarketAgent().analyze(data)
         evidence = [e for e in report.evidence if "eth_btc" in e.reference]
         corr_val = float(evidence[0].value.split("corr=")[1].split(",")[0])
