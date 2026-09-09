@@ -130,7 +130,12 @@ async def live_health_check() -> LiveHealthResponse:
         readiness_checks.append("circuit_breaker_open")
 
     readiness = all_pass
-    status = "healthy" if (liveness and readiness) else "unhealthy" if not readiness else "degraded"
+    if not liveness:
+        status = "unhealthy"
+    elif readiness:
+        status = "healthy"
+    else:
+        status = "degraded"
 
     return LiveHealthResponse(
         status=status,

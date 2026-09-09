@@ -68,7 +68,8 @@ class TestLiveHealthRouter:
         resp = await live_health.live_health_check()
         assert resp.details["rollout_phase"] == "SHADOW"
         assert resp.readiness is False
-        assert resp.status == "unhealthy"
+        # alive but not ready → degraded (unhealthy is reserved for !liveness)
+        assert resp.status == "degraded"
 
 
 class TestKillSwitchEndpoint:

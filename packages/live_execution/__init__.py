@@ -8,6 +8,7 @@ Sub-modules
 -----------
 - ``gateway`` — :class:`.LiveExecutionGateway`: CCXT-based order submission.
 - ``order_state_machine`` — :class:`.OrderStateMachine`: 8-state lifecycle.
+- ``pnl`` — :class:`.LivePnlTracker`: deterministic realized/unrealized PnL.
 - ``router`` — :class:`.OrderRouter`: single → multi-venue routing.
 - ``rate_limiter`` — :class:`.RateLimiter`: token-bucket per venue.
 - ``idempotency`` — :class:`.IdempotencyStore`: duplicate submit prevention.
@@ -66,6 +67,11 @@ from packages.live_execution.order_state_machine import (
     StateTransitionError,
     Transition,
 )
+from packages.live_execution.pnl import (
+    DailyPnlRow,
+    LivePnlTracker,
+    PnlSummary,
+)
 from packages.live_execution.rate_limiter import (
     RateLimiter,
     RateLimitExceededError,
@@ -84,6 +90,7 @@ from packages.live_execution.validator import (
 )
 
 __all__ = [
+    "DailyPnlRow",
     "GatewayError",
     "GatewayExecutionError",
     "GatewayIdempotencyError",
@@ -91,11 +98,13 @@ __all__ = [
     "IdempotencyError",
     "IdempotencyStore",
     "LiveExecutionGateway",
+    "LivePnlTracker",
     "OrderResult",
     "OrderSnapshot",
     "OrderState",
     "OrderStateMachine",
     "OrderValidator",
+    "PnlSummary",
     "RateLimitExceededError",
     "RateLimiter",
     "RiskGateResult",

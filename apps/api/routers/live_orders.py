@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -30,9 +31,9 @@ from packages.live_execution import (
     GatewayIdempotencyError,
     GatewayValidationError,
     LiveExecutionGateway,
+    LivePnlTracker,
     OrderResult,
     OrderState,
-    OrderValidator,
 )
 from packages.rollout import get_rollout_controller
 from pydantic import BaseModel, ConfigDict, Field
@@ -75,6 +76,8 @@ class SubmitOrderRequest(BaseModel):
         order_type: One of ``"market"``, ``"limit"``, ``"stop_limit"``,
             ``"stop_market"``.
         price: Limit / stop price (``None`` for market orders).
+        stop_price: Stop trigger price for ``stop_limit`` / ``stop_market``
+            orders (optional; validated by the gateway).
         idempotency_key: Unique key to guard against duplicate submissions.
         venue: Exchange identifier (e.g. ``"binance"``, ``"bybit"``).
     """
@@ -90,6 +93,9 @@ class SubmitOrderRequest(BaseModel):
         description="Order type",
     )
     price: float | None = Field(default=None, description="Limit or stop price (None for market orders)")
+    stop_price: float | None = Field(
+        default=None, description="Stop trigger price for stop orders"
+    )
     idempotency_key: str = Field(..., min_length=1, description="Idempotency key for duplicate protection")
     venue: str = Field(..., min_length=1, max_length=50, description="Exchange/venue identifier")
 
@@ -308,96 +314,68 @@ def _audit_event(event: str, **fields: object) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Helper: PnL metric computation
+# Price-provider seam (mark prices for unrealized PnL)
 # ---------------------------------------------------------------------------
 
+_price_provider: Callable[[str, str], float | None] | None = None
 
-def _compute_pnl_metrics(
-    realized_pnl: float,
-    unrealized_pnl: float,
-    daily_pnls: list[float],
-    win_count: int,
-    loss_count: int,
-    gross_profit: float,
-    gross_loss: float,
-) -> dict[str, float | None]:
-    """Compute PnL risk-adjusted metrics from daily PnL series.
 
-    Args:
-        realized_pnl: Total realized PnL.
-        unrealized_pnl: Total unrealized PnL.
-        daily_pnls: List of daily net PnL values.
-        win_count: Number of winning trades.
-        loss_count: Number of losing trades.
-        gross_profit: Sum of all gross profits.
-        gross_loss: Sum of all gross losses (absolute).
+def set_live_price_provider(provider: Callable[[str, str], float | None] | None) -> None:
+    """Register a ``(venue, symbol) -> price | None`` provider.
 
-    Returns:
-        Dict with keys ``sharpe``, ``sortino``, ``max_drawdown``,
-        ``win_rate``, ``profit_factor``.
+    Used for tests and future market-data integration.  ``None`` clears
+    the provider; unrealized PnL then reports ``0.0``.
     """
-    import math
+    global _price_provider
+    _price_provider = provider
 
-    total_trades = win_count + loss_count
 
-    # Win rate
-    win_rate = win_count / total_trades if total_trades > 0 else 0.0
+def _build_mark_prices() -> dict[tuple[str, str], float]:
+    """Build the mark-price mapping for all tracked orders."""
+    if _price_provider is None:
+        return {}
+    mark: dict[tuple[str, str], float] = {}
+    for result in _order_registry.values():
+        price = _price_provider(result.venue, result.symbol)
+        if price is not None:
+            mark[(result.venue, result.symbol)] = price
+    return mark
 
-    # Profit factor
-    profit_factor: float | None = None
-    if gross_loss > 0:
-        profit_factor = gross_profit / gross_loss
 
-    # Max drawdown
-    max_dd = 0.0
-    peak = 0.0
-    cumsum = 0.0
-    for pnl_val in daily_pnls:
-        cumsum += pnl_val
-        if cumsum > peak:
-            peak = cumsum
-        dd = peak - cumsum
-        if dd > 0:
-            dd_ratio = dd / peak if peak > 0 else 0.0
-            max_dd = max(max_dd, dd_ratio)
+def _build_tracker() -> LivePnlTracker:
+    """Build a fresh :class:`LivePnlTracker` from the order registry."""
+    tracker = LivePnlTracker()
+    for result in sorted(_order_registry.values(), key=lambda r: r.submitted_at):
+        tracker.process_order(result)
+    return tracker
 
-    # Sharpe ratio (annualized, assuming 252 trading days)
-    sharpe: float | None = None
-    if len(daily_pnls) >= 2:
-        mean_pnl = sum(daily_pnls) / len(daily_pnls)
-        variance = sum((x - mean_pnl) ** 2 for x in daily_pnls) / (len(daily_pnls) - 1)
-        std = math.sqrt(variance) if variance > 0 else 0.0
-        if std > 0:
-            sharpe = (mean_pnl / std) * math.sqrt(252)
 
-    # Sortino ratio
-    sortino: float | None = None
-    if len(daily_pnls) >= 2:
-        mean_pnl = sum(daily_pnls) / len(daily_pnls)
-        downside = [x for x in daily_pnls if x < mean_pnl]
-        if downside:
-            downside_var = sum(x ** 2 for x in downside) / len(daily_pnls)
-            downside_std = math.sqrt(downside_var) if downside_var > 0 else 0.0
-            if downside_std > 0:
-                sortino = (mean_pnl / downside_std) * math.sqrt(252)
-
-    return {
-        "sharpe": round(sharpe, 4) if sharpe is not None else None,
-        "sortino": round(sortino, 4) if sortino is not None else None,
-        "max_drawdown": round(max_dd, 6),
-        "win_rate": round(win_rate, 4),
-        "profit_factor": round(profit_factor, 4) if profit_factor is not None else None,
-    }
+def _cancel_failed(cancel_result: OrderResult) -> bool:
+    """True if a gateway cancel result indicates a failed cancellation."""
+    return "error" in cancel_result.status or cancel_result.state == OrderState.ERROR
 
 
 # ---------------------------------------------------------------------------
 # In-memory order store (shared across requests)
 # ---------------------------------------------------------------------------
 
+# ponytail: in-memory only — lost on process restart. WIP until order
+# persistence lands; registry is intentionally not DB-backed yet.
 # order_id -> OrderResult
 _order_registry: dict[str, OrderResult] = {}
 # idempotency_key -> list[str] of order_ids
 _idempotency_index: dict[str, list[str]] = {}
+
+#: Order states that cannot be cancelled.
+_TERMINAL_STATES = frozenset(
+    {
+        OrderState.FILLED,
+        OrderState.CANCELLED,
+        OrderState.REJECTED,
+        OrderState.EXPIRED,
+        OrderState.ERROR,
+    }
+)
 
 
 def _find_by_idempotency(key: str) -> OrderResult | None:
@@ -418,12 +396,7 @@ def _store_order(result: OrderResult, idempotency_key: str | None = None) -> Non
         _idempotency_index.setdefault(idempotency_key, []).append(oid)
 
 
-def _build_order_record(
-    result: OrderResult,
-    instrument: str,
-    direction: str,
-    order_type: str,
-) -> OrderRecord:
+def _build_order_record(result: OrderResult) -> OrderRecord:
     """Build an :class:`OrderRecord` from an :class:`OrderResult`."""
     # Extract transition history from the gateway's state machine
     gateway = _get_gateway()
@@ -439,9 +412,9 @@ def _build_order_record(
 
     return OrderRecord(
         order_id=result.order_id,
-        instrument=instrument,
+        instrument=result.symbol or "",
         venue=result.venue,
-        direction=direction,
+        direction=result.side or "",
         quantity=result.quantity,
         price=result.price,
         order_type=result.order_type,
@@ -463,9 +436,10 @@ def _build_order_record(
 async def submit_live_order(request: SubmitOrderRequest) -> SubmitOrderResponse:
     """Submit a live order with full validation and audit trail.
 
-    The endpoint checks the ``live_trading_enabled`` feature flag, runs the
-    order validator pipeline, checks idempotency, submits to the exchange via
-    CCXT, and records the order in the in-memory registry.
+    The endpoint checks the ``live_trading_enabled`` feature flag, checks
+    idempotency, and submits to the exchange via the gateway (the gateway
+    is the single validation path — it raises
+    :class:`GatewayValidationError` on invalid orders).
 
     Request schema
     --------------
@@ -475,6 +449,7 @@ async def submit_live_order(request: SubmitOrderRequest) -> SubmitOrderResponse:
         "quantity": 0.5,
         "order_type": "limit",
         "price": 45000.0,
+        "stop_price": 44000.0,
         "idempotency_key": "unique-key-123",
         "venue": "binance"
     }
@@ -511,46 +486,21 @@ async def submit_live_order(request: SubmitOrderRequest) -> SubmitOrderResponse:
             idempotency_key=request.idempotency_key,
         )
 
-    # --- Convert direction ---
+    # --- Normalize for the gateway ---
     direction = request.direction.lower()
+    order_type = request.order_type.lower()
 
-    # --- Run pre-submission validation ---
-    validator = OrderValidator()
-    validation_errors = await validator.validate(
-        symbol=request.instrument,
-        venue=request.venue,
-        side=direction,
-        quantity=request.quantity,
-        price=request.price,
-        order_type=request.order_type,
-    )
-    if validation_errors:
-        errors_str = "; ".join(e.message for e in validation_errors)
-        audit_id = _audit_event(
-            "order_submit_rejected",
-            instrument=request.instrument,
-            error=errors_str,
-            idempotency_key=request.idempotency_key,
-        )
-        logger.warning(
-            "Order validation failed for %s/%s: %s (audit: %s)",
-            request.instrument, request.venue, errors_str, audit_id,
-        )
-        raise HTTPException(
-            status_code=422,
-            detail=f"Order validation failed: {errors_str}",
-        )
-
-    # --- Submit via gateway ---
+    # --- Submit via gateway (single validation path) ---
     gateway = _get_gateway()
     try:
         result = await gateway.submit_order(
             venue=request.venue,
             symbol=request.instrument,
             side=direction,
-            order_type=request.order_type,
+            order_type=order_type,
             amount=request.quantity,
             price=request.price,
+            stop_price=request.stop_price,
             idempotency_key=request.idempotency_key,
         )
     except GatewayValidationError as exc:
@@ -598,7 +548,7 @@ async def submit_live_order(request: SubmitOrderRequest) -> SubmitOrderResponse:
         instrument=request.instrument,
         direction=direction,
         quantity=request.quantity,
-        order_type=request.order_type,
+        order_type=order_type,
         venue=request.venue,
         order_id=result.order_id,
         state=result.state.name,
@@ -664,12 +614,11 @@ async def list_orders(
     """
     _require_live_trading()
 
-    # Enforce that at least some filter is present or no filter returns all
     filtered = _order_registry
 
-    # Filter by order_id
+    # Filter by order_id (exact match)
     if order_id is not None:
-        filtered = {k: v for k, v in filtered.items() if order_id in (v.order_id, k)}
+        filtered = {k: v for k, v in filtered.items() if k == order_id}
 
     # Filter by status / state
     if status is not None:
@@ -696,20 +645,7 @@ async def list_orders(
             if v.submitted_at <= to_dt
         }
 
-    results: list[OrderRecord] = []
-    for oid, result in filtered.items():
-        # Look up the original request data from the idempotency index
-        instrument = ""
-        direction = ""
-        order_type = result.order_type
-        for _, order_ids in _idempotency_index.items():
-            if oid in order_ids:
-                # We need to reconstruct from OrderResult attributes
-                break
-        # Use the OrderResult's symbol as the instrument
-        instrument = result.symbol or ""
-        direction = result.side or ""
-        results.append(_build_order_record(result, instrument, direction, order_type))
+    results = [_build_order_record(result) for _, result in filtered.items()]
 
     # Sort by submission time descending
     results.sort(key=lambda r: r.submitted_at, reverse=True)
@@ -726,7 +662,8 @@ async def cancel_live_order(request: CancelOrderRequest) -> CancelOrderResponse:
     """Cancel a live order.
 
     Looks up the order in the registry, runs the gateway's cancel logic,
-    and updates the audit trail.
+    and updates the audit trail.  A failed cancellation returns 500 and
+    leaves the previous order state unchanged.
 
     Request schema
     --------------
@@ -753,13 +690,7 @@ async def cancel_live_order(request: CancelOrderRequest) -> CancelOrderResponse:
         )
 
     # Cannot cancel orders in terminal states
-    if order.state in (
-        OrderState.FILLED,
-        OrderState.CANCELLED,
-        OrderState.REJECTED,
-        OrderState.EXPIRED,
-        OrderState.ERROR,
-    ):
+    if order.state in _TERMINAL_STATES:
         raise HTTPException(
             status_code=409,
             detail=f"Order {request.order_id} is in terminal state {order.state.name} and cannot be cancelled.",
@@ -784,6 +715,24 @@ async def cancel_live_order(request: CancelOrderRequest) -> CancelOrderResponse:
             status_code=500,
             detail=f"Order cancellation failed: {exc}",
         ) from exc
+
+    # Cancel failure — report 500, leave the previous order state unchanged
+    # (a failed cancel is not an order error state).
+    if _cancel_failed(cancel_result):
+        audit_id = _audit_event(
+            "cancel_order_failed",
+            order_id=request.order_id,
+            reason=request.reason,
+            error=cancel_result.error or cancel_result.status,
+        )
+        logger.error(
+            "Cancel order failed for %s (audit: %s): %s",
+            request.order_id, audit_id, cancel_result.error or cancel_result.status,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Order cancellation failed: {cancel_result.error or cancel_result.status}",
+        )
 
     # Update registry
     order.state = cancel_result.state
@@ -842,36 +791,53 @@ async def kill_switch(request: KillSwitchRequest) -> KillSwitchResponse:
     # Shared rollout controller — state persists across requests
     rollout = get_rollout_controller()
 
+    affected: list[str] = []
+
     if request.action == "activate":
         # Activate the kill switch
         rollout.force_kill(reason=request.reason)
 
         # Collect affected open orders
-        affected: list[str] = []
         for oid, order in _order_registry.items():
-            if order.state not in (
-                OrderState.FILLED,
-                OrderState.CANCELLED,
-                OrderState.REJECTED,
-                OrderState.EXPIRED,
-                OrderState.ERROR,
-            ):
+            if order.state not in _TERMINAL_STATES:
                 affected.append(oid)
 
-        # Attempt to cancel open orders via gateway
+        # Attempt to cancel open orders via gateway; use the cancel result
+        # to update state, and leave state unchanged on failure.
         gateway = _get_gateway()
         for oid in affected:
             order = _order_registry.get(oid)
-            if order is not None:
-                try:
-                    await gateway.cancel_order(
-                        venue=order.venue,
-                        order_id=oid,
-                    )
-                    order.state = OrderState.CANCELLED
-                    order.status = "kill_switch_cancelled"
-                except Exception:
-                    logger.exception("Failed to auto-cancel order %s during kill switch", oid)
+            if order is None:
+                continue
+            try:
+                cancel_result = await gateway.cancel_order(
+                    venue=order.venue,
+                    order_id=oid,
+                )
+            except Exception:
+                logger.exception("Failed to auto-cancel order %s during kill switch", oid)
+                _audit_event(
+                    "kill_switch_cancel_failed",
+                    order_id=oid,
+                    reason=request.reason,
+                    error="cancel call raised",
+                )
+                continue
+            if _cancel_failed(cancel_result):
+                # Cancel failed — leave the order state unchanged and audit it.
+                logger.error(
+                    "Kill-switch auto-cancel failed for %s: %s",
+                    oid, cancel_result.error or cancel_result.status,
+                )
+                _audit_event(
+                    "kill_switch_cancel_failed",
+                    order_id=oid,
+                    reason=request.reason,
+                    error=cancel_result.error or cancel_result.status,
+                )
+                continue
+            order.state = cancel_result.state
+            order.status = cancel_result.status
 
         audit_id = _audit_event(
             "kill_switch_activated",
@@ -910,7 +876,7 @@ async def kill_switch(request: KillSwitchRequest) -> KillSwitchResponse:
 
     return KillSwitchResponse(
         state=current_state,
-        affected_orders=affected if request.action == "activate" else [],
+        affected_orders=affected,
         confirmed=True,
     )
 
@@ -924,8 +890,9 @@ async def kill_switch(request: KillSwitchRequest) -> KillSwitchResponse:
 async def get_pnl() -> PnlMetrics:
     """Return realized and unrealized PnL with risk-adjusted metrics.
 
-    The PnL data is derived from the order registry, filling history, and
-    gateway state machines.
+    The PnL is computed deterministically by :class:`LivePnlTracker` from
+    the order registry fills; unrealized PnL uses the configured price
+    provider and is ``0.0`` when no mark prices are available.
 
     Response schema
     ---------------
@@ -941,9 +908,8 @@ async def get_pnl() -> PnlMetrics:
     """
     _require_live_trading()
 
-    gateway = _get_gateway()
-    metrics = _compute_pnl_from_orders(gateway)
-    return PnlMetrics(**metrics)
+    tracker = _build_tracker()
+    return PnlMetrics(**tracker.summary(_build_mark_prices()))
 
 
 # ---------------------------------------------------------------------------
@@ -968,107 +934,5 @@ async def get_daily_pnl() -> list[DailyPnlPoint]:
     """
     _require_live_trading()
 
-    gateway = _get_gateway()
-    return _compute_daily_pnl(gateway)
-
-
-# ---------------------------------------------------------------------------
-# Internal PnL computation helpers
-# ---------------------------------------------------------------------------
-
-
-def _compute_pnl_from_orders(gateway: LiveExecutionGateway) -> dict[str, Any]:
-    """Compute PnL metrics from the order registry and gateway state.
-
-    Args:
-        gateway: The live execution gateway instance.
-
-    Returns:
-        Dict compatible with :class:`PnlMetrics`.
-    """
-    realized_pnl = 0.0
-    unrealized_pnl = 0.0
-    daily_pnls: dict[str, float] = {}
-    win_count = 0
-    loss_count = 0
-    gross_profit = 0.0
-    gross_loss = 0.0
-
-    for _, result in _order_registry.items():
-        # Realized PnL from filled orders
-        if result.state == OrderState.FILLED and result.fill_price is not None:
-            if result.side == "buy":
-                # Long position — PnL from sell vs buy
-                pass  # Unrealized if still open
-            else:
-                # Short position sell — PnL from buy-back
-                pass
-
-        # Track daily PnL from fills
-        fill_pnl = result.filled_quantity * (result.fill_price or 0) if result.fill_price else 0.0
-        if result.submitted_at:
-            day = result.submitted_at.date().isoformat()
-            daily_pnls.setdefault(day, 0.0)
-
-        # Track win/loss for filled orders
-        if result.state == OrderState.FILLED:
-            # Simplified: assume positive fill value = profit
-            if fill_pnl > 0:
-                win_count += 1
-                gross_profit += fill_pnl
-            else:
-                loss_count += 1
-                gross_loss += abs(fill_pnl)
-
-    # Aggregate daily
-    daily_list = [daily_pnls[d] for d in sorted(daily_pnls.keys())]
-
-    metrics = _compute_pnl_metrics(
-        realized_pnl=realized_pnl,
-        unrealized_pnl=unrealized_pnl,
-        daily_pnls=daily_list,
-        win_count=win_count,
-        loss_count=loss_count,
-        gross_profit=gross_profit,
-        gross_loss=gross_loss,
-    )
-    metrics["realized"] = realized_pnl
-    metrics["unrealized"] = unrealized_pnl
-    return metrics
-
-
-def _compute_daily_pnl(gateway: LiveExecutionGateway) -> list[DailyPnlPoint]:
-    """Compute daily PnL from the order registry.
-
-    Args:
-        gateway: The live execution gateway instance.
-
-    Returns:
-        List of :class:`DailyPnlPoint` sorted by date descending.
-    """
-    daily: dict[str, dict[str, float]] = {}
-
-    for result in _order_registry.values():
-        if not result.submitted_at:
-            continue
-        day = result.submitted_at.date().isoformat()
-        entry = daily.setdefault(day, {"pnl": 0.0, "realized": 0.0, "unrealized": 0.0})
-
-        if result.state == OrderState.FILLED and result.fill_price is not None:
-            pnl = result.filled_quantity * (result.fill_price - (result.price or 0))
-            entry["pnl"] += pnl
-            entry["realized"] += pnl
-        else:
-            # Still open — unrealized
-            entry["unrealized"] += result.quantity * (result.price or 0) * 0.01  # rough estimate
-
-    points = [
-        DailyPnlPoint(
-            date=day,
-            pnl=round(data["pnl"], 2),
-            realized=round(data["realized"], 2),
-            unrealized=round(data["unrealized"], 2),
-        )
-        for day, data in sorted(daily.items(), reverse=True)
-    ]
-    return points
+    tracker = _build_tracker()
+    return [DailyPnlPoint(**row) for row in tracker.daily(_build_mark_prices())]
