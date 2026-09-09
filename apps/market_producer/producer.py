@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,6 +30,7 @@ from confluent_kafka import KafkaError, KafkaException, Message, Producer
 from confluent_kafka.admin import AdminClient, NewTopic  # pyright: ignore[reportPrivateImportUsage]
 from packages.ingestion.adapter.binance import BinanceAdapter
 from packages.ingestion.adapter.dummy import INSTRUMENT_BASE_PRICES, DummyAdapter
+from packages.live_data.ingestion_guard import LiveIngestionGuard
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +127,17 @@ class DummyMarketDataProducer:
         self._binance_adapter: BinanceAdapter | None = (
             BinanceAdapter() if self._source == SOURCE_BINANCE else None
         )
+        self._ingestion_guard: LiveIngestionGuard | None = None
+        if self._source == SOURCE_BINANCE and self._binance_adapter is not None:
+            self._ingestion_guard = LiveIngestionGuard(
+                primary_venue=self._binance_adapter.venue,
+                backup_venue=VENUE,
+                interval_seconds=self._interval_seconds,
+            )
+            self._ingestion_guard.register_reconnect_hook(
+                self._binance_adapter.venue,
+                self._reconnect_primary,
+            )
 
     # -- Topic-Setup ----------------------------------------------------
 
@@ -176,23 +189,86 @@ class DummyMarketDataProducer:
         Im Binance-Modus wird zuerst die letzte geschlossene Live-Kerze
         gesucht. Bei jedem Fehler (Netzwerk, HTTP, Validierung, keine
         geschlossene Kerze) wird mit einer Warnung auf den DummyAdapter
-        zurueckgefallen — der Live-Versuch erfolgt jeden Tick erneut
-        (kein Moduswechsel).
+        zurueckgefallen. ``LiveIngestionGuard`` führt Health, Backoff,
+        Quality-Gates und Failover für den Live-Pfad.
         """
-        if self._binance_adapter is not None:
-            try:
-                candle = await self._fetch_live_closed_candle(symbol)
-            except Exception as exc:
-                logger.warning(
-                    "Binance-Fetch fehlgeschlagen (%s) → Dummy-Fallback: %s", symbol, exc
-                )
-            else:
-                if candle is not None:
-                    return [candle]
-                logger.warning(
-                    "Binance lieferte keine geschlossene 1m-Kerze (%s) → Dummy-Fallback", symbol
-                )
-        return await self._adapters[symbol].fetch_candles(symbol, "1m", 1)
+        adapter = self._binance_adapter
+        guard = self._ingestion_guard
+        if adapter is not None and guard is not None:
+            await guard.evaluate_failover()
+            if guard.active_venue == guard.primary_venue:
+                started = time.monotonic()
+                try:
+                    candle = await self._fetch_live_closed_candle(symbol)
+                except Exception as exc:
+                    logger.warning(
+                        "Binance-Fetch fehlgeschlagen (%s) → Dummy-Fallback: %s",
+                        symbol,
+                        exc,
+                    )
+                    disconnected = not adapter.is_connected
+                    await guard.record_failure(
+                        guard.primary_venue,
+                        symbol,
+                        str(exc),
+                        trigger_reconnect=disconnected,
+                        critical=disconnected,
+                    )
+                else:
+                    if candle is not None:
+                        quality = await guard.record_success(
+                            guard.primary_venue,
+                            symbol,
+                            candle,
+                            latency_ms=(time.monotonic() - started) * 1000.0,
+                        )
+                        if quality.passed:
+                            return [candle]
+                        logger.warning(
+                            "Live-Kerze scheitert am Quality Gate (%s) → Dummy-Fallback",
+                            symbol,
+                        )
+                    else:
+                        logger.warning(
+                            "Binance lieferte keine geschlossene 1m-Kerze (%s) → Dummy-Fallback",
+                            symbol,
+                        )
+                        await guard.record_failure(
+                            guard.primary_venue,
+                            symbol,
+                            "keine geschlossene Kerze",
+                        )
+        return await self._fetch_dummy_candles(symbol, guard)
+
+    async def _fetch_dummy_candles(
+        self,
+        symbol: str,
+        guard: LiveIngestionGuard | None,
+    ) -> list[dict[str, Any]]:
+        """Liefert die Dummy-Fallback-Kerze und pflegt optional die Backup-Health."""
+        candles = await self._adapters[symbol].fetch_candles(symbol, "1m", 1)
+        if guard is not None and candles:
+            await guard.record_success(
+                guard.backup_venue,
+                symbol,
+                candles[-1],
+                latency_ms=0.0,
+            )
+        return candles
+
+    async def _reconnect_primary(self) -> bool:
+        """Reconnect-Hook für den LiveIngestionGuard."""
+        adapter = self._binance_adapter
+        if adapter is None:
+            return False
+        try:
+            await adapter.connect()
+        except Exception as exc:
+            logger.warning("Binance-Reconnect fehlgeschlagen: %s", exc)
+            return False
+        if adapter.is_connected and self._ingestion_guard is not None:
+            await self._ingestion_guard.record_reconnect_success(adapter.venue)
+        return adapter.is_connected
 
     async def _fetch_live_closed_candle(self, symbol: str) -> dict[str, Any] | None:
         """Holt die letzte geschlossene 1m-Live-Kerze fuer ein Symbol.
@@ -303,6 +379,8 @@ class DummyMarketDataProducer:
                     logger.error("Tick fehlgeschlagen: %s", exc)
                 await asyncio.sleep(self._interval_seconds)
         finally:
+            if self._ingestion_guard is not None:
+                await self._ingestion_guard.close()
             if self._binance_adapter is not None:
                 with suppress(Exception):
                     await self._binance_adapter.disconnect()
