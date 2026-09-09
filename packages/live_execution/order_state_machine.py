@@ -33,8 +33,11 @@ Valid Transitions
       │
       └────────────► ERROR
 
-Every state has an outgoing ``► ERROR`` transition to handle unexpected
-failures (network outage, exchange API crash, unexpected response).
+Every non-terminal state has an outgoing ``► ERROR`` transition to handle
+unexpected failures (network outage, exchange API crash, unexpected
+response).  The terminal states ``FILLED``, ``CANCELLED``, ``REJECTED``,
+``EXPIRED``, and ``ERROR`` are **absorbing**: once reached, no further
+transition is possible and the order state can no longer change.
 """
 
 from __future__ import annotations
@@ -136,14 +139,7 @@ _ALLOWED_TRANSITIONS: frozenset[tuple[OrderState, OrderState]] = frozenset(
         # REJECTED — absorbing.
         # EXPIRED — absorbing.
         # ERROR — absorbing.
-        # Any state → ERROR on unexpected failure
-        (OrderState.NEW, OrderState.ERROR),
-        (OrderState.PENDING, OrderState.ERROR),
-        (OrderState.PARTIALLY_FILLED, OrderState.ERROR),
-        (OrderState.FILLED, OrderState.ERROR),
-        (OrderState.CANCELLED, OrderState.ERROR),
-        (OrderState.REJECTED, OrderState.ERROR),
-        (OrderState.EXPIRED, OrderState.ERROR),
+        # No transitions out of terminal states: they are absorbing.
     ]
 )
 
@@ -302,6 +298,7 @@ class OrderStateMachine:
         if (self._state, target) not in _ALLOWED_TRANSITIONS:
             raise StateTransitionError(self._state, target)
 
+        previous_state = self._state
         self._state = target
         timestamp = datetime.now(UTC)
         self._history.append((self._state, event, timestamp))
@@ -332,7 +329,7 @@ class OrderStateMachine:
         logger.info(
             "Order %s: %s → %s [%s]",
             self.order_id,
-            self._snapshot.state.name,
+            previous_state.name,
             target.name,
             event or "unknown",
         )
@@ -357,7 +354,14 @@ class OrderStateMachine:
 
         Returns:
             Updated :class:`OrderSnapshot`.
+
+            If the order is already in a terminal state, this is a safe
+            no-op: the terminal state and recorded fill quantity are
+            preserved and the current snapshot is returned unchanged.
         """
+        if self._state in self.ABSORBING:
+            return self._snapshot
+
         self.filled_quantity = filled_quantity
 
         remaining = self.quantity - filled_quantity
@@ -375,16 +379,22 @@ class OrderStateMachine:
                 event=event or "partial_fill",
                 filled_quantity=filled_quantity,
             )
-        else:
+        elif self._state == OrderState.PARTIALLY_FILLED:
             # Already partially filled, just update quantity
             self._snapshot.filled_quantity = filled_quantity
             self._snapshot.metadata["fill_price"] = fill_price
             return self._snapshot
+        else:
+            # A fill for an order that was never submitted (e.g. NEW) is a
+            # protocol violation: the FSM has no fill transition from here.
+            raise StateTransitionError(self._state, OrderState.PARTIALLY_FILLED)
 
     def transition_from_error(self, event: str = "error") -> OrderSnapshot:
-        """Force transition to ERROR from any state.
+        """Force transition to ERROR from any non-terminal state.
 
-        Convenience method for unexpected failures.
+        Convenience method for unexpected failures.  Orders already in a
+        terminal state are absorbing: this method is a no-op for them and
+        returns the current snapshot unchanged.
 
         Args:
             event: Description of the error event.
@@ -392,6 +402,8 @@ class OrderStateMachine:
         Returns:
             Updated :class:`OrderSnapshot`.
         """
+        if self._state in self.ABSORBING:
+            return self._snapshot
         return self.transition_to(OrderState.ERROR, event=event)
 
     def reset_to_new(self) -> None:
@@ -414,8 +426,7 @@ class OrderStateMachine:
         )
 
     def to_snapshot(self) -> OrderSnapshot:
-        """Return the current :class:`OrderSnapshot`."""
-        self._snapshot.state_changed_at = datetime.now(UTC)
+        """Return the current :class:`OrderSnapshot` without side effects."""
         return self._snapshot
 
     def get_history(self) -> list[tuple[OrderState, str, datetime]]:

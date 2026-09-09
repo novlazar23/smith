@@ -61,6 +61,7 @@ from packages.live_execution.order_state_machine import (
 )
 from packages.live_execution.rate_limiter import RateLimiter
 from packages.live_execution.validator import OrderValidator, ValidationError
+from packages.rollout import CircuitState, KillSwitchState, get_rollout_controller
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,7 @@ class OrderResult:
             "submitted_at": self.submitted_at.isoformat(),
             "filled_quantity": self.filled_quantity,
             "fill_price": self.fill_price,
+            "raw_response": self.raw_response,
         }
 
 
@@ -273,8 +275,22 @@ class LiveExecutionGateway:
         Raises:
             GatewayValidationError: If validation fails.
             GatewayIdempotencyError: If the key was already used.
-            GatewayExecutionError: If CCXT submission fails.
+            GatewayExecutionError: If CCXT submission fails, or if the
+                rollout kill switch is activated / the rollout circuit
+                breaker is open.
         """
+        # 0. Rollout safety gate — block new submissions while the
+        #    kill switch is activated or the circuit breaker is open.
+        controller = get_rollout_controller()
+        if controller.kill_switch.state == KillSwitchState.ACTIVATED:
+            raise GatewayExecutionError(
+                "submit_order blocked: rollout kill switch is activated"
+            )
+        if controller.circuit_breaker.state == CircuitState.OPEN:
+            raise GatewayExecutionError(
+                "submit_order blocked: rollout circuit breaker is open"
+            )
+
         # 1. Generate or validate idempotency key
         if idempotency_key is None:
             idempotency_key = str(uuid.uuid4())
@@ -282,6 +298,8 @@ class LiveExecutionGateway:
         # 2. Check idempotency store first
         existing = await self._idempotency_store.get(idempotency_key, venue)
         if existing is not None:
+            # Restore the original submission result — do not invent a
+            # fresh PENDING result for a duplicate.
             result = OrderResult(
                 idempotency_key=idempotency_key,
                 symbol=symbol,
@@ -291,10 +309,23 @@ class LiveExecutionGateway:
                 quantity=amount,
                 price=price,
             )
-            result.state = OrderState.PENDING
-            result.status = "duplicate_cached"
+            result.order_id = str(existing.get("order_id", ""))
+            try:
+                result.state = OrderState[str(existing.get("state", ""))]
+            except KeyError:
+                result.state = OrderState.PENDING
+            result.status = str(existing.get("status", "duplicate_cached"))
+            result.filled_quantity = float(
+                existing.get("filled_quantity") or 0.0
+            )
+            cached_fill_price = existing.get("fill_price")
+            result.fill_price = (
+                float(cached_fill_price)
+                if cached_fill_price is not None
+                else None
+            )
+            result.error = str(existing.get("error", ""))
             result.raw_response = existing
-            result.error = ""
             return result
 
         # 3. Validate the order
@@ -376,10 +407,17 @@ class LiveExecutionGateway:
                 client_order_id=client_order_id,
             )
 
-            # Extract venue order ID
+            # Extract venue order ID; fall back to the local order ID if
+            # the venue returned none, so result.order_id always addresses
+            # a registered state machine.
             venue_order_id = ccxt_order.get("id", "")
             if venue_order_id:
                 result.order_id = str(venue_order_id)
+            else:
+                result.order_id = order_id
+
+            # Key the state machine under the final order ID too.
+            self._state_machines[result.order_id] = state_machine
 
             result.raw_response = ccxt_order
 
@@ -474,12 +512,15 @@ class LiveExecutionGateway:
             result.raw_response = self._error_response(exc)
 
             # Record error in idempotency store (so duplicate submits
-            # return error)
+            # return the error)
             await self._idempotency_store.record(
                 idempotency_key=idempotency_key,
                 venue=venue,
                 result=result.to_dict(),
             )
+
+            # Propagate the failure — documented contract of this method.
+            raise GatewayExecutionError(message, raw=result.raw_response) from exc
 
         return result
 
@@ -499,14 +540,32 @@ class LiveExecutionGateway:
         Returns:
             :class:`OrderResult` with cancellation outcome.
         """
+        sm = self._state_machines.get(order_id)
+
+        # Terminal orders are done — no exchange call, state preserved.
+        if sm is not None and sm.is_terminal:
+            result = OrderResult(
+                idempotency_key="",
+                symbol=sm.symbol,
+                venue=venue,
+                side=sm.side,
+                order_type="",
+                quantity=sm.quantity,
+                price=sm.price,
+            )
+            result.order_id = order_id
+            result.state = sm.state
+            result.status = f"already_{sm.state.name.lower()}"
+            return result
+
         result = OrderResult(
             idempotency_key="",
-            symbol="",
+            symbol=sm.symbol if sm is not None else "",
             venue=venue,
-            side="",
+            side=sm.side if sm is not None else "",
             order_type="",
-            quantity=0,
-            price=None,
+            quantity=sm.quantity if sm is not None else 0,
+            price=sm.price if sm is not None else None,
         )
         result.order_id = order_id
         result.status = "cancelling"
@@ -530,8 +589,7 @@ class LiveExecutionGateway:
 
             result.raw_response = ccxt_result
 
-            # Update state machine if it exists
-            sm = self._state_machines.get(order_id)
+            # sm is non-terminal here, so CANCELLED is a legal target.
             if sm is not None:
                 sm.transition_to(
                     OrderState.CANCELLED,
@@ -541,6 +599,9 @@ class LiveExecutionGateway:
             await self._rate_limiter.record_success(venue)
 
         except Exception as exc:
+            status_code = getattr(exc, "status_code", None)
+            if status_code == 429:
+                await self._rate_limiter.record_rate_limit_error(venue)
             result.error = str(exc)
             result.state = OrderState.ERROR
             result.status = "cancel_error"
@@ -564,11 +625,14 @@ class LiveExecutionGateway:
         Returns:
             Raw exchange response dict.
         """
+        sm = self._state_machines.get(order_id)
+        symbol = sm.symbol if sm is not None and sm.symbol else "UNKNOWN"
+
         exchange = self._create_exchange(venue)
         await self._rate_limiter.acquire(venue, tokens=1)
         try:
             order_data = await exchange.fetch_order(
-                order_id, symbol="UNKNOWN"
+                order_id, symbol=symbol
             )
             await self._rate_limiter.record_success(venue)
             return order_data
@@ -593,9 +657,7 @@ class LiveExecutionGateway:
         exchange = self._create_exchange(venue)
         await self._rate_limiter.acquire(venue, tokens=1)
         try:
-            orders = await exchange.fetch_open_orders(
-                symbol or ""
-            )
+            orders = await exchange.fetch_open_orders(symbol)
             await self._rate_limiter.record_success(venue)
             return orders
         except Exception as exc:
@@ -701,14 +763,14 @@ class LiveExecutionGateway:
             order_type in ("stop_limit", "stop_market")
             and stop_price is not None
         ):
-            params["stopPrice"] = str(stop_price)
+            params["stopPrice"] = stop_price
 
         if order_type == "market":
             ccxt_order = await exchange.create_order(
                 symbol=symbol,
                 type="market",
                 side=side,
-                amount=str(amount),
+                amount=amount,
                 params=params,
             )
         elif order_type == "limit":
@@ -720,8 +782,8 @@ class LiveExecutionGateway:
                 symbol=symbol,
                 type="limit",
                 side=side,
-                amount=str(amount),
-                price=str(price),
+                amount=amount,
+                price=price,
                 params=params,
             )
         else:
@@ -734,8 +796,8 @@ class LiveExecutionGateway:
                 symbol=symbol,
                 type=order_type,
                 side=side,
-                amount=str(amount),
-                price=str(price),
+                amount=amount,
+                price=price,
                 params=params,
             )
 

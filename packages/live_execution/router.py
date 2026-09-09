@@ -50,6 +50,7 @@ from packages.live_execution.gateway import (
     LiveExecutionGateway,
     OrderResult,
 )
+from packages.live_execution.order_state_machine import OrderState
 from packages.live_execution.validator import ValidationError
 
 logger = logging.getLogger(__name__)
@@ -342,12 +343,15 @@ class OrderRouter:
                 ),
             ])
 
-        # Determine target venue
-        target_venue = self._select_venue(
-            symbol=symbol,
-            amount=amount,
-            side=side,
-        )
+        # Determine target venue — an explicit venue override wins.
+        if venue is not None:
+            target_venue = venue
+        else:
+            target_venue = self._select_venue(
+                symbol=symbol,
+                amount=amount,
+                side=side,
+            )
 
         if target_venue is None:
             raise GatewayExecutionError(
@@ -445,8 +449,10 @@ class OrderRouter:
         errors: list[str] = []
 
         for alloc in allocations:
+            # Per-venue derived key so venues never share an idempotency
+            # identity (each venue needs its own duplicate protection).
             key = (
-                f"{idempotency_key}"
+                f"{idempotency_key}:{alloc.venue_id}"
                 if idempotency_key is not None
                 else None
             )
@@ -463,7 +469,10 @@ class OrderRouter:
                 )
                 alloc.result = result
                 total_filled += result.filled_quantity
-                if result.state.value != "filled" and result.state.value != "partial_fill":
+                if result.state not in (
+                    OrderState.FILLED,
+                    OrderState.PARTIALLY_FILLED,
+                ):
                     all_ok = False
                     errors.append(
                         f"{alloc.venue_id}: {result.status} — {result.error}"
@@ -496,9 +505,10 @@ class OrderRouter:
             Health check result dict.
         """
         try:
-            health = await self.gateway._create_exchange(venue_id)
-            # CCXT has a built-in ping/health
-            health = await self.gateway._create_exchange(venue_id)  # noqa: F841
+            # ponytail: no real ping yet — successful exchange
+            # instantiation is the only health signal. Upgrade path:
+            # ccxt load_markets()/ping() with a timeout.
+            self.gateway._create_exchange(venue_id)
             self.update_health_score(venue_id, 1.0)
             return {"venue": venue_id, "healthy": True, "score": 1.0}
         except Exception as exc:

@@ -49,6 +49,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+#: Sides accepted by venues.
+_VALID_SIDES = frozenset({"buy", "sell"})
+
+#: Order types supported by the execution gateway.
+_VALID_ORDER_TYPES = frozenset({"market", "limit", "stop_limit", "stop_market"})
+
 
 # ─── Validation Error ───────────────────────────────────────────────────────
 
@@ -168,6 +174,8 @@ class OrderValidator:
         """
         errors: list[ValidationError] = []
 
+        errors.extend(self._validate_side(side))
+        errors.extend(self._validate_order_type(order_type))
         errors.extend(self._validate_size(quantity))
         errors.extend(
             self._validate_price(price, order_type, stop_price),
@@ -203,6 +211,33 @@ class OrderValidator:
         return errors
 
     # ── individual check methods ─────────────────────────────────────────
+
+    def _validate_side(self, side: str) -> list[ValidationError]:
+        """Check that the order side is ``buy`` or ``sell``."""
+        if str(side).lower() not in _VALID_SIDES:
+            return [
+                ValidationError(
+                    code="INVALID_SIDE",
+                    message=f"Order side must be 'buy' or 'sell', got {side!r}",
+                    field="side",
+                ),
+            ]
+        return []
+
+    def _validate_order_type(self, order_type: str) -> list[ValidationError]:
+        """Check that the order type is one of the supported types."""
+        if str(order_type).lower() not in _VALID_ORDER_TYPES:
+            return [
+                ValidationError(
+                    code="INVALID_ORDER_TYPE",
+                    message=(
+                        "Order type must be one of market, limit, "
+                        f"stop_limit, stop_market, got {order_type!r}"
+                    ),
+                    field="order_type",
+                ),
+            ]
+        return []
 
     def _validate_size(self, quantity: float) -> list[ValidationError]:
         """Check order quantity against configured bounds."""
@@ -379,6 +414,13 @@ class OrderValidator:
                     ]
         except Exception as exc:
             logger.error("Risk-gate check failed: %s", exc)
-            # On risk-gate failure, do NOT block — log and proceed
+            # Fail closed: an unavailable risk gate must block submission.
+            return [
+                ValidationError(
+                    code="RISK_GATE_ERROR",
+                    message=f"Risk gate failed closed: {exc}",
+                    field="risk_gate",
+                ),
+            ]
 
         return []

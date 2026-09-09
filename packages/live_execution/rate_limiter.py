@@ -149,10 +149,12 @@ class _AdaptiveBackoff:
 
     Attributes:
         multiplier: Current backoff multiplier (starts at 1.0).
+        delay: Current actual backoff delay in seconds (starts at 1.0).
         last_error_time: When the last rate-limit error occurred.
     """
 
     multiplier: float = 1.0
+    delay: float = field(default=1.0, init=False)
     last_error_time: float = field(default=0.0, init=False)
 
     def on_error(self, base_delay: float = 1.0, max_delay: float = 60.0) -> float:
@@ -167,26 +169,27 @@ class _AdaptiveBackoff:
         """
         self.multiplier = min(self.multiplier * 1.5, 8.0)
         self.last_error_time = time.monotonic()
-        delay = min(base_delay * self.multiplier, max_delay)
+        self.delay = min(base_delay * self.multiplier, max_delay)
         logger.info(
             "Rate-limit error — backoff multiplier=%.1f, delay=%.2fs",
             self.multiplier,
-            delay,
+            self.delay,
         )
-        return delay
+        return self.delay
 
     def on_success(self) -> None:
         """Called when a successful request completes.
 
-        Slowly decays the multiplier back to 1.0.
+        Slowly decays the multiplier and delay back toward 1.0.
         """
         if time.monotonic() - self.last_error_time > 30:
             self.multiplier = max(self.multiplier / 1.2, 1.0)
+            self.delay = max(self.delay / 1.2, 1.0)
 
     @property
     def current_delay(self) -> float:
-        """Current backoff multiplier."""
-        return self.multiplier
+        """Current actual backoff delay in seconds."""
+        return self.delay
 
 
 # ─── Per-Venue State ────────────────────────────────────────────────────────
@@ -329,9 +332,15 @@ class RateLimiter:
         async with self._lock:
             state = self._states.get(venue)
             if state is None:
-                # Auto-register with defaults
-                await self.register(venue)
-                state = self._states[venue]
+                # Auto-register with defaults.  Inlined instead of
+                # register() because that would re-acquire this lock.
+                state = _VenueState(
+                    bucket=_TokenBucket(
+                        capacity=self._default_capacity,
+                        refill_rate=self._default_refill,
+                    )
+                )
+                self._states[venue] = state
 
         # Check for active backoff before trying
         delay = state.backoff.current_delay
@@ -374,8 +383,14 @@ class RateLimiter:
         async with self._lock:
             state = self._states.get(venue)
             if state is None:
-                await self.register(venue)
-                state = self._states[venue]
+                # Inlined instead of register() (would re-acquire the lock).
+                state = _VenueState(
+                    bucket=_TokenBucket(
+                        capacity=self._default_capacity,
+                        refill_rate=self._default_refill,
+                    )
+                )
+                self._states[venue] = state
 
         delay = state.backoff.on_error(base_delay=base_delay)
         logger.warning(
