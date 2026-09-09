@@ -7,9 +7,11 @@ reset per test so kill-switch / circuit-breaker state never leaks.
 
 from __future__ import annotations
 
-from typing import Any, NoReturn
+import base64
+from typing import Any, ClassVar, NoReturn
 
 import pytest
+from packages.live_execution import gateway as gateway_module
 from packages.live_execution.gateway import (
     GatewayExecutionError,
     GatewayValidationError,
@@ -21,6 +23,7 @@ from packages.rollout import (
     KillSwitchState,
     reset_rollout_controller,
 )
+from packages.security.hardening.encryption import KeyRing
 
 from test_live_execution._fakes import FakeExchange, RateLimitError
 
@@ -407,3 +410,87 @@ class TestStatusQueries:
     ) -> None:
         await gateway.get_open_orders(VENUE, symbol=SYMBOL)
         assert fake_exchange.open_orders_calls == [SYMBOL]
+
+
+MASTER_KEY = base64.urlsafe_b64encode(b"\x01" * 32).decode()
+
+
+def _keyring() -> KeyRing:
+    ring = KeyRing()
+    ring.add_key(1, MASTER_KEY)
+    return ring
+
+
+class TestCredentialResolution:
+    def test_plaintext_credentials_pass_through(self) -> None:
+        gateway = LiveExecutionGateway(venues=[VENUE])
+        resolved = gateway._resolve_credentials(
+            {"apiKey": "plain-key", "secret": "plain-secret", "enableRateLimit": True}
+        )
+        assert resolved == {
+            "apiKey": "plain-key",
+            "secret": "plain-secret",
+            "enableRateLimit": True,
+        }
+
+    def test_token_without_keyring_raises(self) -> None:
+        gateway = LiveExecutionGateway(venues=[VENUE])
+        with pytest.raises(GatewayExecutionError, match="KeyRing"):
+            gateway._resolve_credentials({"apiKeyToken": "token"})
+
+    def test_tokens_are_decrypted_before_exchange_creation(self) -> None:
+        ring = _keyring()
+        gateway = LiveExecutionGateway(
+            venues=[VENUE],
+            ccxt_config={
+                VENUE: {
+                    "apiKeyToken": ring.encrypt("plain-key"),
+                    "secretToken": ring.encrypt("plain-secret"),
+                }
+            },
+            key_ring=ring,
+        )
+        resolved = gateway._resolve_credentials(gateway._ccxt_config[VENUE])
+        assert resolved == {"apiKey": "plain-key", "secret": "plain-secret"}
+
+    def test_corrupted_token_raises_execution_error(self) -> None:
+        ring = _keyring()
+        token = ring.encrypt("plain-key")
+        corrupted = token[:-1] + ("A" if token[-1] != "A" else "B")
+        gateway = LiveExecutionGateway(venues=[VENUE], key_ring=ring)
+        with pytest.raises(GatewayExecutionError, match="ent"):
+            gateway._resolve_credentials({"apiKeyToken": corrupted})
+
+    def test_create_exchange_receives_resolved_credentials(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        created: dict[str, dict[str, Any]] = {}
+
+        class FakeCCXTExchange:
+            def __init__(self, config: dict[str, Any]) -> None:
+                created["config"] = config
+                self.enableRateLimit = False
+
+        class FakeCCXTModule:
+            exchanges: ClassVar[list[str]] = ["binance"]
+            binance = FakeCCXTExchange
+
+        monkeypatch.setattr(gateway_module, "_get_ccxt", lambda: FakeCCXTModule)
+        ring = _keyring()
+        gateway = LiveExecutionGateway(
+            venues=[VENUE],
+            ccxt_config={
+                VENUE: {
+                    "apiKeyToken": ring.encrypt("enc-key"),
+                    "secretToken": ring.encrypt("enc-secret"),
+                }
+            },
+            key_ring=ring,
+        )
+
+        gateway._create_exchange(VENUE)
+
+        assert created["config"]["apiKey"] == "enc-key"
+        assert created["config"]["secret"] == "enc-secret"
+        assert "apiKeyToken" not in created["config"]
+        assert "secretToken" not in created["config"]

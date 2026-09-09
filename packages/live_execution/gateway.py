@@ -62,6 +62,11 @@ from packages.live_execution.order_state_machine import (
 from packages.live_execution.rate_limiter import RateLimiter
 from packages.live_execution.validator import OrderValidator, ValidationError
 from packages.rollout import CircuitState, KillSwitchState, get_rollout_controller
+from packages.security.hardening.encryption import (
+    DecryptionError,
+    EncryptionUnavailableError,
+    KeyRing,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -211,8 +216,10 @@ class LiveExecutionGateway:
         validator: OrderValidator | None = None,
         rate_limiter: RateLimiter | None = None,
         idempotency_store: IdempotencyStore | None = None,
+        key_ring: KeyRing | None = None,
     ) -> None:
         self._ccxt_config = ccxt_config or {}
+        self._key_ring = key_ring
         self._venues = venues or ["binance"]
         self._validators: dict[str, OrderValidator] = {}
         self._rate_limiter = rate_limiter or RateLimiter()
@@ -718,7 +725,7 @@ class LiveExecutionGateway:
                 f"Available: {list(ccxt_module.exchanges)}"
             )
 
-        config = self._ccxt_config.get(venue, {})
+        config = self._resolve_credentials(self._ccxt_config.get(venue, {}))
         exchange = exchange_class(config)
 
         # Enable rate limiting
@@ -726,6 +733,30 @@ class LiveExecutionGateway:
             exchange.enableRateLimit = True
 
         return exchange
+
+    def _resolve_credentials(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Löst verschlüsselte Venue-Credentials über den KeyRing auf."""
+        resolved = dict(config)
+        api_key_token = resolved.pop("apiKeyToken", "")
+        secret_token = resolved.pop("secretToken", "")
+        if api_key_token:
+            resolved["apiKey"] = self._decrypt_token(api_key_token, "apiKeyToken")
+        if secret_token:
+            resolved["secret"] = self._decrypt_token(secret_token, "secretToken")
+        return resolved
+
+    def _decrypt_token(self, token: str, field: str) -> str:
+        """Entschlüsselt ein KeyRing-Token; Fehler bleiben generisch, ohne Secrets."""
+        if self._key_ring is None:
+            raise GatewayExecutionError(
+                f"{field} ist gesetzt, aber kein KeyRing für die Entschlüsselung verfügbar."
+            )
+        try:
+            return self._key_ring.decrypt(token)
+        except (DecryptionError, EncryptionUnavailableError) as exc:
+            raise GatewayExecutionError(
+                f"{field} konnte nicht entschlüsselt werden."
+            ) from exc
 
     async def _execute_ccxt_order(
         self,
