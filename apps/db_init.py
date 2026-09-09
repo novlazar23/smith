@@ -23,7 +23,7 @@ import packages.persistence.sqlalchemy.models
 from confluent_kafka.admin import AdminClient, NewTopic  # pyright: ignore[reportPrivateImportUsage]
 from packages.persistence.clickhouse.engine import ClickHouseConfig, create_ch_engine
 from packages.persistence.sqlalchemy.engine import DatabaseConfig, SQLAlchemyEngine
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 try:  # noqa: SIM105
     # News-Models landen in einem späteren Task — bis dahin bewusst überspringen.
@@ -62,10 +62,33 @@ def _ch_config() -> ClickHouseConfig:
     )
 
 
+SHADOW_DECISION_COLUMN_MIGRATIONS: tuple[str, ...] = (
+    "ALTER TABLE shadow_decisions ADD COLUMN IF NOT EXISTS probabilities JSON;",
+    "ALTER TABLE shadow_decisions ADD COLUMN IF NOT EXISTS base_close FLOAT;",
+    "ALTER TABLE shadow_decisions ADD COLUMN IF NOT EXISTS brier_score FLOAT;",
+    "ALTER TABLE shadow_decisions ADD COLUMN IF NOT EXISTS actual_direction VARCHAR(16);",
+    "ALTER TABLE shadow_decisions ADD COLUMN IF NOT EXISTS calibration_correct BOOLEAN;",
+    "ALTER TABLE shadow_decisions ADD COLUMN IF NOT EXISTS scored_at TIMESTAMPTZ;",
+)
+
+
+def _migrate_shadow_decisions(engine: SQLAlchemyEngine) -> None:
+    """Fügt die Scoring-Spalten zu bestehenden shadow_decisions-Tabellen hinzu.
+
+    ``create_all`` ergänzt neue Spalten nicht bei bereits existierenden
+    Tabellen; die idempotente ``ADD COLUMN IF NOT EXISTS``-Migration deckt
+    bestehende DBs ab und ist auf neuen DBs ein No-Op.
+    """
+    with engine.engine.begin() as conn:
+        for statement in SHADOW_DECISION_COLUMN_MIGRATIONS:
+            conn.execute(text(statement))
+
+
 def init_postgres() -> None:
     """Erstellt alle SQLAlchemy-Tabellen in PostgreSQL."""
     engine = SQLAlchemyEngine(_pg_config())
     Base.metadata.create_all(engine.engine)
+    _migrate_shadow_decisions(engine)
     tables = inspect(engine.engine).get_table_names()
     logger.info("postgres tables ready", extra={"count": len(tables), "tables": sorted(tables)})
 

@@ -19,16 +19,35 @@ from packages.consensus import ConsensusDecision, ConsensusResult
 from packages.orchestrator.pipeline import OrchestratorPipelineResult
 
 
+class FakeResult:
+    """Duck-typed Ersatz für ein SQLAlchemy-Execute-Ergebnis (``fetchall``)."""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = list(rows)
+
+    def fetchall(self) -> list[dict]:
+        return list(self._rows)
+
+
 class FakeConnection:
-    """Duck-typed Ersatz für eine SQLAlchemy-Connection (rekordiert Aufrufe)."""
+    """Duck-typed Ersatz für eine SQLAlchemy-Connection (rekordiert Aufrufe).
+
+    ``queued_results``: Ergebniszeilen für aufeinanderfolgende ``execute``-Aufrufe
+    (FIFO, als ``FakeResult`` zurückgegeben). Ohne Einträge liefert
+    ``execute`` None — Scoring-Code muss damit robust umgehen.
+    """
 
     def __init__(self) -> None:
         self.executed: list[tuple[object, dict]] = []
         self.commits = 0
         self.fail_commit = False
+        self.queued_results: list[list[dict]] = []
 
-    def execute(self, statement: object, parameters: dict) -> None:
+    def execute(self, statement: object, parameters: dict) -> FakeResult | None:
         self.executed.append((statement, parameters))
+        if self.queued_results:
+            return FakeResult(self.queued_results.pop(0))
+        return None
 
     def commit(self) -> None:
         if self.fail_commit:

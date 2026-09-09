@@ -203,6 +203,24 @@ class TestBackendContact:
         assert len(init_env["create_all_calls"]) == 1
         assert init_env["create_all_calls"][0] is init_env["pg_engines"][0].engine
 
+    def test_shadow_decisions_columns_migrated_idempotently(
+        self, init_env: dict[str, Any]
+    ) -> None:
+        """Bestehende shadow_decisions-Tabellen bekommen die Scoring-Spalten."""
+        assert _run_main() == 0
+        sa_engine = init_env["pg_engines"][0].engine
+        conn = sa_engine.begin.return_value.__enter__.return_value
+        executed = [str(call.args[0]) for call in conn.execute.call_args_list]
+        for statement in (
+            "ALTER TABLE shadow_decisions ADD COLUMN IF NOT EXISTS probabilities JSON;",
+            "ALTER TABLE shadow_decisions ADD COLUMN IF NOT EXISTS base_close FLOAT;",
+            "ALTER TABLE shadow_decisions ADD COLUMN IF NOT EXISTS brier_score FLOAT;",
+            "ALTER TABLE shadow_decisions ADD COLUMN IF NOT EXISTS actual_direction VARCHAR(16);",
+            "ALTER TABLE shadow_decisions ADD COLUMN IF NOT EXISTS calibration_correct BOOLEAN;",
+            "ALTER TABLE shadow_decisions ADD COLUMN IF NOT EXISTS scored_at TIMESTAMPTZ;",
+        ):
+            assert statement in executed
+
     def test_pg_table_count_logged(self, init_env: dict[str, Any], caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.INFO, logger="apps.db_init"):
             assert _run_main() == 0

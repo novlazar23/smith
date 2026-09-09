@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from apps.orchestrator_service.service import (
     DEFAULT_AGENT_STATUS,
+    DEFAULT_SHADOW_RANGE_THRESHOLD,
     OrchestratorServiceConfig,
     config_from_env,
 )
@@ -17,6 +18,7 @@ ORCHESTRATOR_ENV_KEYS = (
     "ORCHESTRATOR_HORIZON",
     "ORCHESTRATOR_AGENT_STATUS",
     "ORCHESTRATOR_HEARTBEAT",
+    "SHADOW_RANGE_THRESHOLD",
 )
 
 
@@ -60,3 +62,29 @@ class TestAgentStatusFromEnv:
         config = OrchestratorServiceConfig()
 
         assert config.agent_status == "ACTIVE"
+
+
+class TestShadowRangeThresholdFromEnv:
+    """config_from_env() liest SHADOW_RANGE_THRESHOLD mit Default 0.001."""
+
+    def test_default_threshold(self) -> None:
+        config = config_from_env()
+
+        assert config.shadow_range_threshold == DEFAULT_SHADOW_RANGE_THRESHOLD
+        assert config.shadow_range_threshold == 0.001
+
+    def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SHADOW_RANGE_THRESHOLD", "0.02")
+
+        config = config_from_env()
+
+        assert config.shadow_range_threshold == pytest.approx(0.02)
+
+    def test_invalid_threshold_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SHADOW_RANGE_THRESHOLD", "bogus")
+
+        config = config_from_env()
+
+        assert config.shadow_range_threshold == DEFAULT_SHADOW_RANGE_THRESHOLD

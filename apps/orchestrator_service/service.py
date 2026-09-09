@@ -12,6 +12,7 @@ Order-Ausführung statt — unabhängig vom Feature-Flag
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import signal
@@ -33,6 +34,11 @@ from packages.agents.volatility_regime_agent import VolatilityRegimeAgent
 from packages.agents.volume_conviction_agent import VolumeConvictionAgent
 from packages.consensus import WeightConfig
 from packages.governance.feature_flags import feature_flags
+from packages.governance.shadow_integration import (
+    average_report_probabilities,
+    horizon_to_seconds,
+    score_due_shadow_decisions,
+)
 from packages.orchestrator.pipeline import OrchestratorPipeline
 from packages.orchestrator.second_round import RoundContext
 from packages.persistence.clickhouse.engine import (
@@ -54,6 +60,7 @@ DEFAULT_MIN_CANDLES = 30
 DEFAULT_HORIZON = "15m"
 DEFAULT_CANDLE_VENUE = "BINANCE_FUTURES"
 DEFAULT_AGENT_STATUS = "ACTIVE"
+DEFAULT_SHADOW_RANGE_THRESHOLD = 0.001
 HEARTBEAT_PATH = Path("/tmp/orchestrator_heartbeat")
 
 # Konsens-Kalibrierung für das 4-Agenten-Ensemble (gleichgewichtet):
@@ -78,10 +85,12 @@ INSERT_SHADOW_DECISION = text(
     """
     INSERT INTO shadow_decisions
         (run_id, instrument, decision, confidence, reason,
-         first_round_count, second_round_count, latency_ms, errors, warnings)
+         first_round_count, second_round_count, latency_ms, errors, warnings,
+         probabilities, base_close)
     VALUES
         (:run_id, :instrument, :decision, :confidence, :reason,
-         :first_round_count, :second_round_count, :latency_ms, :errors, :warnings)
+         :first_round_count, :second_round_count, :latency_ms, :errors, :warnings,
+         :probabilities, :base_close)
     """
 )
 
@@ -96,6 +105,7 @@ class OrchestratorServiceConfig:
     min_candles: int = DEFAULT_MIN_CANDLES
     horizon: str = DEFAULT_HORIZON
     agent_status: str = DEFAULT_AGENT_STATUS
+    shadow_range_threshold: float = DEFAULT_SHADOW_RANGE_THRESHOLD
     heartbeat_path: Path = HEARTBEAT_PATH
     log_level: str = "INFO"
 
@@ -125,6 +135,8 @@ class ShadowDecision:
     latency_ms: float
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    predicted_probabilities: dict[str, float] | None = None
+    base_close: float | None = None
 
 
 class CandleProvider(Protocol):
@@ -321,6 +333,12 @@ def persist_shadow_decision(conn: Connection, decision: ShadowDecision) -> None:
             "latency_ms": decision.latency_ms,
             "errors": "\n".join(decision.errors) if decision.errors else None,
             "warnings": "\n".join(decision.warnings) if decision.warnings else None,
+            "probabilities": (
+                json.dumps(decision.predicted_probabilities)
+                if decision.predicted_probabilities is not None
+                else None
+            ),
+            "base_close": decision.base_close,
         },
     )
     conn.commit()
@@ -373,6 +391,7 @@ class OrchestratorService:
             len(self._config.instruments),
             live_enabled,
         )
+        self._score_due_shadow_decisions()
         persisted = 0
         for instrument in self._config.instruments:
             try:
@@ -385,6 +404,26 @@ class OrchestratorService:
         except OSError as exc:
             logger.warning("Heartbeat-Datei nicht schreibbar: %s", exc)
         return persisted
+
+    def _score_due_shadow_decisions(self) -> None:
+        """Bewertet fällige Shadow-Entscheidungen (Brier/Calibration).
+
+        Läuft vor der Produktion neuer Entscheidungen. Ein Scoring-Fehler
+        killt den Zyklus nicht: Warning-Log, dann weiter mit den Instrumenten.
+        """
+        try:
+            with self._db.engine.connect() as conn:
+                scored = score_due_shadow_decisions(
+                    conn=conn,
+                    provider=self._provider,
+                    horizon_seconds=horizon_to_seconds(self._config.horizon),
+                    range_threshold=self._config.shadow_range_threshold,
+                    now=datetime.now(UTC),
+                )
+            if scored > 0:
+                logger.info("Shadow-Scoring: %d fällige Entscheidungen bewertet", scored)
+        except Exception as exc:
+            logger.warning("Shadow-Scoring fehlgeschlagen (Zyklus fährt fort): %s", exc, exc_info=True)
 
     def _run_instrument(self, instrument: str) -> int:
         """Führt die Pipeline für ein einzelnes Instrument aus.
@@ -404,6 +443,7 @@ class OrchestratorService:
             return 0
 
         market_data = build_market_data(window)
+        base_close = float(window.close[-1]) if window.close.size > 0 else None
         run_id = make_run_id(instrument)
         agents = build_ensemble(
             instrument, self._config.horizon, AgentStatus[self._config.agent_status]
@@ -429,6 +469,8 @@ class OrchestratorService:
             latency_ms=latency_ms,
             errors=list(result.errors),
             warnings=list(result.warnings),
+            predicted_probabilities=average_report_probabilities(result.first_round_reports),
+            base_close=base_close,
         )
         with self._db.engine.connect() as conn:
             persist_shadow_decision(conn, decision)
@@ -482,8 +524,8 @@ def config_from_env() -> OrchestratorServiceConfig:
       ORCHESTRATOR_INTERVAL_SECONDS (900), ORCHESTRATOR_INSTRUMENTS
       (BTC/USDT,ETH/USDT), ORCHESTRATOR_CANDLE_LIMIT (200),
       ORCHESTRATOR_MIN_CANDLES (30), ORCHESTRATOR_HORIZON (15m),
-      ORCHESTRATOR_AGENT_STATUS (ACTIVE), ORCHESTRATOR_HEARTBEAT
-      (/tmp/orchestrator_heartbeat), LOG_LEVEL (INFO).
+      ORCHESTRATOR_AGENT_STATUS (ACTIVE), SHADOW_RANGE_THRESHOLD (0.001),
+      ORCHESTRATOR_HEARTBEAT (/tmp/orchestrator_heartbeat), LOG_LEVEL (INFO).
     """
     raw_instruments = os.environ.get("ORCHESTRATOR_INSTRUMENTS", DEFAULT_INSTRUMENTS)
     try:
@@ -512,6 +554,15 @@ def config_from_env() -> OrchestratorServiceConfig:
             DEFAULT_AGENT_STATUS,
         )
         raw_status = DEFAULT_AGENT_STATUS
+    try:
+        shadow_range_threshold = float(
+            os.environ.get("SHADOW_RANGE_THRESHOLD", str(DEFAULT_SHADOW_RANGE_THRESHOLD))
+        )
+    except ValueError:
+        logger.warning(
+            "Ungültiges SHADOW_RANGE_THRESHOLD → Default %.4f", DEFAULT_SHADOW_RANGE_THRESHOLD
+        )
+        shadow_range_threshold = DEFAULT_SHADOW_RANGE_THRESHOLD
     return OrchestratorServiceConfig(
         interval_seconds=interval,
         instruments=parse_instruments(raw_instruments),
@@ -519,6 +570,7 @@ def config_from_env() -> OrchestratorServiceConfig:
         min_candles=min_candles,
         horizon=os.environ.get("ORCHESTRATOR_HORIZON", DEFAULT_HORIZON),
         agent_status=raw_status,
+        shadow_range_threshold=shadow_range_threshold,
         heartbeat_path=heartbeat,
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
     )

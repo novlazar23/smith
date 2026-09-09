@@ -89,9 +89,12 @@ class TestRunCycle:
         persisted = service.run_cycle()
 
         assert persisted == 2
-        assert len(fake_conn.executed) == 2
+        inserts = [
+            (s, p) for (s, p) in fake_conn.executed if s is service_module.INSERT_SHADOW_DECISION
+        ]
+        assert len(inserts) == 2
         assert fake_conn.commits == 2
-        params = [p for (_, p) in fake_conn.executed]
+        params = [p for (_, p) in inserts]
         assert [p["instrument"] for p in params] == [BTC, ETH]
         for p in params:
             assert p["decision"] == "NO_TRADE"
@@ -99,6 +102,10 @@ class TestRunCycle:
             assert p["second_round_count"] == 3
             assert p["latency_ms"] >= 0.0
             assert p["confidence"] == 0.0
+            # object() -Reports ohne Wahrscheinlichkeiten → NULL; letzter Close
+            # von make_ohlcv(200) = 100 + 200
+            assert p["probabilities"] is None
+            assert p["base_close"] == 300.0
         assert RUN_ID_PATTERN.match(params[0]["run_id"]) is not None
 
     def test_run_id_format(self) -> None:
@@ -218,8 +225,13 @@ class TestSkipOnInsufficientData:
             persisted = service.run_cycle()
 
         assert persisted == 1
-        assert len(fake_conn.executed) == 1
-        assert fake_conn.executed[0][1]["instrument"] == ETH
+        inserts = [
+            p
+            for (s, p) in fake_conn.executed
+            if s is service_module.INSERT_SHADOW_DECISION
+        ]
+        assert len(inserts) == 1
+        assert inserts[0]["instrument"] == ETH
         assert "BTC/USDT" in caplog.text
         assert "übersprungen" in caplog.text
 
@@ -235,7 +247,10 @@ class TestSkipOnInsufficientData:
         service = _service_with(config, stub_provider, FakeDB(fake_conn), stub_pipeline)
 
         assert service.run_cycle() == 0
-        assert fake_conn.executed == []
+        inserts = [
+            s for (s, _) in fake_conn.executed if s is service_module.INSERT_SHADOW_DECISION
+        ]
+        assert inserts == []
 
 
 class TestErrorIsolation:
@@ -257,7 +272,9 @@ class TestErrorIsolation:
         persisted = service.run_cycle()
 
         assert persisted == 2
-        params = [p for (_, p) in fake_conn.executed]
+        params = [
+            p for (s, p) in fake_conn.executed if s is service_module.INSERT_SHADOW_DECISION
+        ]
         assert params[0]["instrument"] == BTC
         assert params[0]["decision"] == "error"
         assert "RuntimeError" in params[0]["reason"]
@@ -282,8 +299,9 @@ class TestErrorIsolation:
         persisted = service.run_cycle()
 
         assert persisted == 0
-        # Pro Instrument wurde eine Fehlerzeile versucht (execute), kein Commit erfolgreich
-        assert len(fake_conn.executed) == 2
+        # Scoring-SELECT + pro Instrument eine Fehlerzeile versucht (execute),
+        # kein Commit erfolgreich
+        assert len(fake_conn.executed) == 3
         assert fake_conn.commits == 0
 
     def test_persist_failure_on_normal_row_persists_error_row(
@@ -301,6 +319,11 @@ class TestErrorIsolation:
         persisted = service.run_cycle()
 
         assert persisted == 1
-        assert len(failing.executed) == 2
-        assert failing.executed[0][1]["decision"] == "NO_TRADE"
-        assert failing.executed[1][1]["decision"] == "error"
+        assert len(failing.executed) == 3
+        inserts = [
+            p
+            for (s, p) in failing.executed
+            if s is service_module.INSERT_SHADOW_DECISION
+        ]
+        assert inserts[0]["decision"] == "NO_TRADE"
+        assert inserts[1]["decision"] == "error"

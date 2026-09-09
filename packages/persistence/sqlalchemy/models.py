@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, DateTime, Float, Integer, String, Text, func
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -153,6 +153,12 @@ class ShadowDecisionModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    probabilities: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
+    base_close: Mapped[float | None] = mapped_column(Float, nullable=True)
+    brier_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    actual_direction: Mapped[str | None] = mapped_column(String, nullable=True)
+    calibration_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class DemoTradeModel(Base):
