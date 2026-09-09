@@ -16,6 +16,8 @@ Public API
 - CircuitState — circuit breaker state ("closed" / "open")
 - KillSwitch — immediate halt mechanism
 - KillSwitchState — kill switch state ("disabled" / "activated")
+- get_rollout_controller — process-wide shared controller accessor
+- reset_rollout_controller — discard the shared controller
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ from .controller import (
     RolloutControllerState,
     RolloutDecision,
     RolloutPhase,
+    get_rollout_controller,
+    reset_rollout_controller,
 )
 from .kill_switch import KillSwitch, KillSwitchState
 from .thresholds import RolloutThresholds
@@ -40,4 +44,6 @@ __all__ = [
     "RolloutDecision",
     "RolloutPhase",
     "RolloutThresholds",
+    "get_rollout_controller",
+    "reset_rollout_controller",
 ]

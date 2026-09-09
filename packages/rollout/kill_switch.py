@@ -47,6 +47,8 @@ class KillSwitch:
     max_drawdown_pct: float = 0.05
     max_spread_anomaly_ratio: float = 2.5
     max_exchange_error_rate: float = 0.10
+    # ponytail: accepted but not enforced yet — gate activate() on this
+    # once callers can distinguish manual from automatic activation.
     manual_enabled: bool = True
 
     _state: str = field(default=KillSwitchState.DISABLED, init=False)
@@ -114,6 +116,11 @@ class KillSwitch:
         Returns *True* if the kill switch was (or already was) activated
         as a result of this check.
         """
+        # Already activated: kill switch has priority over any further
+        # promotion/demotion decision until explicitly deactivated.
+        if self._state == KillSwitchState.ACTIVATED:
+            return True
+
         # ── Drawdown gate ──
         if current_drawdown_pct >= self.max_drawdown_pct:
             self.activate(

@@ -50,6 +50,22 @@ class RolloutPhase(StrEnum):
             RolloutPhase.LIVE_FULL,
         )
 
+    @property
+    def next_phase(self) -> RolloutPhase | None:
+        """Next phase in the progression, or ``None`` at the final phase."""
+        phases = list(RolloutPhase)
+        if self.level + 1 >= len(phases):
+            return None
+        return phases[self.level + 1]
+
+    @property
+    def prev_phase(self) -> RolloutPhase | None:
+        """Previous phase in the progression, or ``None`` at the first phase."""
+        phases = list(RolloutPhase)
+        if self.level - 1 < 0:
+            return None
+        return phases[self.level - 1]
+
 
 # ──────────────────────────────────────────────────────────────
 # Promotion / demotion decision
@@ -149,16 +165,14 @@ class PhasedRolloutController:
             window_seconds=self._thresholds.exchange_error_window_seconds,
         )
 
-        self._started_at: float = 0.0
-        self._phase_started_at: float = 0.0
-
     # ── Lifecycle ──
 
     def start(self) -> None:
         """Start the controller at the initial phase (SHADOW)."""
+        now = _now()
         self._state.current_phase = RolloutPhase.SHADOW.value
-        self._started_at = _now()
-        self._phase_started_at = self._started_at
+        self._state.started_at = now
+        self._state.phase_started_at = now
         logger.info("rollout: controller started at phase=%s", RolloutPhase.SHADOW.value)
 
     def stop(self) -> None:
@@ -240,36 +254,28 @@ class PhasedRolloutController:
 
         current_phase = RolloutPhase(self._state.current_phase)
 
-        # ── 3. Promotion check (only if not already at LIVE_FULL) ──
-        if current_phase != RolloutPhase.LIVE_FULL:
-            if self._meets_promotion_criteria(
-                brier_score=brier_score,
-                drawdown_pct=drawdown_pct,
-                spread_ratio=spread_ratio,
-                exchange_error_rate=exchange_error_rate,
-                positive_trend=positive_trend,
-                current_phase=current_phase,
-            ):
-                new_phase = RolloutPhase(current_phase._value2member_map_[
-                    list(RolloutPhase)[current_phase.level + 1]
-                ])
-                return self._do_promotion(new_phase)
-
-        # ── 4. Demotion check ──
-        if (
-            current_phase.level > 0
-            and self._needs_demotion(
-                brier_score=brier_score,
-                drawdown_pct=drawdown_pct,
-                spread_ratio=spread_ratio,
-                exchange_error_rate=exchange_error_rate,
-                current_phase=current_phase,
-            )
+        # ── 3. Promotion check (next phase; None at LIVE_FULL) ──
+        next_phase = current_phase.next_phase
+        if next_phase is not None and self._meets_promotion_criteria(
+            brier_score=brier_score,
+            drawdown_pct=drawdown_pct,
+            spread_ratio=spread_ratio,
+            exchange_error_rate=exchange_error_rate,
+            positive_trend=positive_trend,
+            current_phase=current_phase,
         ):
-            new_phase = RolloutPhase(current_phase._value2member_map_[
-                list(RolloutPhase)[current_phase.level - 1]
-            ])
-            return self._do_demotion(new_phase)
+            return self._do_promotion(next_phase)
+
+        # ── 4. Demotion check (previous phase; None at SHADOW) ──
+        prev_phase = current_phase.prev_phase
+        if prev_phase is not None and self._needs_demotion(
+            brier_score=brier_score,
+            drawdown_pct=drawdown_pct,
+            spread_ratio=spread_ratio,
+            exchange_error_rate=exchange_error_rate,
+            current_phase=current_phase,
+        ):
+            return self._do_demotion(prev_phase)
 
         # ── 5. Hold ──
         self._state.last_decision = "hold"
@@ -366,7 +372,7 @@ class PhasedRolloutController:
     ) -> bool:
         """Return True if all promotion criteria are satisfied."""
         # Duration gate
-        elapsed = _now() - self._phase_started_at
+        elapsed = _now() - self._state.phase_started_at
         min_duration = self._min_duration(current_phase)
         if elapsed < min_duration:
             return False
@@ -406,8 +412,8 @@ class PhasedRolloutController:
             return True
         if exchange_error_rate >= self._thresholds.max_exchange_error_rate:
             return True
-        # Brier score regression
-        return brier_score <= self._thresholds.min_brier_score * 1.5
+        # Brier regression: lower is better, demote when clearly above the bar
+        return brier_score > self._thresholds.min_brier_score * 1.5
 
     def _min_duration(self, phase: RolloutPhase) -> float:
         """Return the minimum time (in seconds) to spend in a phase.
@@ -426,20 +432,21 @@ class PhasedRolloutController:
         target: RolloutPhase,
         manual: bool = False,
     ) -> RolloutDecision:
+        from_phase = self._state.current_phase
         self._state.promotions += 1
         self._state.current_phase = target.value
-        self._phase_started_at = _now()
+        self._state.phase_started_at = _now()
         reason = "manual promotion" if manual else "all thresholds met, positive trend"
         self._record_decision("promote", reason)
         logger.info(
             "rollout: PROMOTE %s → %s  reason=%s",
-            target,
-            target,
+            from_phase,
+            target.value,
             reason,
         )
         return RolloutDecision(
             action="promote",
-            from_phase=target.value,
+            from_phase=from_phase,
             to_phase=target.value,
             reason=reason,
         )
@@ -449,20 +456,21 @@ class PhasedRolloutController:
         target: RolloutPhase,
         manual: bool = False,
     ) -> RolloutDecision:
+        from_phase = self._state.current_phase
         self._state.demotions += 1
         self._state.current_phase = target.value
-        self._phase_started_at = _now()
+        self._state.phase_started_at = _now()
         reason = "manual demotion" if manual else "threshold breach detected"
         self._record_decision("demote", reason)
         logger.warning(
             "rollout: DEMOTE %s → %s  reason=%s",
-            target,
-            target,
+            from_phase,
+            target.value,
             reason,
         )
         return RolloutDecision(
             action="demote",
-            from_phase=target.value,
+            from_phase=from_phase,
             to_phase=target.value,
             reason=reason,
         )
@@ -474,8 +482,8 @@ class PhasedRolloutController:
     def _state_status(self) -> dict:
         return {
             "current_phase": self._state.current_phase,
-            "started_at": self._started_at,
-            "phase_started_at": self._phase_started_at,
+            "started_at": self._state.started_at,
+            "phase_started_at": self._state.phase_started_at,
             "total_evaluation_cycles": self._state.total_evaluation_cycles,
             "promotions": self._state.promotions,
             "demotions": self._state.demotions,
@@ -499,3 +507,30 @@ def _now() -> float:
     """Return current monotonic time in seconds."""
     import time
     return time.monotonic()
+
+
+# ──────────────────────────────────────────────────────────────
+# Shared controller (process-wide singleton for API integration)
+# ──────────────────────────────────────────────────────────────
+
+_shared_controller: PhasedRolloutController | None = None
+
+
+def get_rollout_controller() -> PhasedRolloutController:
+    """Return the process-wide shared rollout controller (created lazily).
+
+    API routers and services must use this accessor instead of
+    constructing their own :class:`PhasedRolloutController`, so that
+    phase, kill-switch, and circuit-breaker state persists across
+    requests.
+    """
+    global _shared_controller
+    if _shared_controller is None:
+        _shared_controller = PhasedRolloutController()
+    return _shared_controller
+
+
+def reset_rollout_controller() -> None:
+    """Discard the shared controller (test seam / lifecycle restart)."""
+    global _shared_controller
+    _shared_controller = None

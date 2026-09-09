@@ -34,6 +34,7 @@ from packages.live_execution import (
     OrderState,
     OrderValidator,
 )
+from packages.rollout import get_rollout_controller
 from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
@@ -838,10 +839,8 @@ async def kill_switch(request: KillSwitchRequest) -> KillSwitchResponse:
     """
     _require_live_trading()
 
-    from packages.rollout import PhasedRolloutController
-
-    # Look up or create the rollout controller
-    rollout = PhasedRolloutController()
+    # Shared rollout controller — state persists across requests
+    rollout = get_rollout_controller()
 
     if request.action == "activate":
         # Activate the kill switch

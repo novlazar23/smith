@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter
 from packages.governance.feature_flags import feature_flags
-from packages.rollout import PhasedRolloutController
+from packages.rollout import get_rollout_controller
 from pydantic import BaseModel, ConfigDict
 
 logger = logging.getLogger(__name__)
@@ -105,8 +105,8 @@ async def live_health_check() -> LiveHealthResponse:
         all_pass = False
         readiness_checks.append("feature_flag_disabled")
 
-    # 2. Rollout phase check
-    rollout = PhasedRolloutController()
+    # 2. Rollout phase check (shared controller — state persists across requests)
+    rollout = get_rollout_controller()
     current_phase = rollout.current_phase
     details["rollout_phase"] = current_phase
 
