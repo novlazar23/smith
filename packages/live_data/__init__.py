@@ -16,6 +16,7 @@ Public API
 - HealthMonitor — per-venue health checks (``health_monitor``)
 - AutoReconnector — reconnect with exponential backoff + jitter (``reconnect``)
 - QualityGateEvaluator — data quality gates (``quality_gate``)
+- LiveIngestionGuard — producer-side wiring for the live tick (``ingestion_guard``)
 - FailoverManager — primary/backup failover (``failover``)
 - GapRecoveryEngine — gap detection and recovery (``gap_recovery``)
 """
@@ -41,6 +42,7 @@ from packages.live_data.health_monitor import (
     HealthMonitor,
     VenueHealthState,
 )
+from packages.live_data.ingestion_guard import LiveIngestionGuard
 from packages.live_data.quality_gate import (
     FreshnessGate,
     GapDetectionGate,
@@ -72,6 +74,7 @@ __all__ = [
     "GapType",
     "GateViolation",
     "HealthMonitor",
+    "LiveIngestionGuard",
     "PriceSanityGate",
     "QualityGateEvaluator",
     "QualityGateResult",
