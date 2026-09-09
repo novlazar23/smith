@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from packages.governance.feature_flags import feature_flags
 from packages.rollout import get_rollout_controller, reset_rollout_controller
+from packages.security import Role
 
 
 @pytest.fixture(autouse=True)
@@ -16,7 +16,10 @@ def clean_shared_controller() -> None:
 
 @pytest.fixture
 def live_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(feature_flags, "is_enabled", lambda flag, environment=None: True)
+    monkeypatch.setattr(
+        "packages.governance.feature_flags.FeatureFlags.is_enabled",
+        lambda self, flag, environment=None: True,
+    )
 
 
 class TestSharedControllerAccessor:
@@ -85,7 +88,8 @@ class TestKillSwitchEndpoint:
 
         shared = get_rollout_controller()
         resp = await live_orders.kill_switch(
-            live_orders.KillSwitchRequest(action="activate", reason="test stop")
+            live_orders.KillSwitchRequest(action="activate", reason="test stop"),
+            Role.RISK_MANAGER,
         )
         assert resp.state == "activated"
         assert resp.confirmed is True
@@ -97,7 +101,8 @@ class TestKillSwitchEndpoint:
 
         get_rollout_controller().force_kill("earlier")
         resp = await live_orders.kill_switch(
-            live_orders.KillSwitchRequest(action="deactivate", reason="all clear")
+            live_orders.KillSwitchRequest(action="deactivate", reason="all clear"),
+            Role.RISK_MANAGER,
         )
         assert resp.state == "disabled"
         assert get_rollout_controller().kill_switch.state == "disabled"

@@ -154,11 +154,27 @@ def _reset_live_state() -> Generator[None, None, None]:
     reset_rollout_controller()
 
 
+class LiveTestClient(TestClient):
+    """TestClient that injects an ``X-Security-Role`` header by default."""
+
+    def __init__(self, app: FastAPI, role: str = "") -> None:
+        super().__init__(app)
+        self.role = role
+
+    def request(self, method: str, url: str, **kwargs: object):
+        if self.role:
+            headers = dict(kwargs.get("headers") or {})
+            headers.setdefault("X-Security-Role", self.role)
+            kwargs["headers"] = headers
+        return super().request(method, url, **kwargs)
+
+
 @pytest.fixture
-def client() -> TestClient:
+def client(request: pytest.Request) -> LiveTestClient:
     app = FastAPI()
     app.include_router(live_orders.router)
-    return TestClient(app)
+    role = getattr(request.cls, "ROLE", "live_operator")
+    return LiveTestClient(app, role=role)
 
 
 @pytest.fixture
@@ -177,6 +193,9 @@ def live_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestFeatureFlagGate:
+    # Valid role — the 403 below comes from the feature flag, not the role.
+    ROLE = "live_operator"
+
     def test_submit_blocked_when_flag_disabled(self, client: TestClient) -> None:
         assert client.post("/v1/live/orders", json=_submit_payload()).status_code == 403
 
@@ -201,6 +220,8 @@ class TestFeatureFlagGate:
 
 
 class TestSubmit:
+    ROLE = "live_operator"  # EXECUTE_LIVE
+
     def test_submit_success_returns_201_and_stores_order(
         self, client: TestClient, live_enabled: None, fake_gateway: FakeGateway
     ) -> None:
@@ -265,6 +286,8 @@ class TestSubmit:
 
 
 class TestListOrders:
+    ROLE = "live_operator"  # READ_METRICS
+
     def test_list_exact_order_id_filter(
         self, client: TestClient, live_enabled: None, fake_gateway: FakeGateway
     ) -> None:
@@ -303,6 +326,8 @@ class TestListOrders:
 
 
 class TestCancel:
+    ROLE = "live_operator"  # CANCEL_ORDERS
+
     def test_cancel_unknown_order_returns_404(
         self, client: TestClient, live_enabled: None, fake_gateway: FakeGateway
     ) -> None:
@@ -361,6 +386,8 @@ class TestCancel:
 
 
 class TestKillSwitch:
+    ROLE = "risk_manager"  # MANAGE_KILL_SWITCH
+
     def test_activate_blocks_new_submits_via_rollout_state(
         self, client: TestClient, live_enabled: None, fake_gateway: FakeGateway
     ) -> None:
@@ -373,8 +400,12 @@ class TestKillSwitch:
         assert body["confirmed"] is True
         assert body["affected_orders"] == []
 
+        # Submit as live_operator (has EXECUTE_LIVE); blocked by the
+        # activated kill switch in the rollout controller, not by RBAC.
         response = client.post(
-            "/v1/live/orders", json=_submit_payload(idempotency_key="k2")
+            "/v1/live/orders",
+            json=_submit_payload(idempotency_key="k2"),
+            headers={"X-Security-Role": "live_operator"},
         )
         assert response.status_code == 500
         assert fake_gateway.submit_calls == []
@@ -394,7 +425,10 @@ class TestKillSwitch:
     def test_activate_auto_cancel_uses_cancel_result(
         self, client: TestClient, live_enabled: None, fake_gateway: FakeGateway
     ) -> None:
-        submitted = client.post("/v1/live/orders", json=_submit_payload())
+        submitted = client.post(
+            "/v1/live/orders", json=_submit_payload(),
+            headers={"X-Security-Role": "live_operator"},
+        )
         order_id = submitted.json()["order_id"]
         response = client.post(
             "/v1/live/kill-switch", json={"action": "activate", "reason": "halt"}
@@ -409,7 +443,10 @@ class TestKillSwitch:
     def test_activate_cancel_failure_leaves_state_unchanged(
         self, client: TestClient, live_enabled: None, fake_gateway: FakeGateway
     ) -> None:
-        submitted = client.post("/v1/live/orders", json=_submit_payload())
+        submitted = client.post(
+            "/v1/live/orders", json=_submit_payload(),
+            headers={"X-Security-Role": "live_operator"},
+        )
         order_id = submitted.json()["order_id"]
         fake_gateway.cancel_result = _cancel_result(
             order_id, state=OrderState.ERROR, status="cancel_error", error="timeout"
@@ -425,6 +462,8 @@ class TestKillSwitch:
 
 
 class TestPnlEndpoints:
+    ROLE = "live_operator"  # VIEW_LIVE_PNL
+
     def test_pnl_uses_tracker_without_fake_estimate(
         self, client: TestClient, live_enabled: None
     ) -> None:
@@ -473,3 +512,86 @@ class TestPnlEndpoints:
         response = client.get("/v1/live/pnl")
         assert response.status_code == 200
         assert response.json()["unrealized"] == pytest.approx(200.0)
+
+
+class TestRBAC:
+    """RBAC fail-closed behaviour when the feature flag is enabled."""
+
+    ROLE = ""  # no default role; each test sets it explicitly via headers
+
+    def _role_headers(self, role: str) -> dict:
+        return {} if not role else {"X-Security-Role": role}
+
+    def test_orders_requires_execute_live(
+        self, client: TestClient, live_enabled: None, fake_gateway: FakeGateway
+    ) -> None:
+        # No role -> 403
+        assert (
+            client.post("/v1/live/orders", json=_submit_payload()).status_code == 403
+        )
+        # viewer lacks EXECUTE_LIVE -> 403
+        r = client.post(
+            "/v1/live/orders", json=_submit_payload(),
+            headers={"X-Security-Role": "viewer"},
+        )
+        assert r.status_code == 403
+        # live_operator has EXECUTE_LIVE -> 201
+        r = client.post(
+            "/v1/live/orders", json=_submit_payload(idempotency_key="k-ro"),
+            headers={"X-Security-Role": "live_operator"},
+        )
+        assert r.status_code == 201
+
+    def test_cancel_requires_cancel_orders(
+        self, client: TestClient, live_enabled: None, fake_gateway: FakeGateway
+    ) -> None:
+        # live_operator holds CANCEL_ORDERS -> allowed
+        assert (
+            client.post(
+                "/v1/live/cancel",
+                json={"order_id": "live_000000000001"},
+                headers={"X-Security-Role": "live_operator"},
+            ).status_code
+            in (404, 409, 500, 200)  # not 403: RBAC passed
+        )
+        # viewer lacks CANCEL_ORDERS -> 403
+        r = client.post(
+            "/v1/live/cancel",
+            json={"order_id": "live_000000000001"},
+            headers={"X-Security-Role": "viewer"},
+        )
+        assert r.status_code == 403
+
+    def test_kill_switch_requires_manage_kill_switch(
+        self, client: TestClient, live_enabled: None, fake_gateway: FakeGateway
+    ) -> None:
+        # live_operator lacks MANAGE_KILL_SWITCH -> 403
+        r = client.post(
+            "/v1/live/kill-switch",
+            json={"action": "activate", "reason": "x"},
+            headers={"X-Security-Role": "live_operator"},
+        )
+        assert r.status_code == 403
+        # risk_manager has it -> 200
+        r = client.post(
+            "/v1/live/kill-switch",
+            json={"action": "activate", "reason": "x"},
+            headers={"X-Security-Role": "risk_manager"},
+        )
+        assert r.status_code == 200
+
+    def test_pnl_requires_view_live_pnl(
+        self, client: TestClient, live_enabled: None, fake_gateway: FakeGateway
+    ) -> None:
+        # viewer lacks VIEW_LIVE_PNL -> 403
+        r = client.get("/v1/live/pnl", headers={"X-Security-Role": "viewer"})
+        assert r.status_code == 403
+        # live_operator has it -> 200
+        r = client.get("/v1/live/pnl", headers={"X-Security-Role": "live_operator"})
+        assert r.status_code == 200
+
+    def test_unknown_role_rejected(
+        self, client: TestClient, live_enabled: None, fake_gateway: FakeGateway
+    ) -> None:
+        r = client.get("/v1/live/pnl", headers={"X-Security-Role": "wizard"})
+        assert r.status_code == 403

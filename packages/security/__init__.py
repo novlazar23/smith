@@ -98,6 +98,7 @@ class Role(StrEnum):
     VIEWER = "viewer"
     RESEARCHER = "researcher"
     OPERATOR = "operator"
+    LIVE_OPERATOR = "live_operator"
     RISK_MANAGER = "risk_manager"
     ADMINISTRATOR = "administrator"
     AUDITOR = "auditor"
@@ -113,6 +114,9 @@ class Permission(StrEnum):
     PROMOTE_AGENT = "promote_agent"
     QUARANTINE_AGENT = "quarantine_agent"
     EXECUTE_LIVE = "execute_live"
+    CANCEL_ORDERS = "cancel_orders"
+    MANAGE_KILL_SWITCH = "manage_kill_switch"
+    VIEW_LIVE_PNL = "view_live_pnl"
     MANAGE_USERS = "manage_users"
     AUDIT_LOGS = "audit_logs"
     MANAGE_SECRETS = "manage_secrets"
@@ -135,12 +139,25 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.ANALYZE,
         Permission.CONFIGURE_AGENTS,
     },
+    # Live-Execution ist bewusst getrennt vom General-OPERATOR:
+    # Nur LIVE_OPERATOR darf echte Orders senden.
+    Role.LIVE_OPERATOR: {
+        Permission.READ_STATUS,
+        Permission.READ_METRICS,
+        Permission.EXECUTE_LIVE,
+        Permission.CANCEL_ORDERS,
+        Permission.VIEW_LIVE_PNL,
+    },
     Role.RISK_MANAGER: {
         Permission.READ_STATUS,
         Permission.READ_METRICS,
         Permission.ANALYZE,
         Permission.QUARANTINE_AGENT,
+        Permission.VIEW_LIVE_PNL,
+        Permission.MANAGE_KILL_SWITCH,
     },
+    # ADMINISTRATOR erhält bewusst KEINE EXECUTE_LIVE (Least Privilege):
+    # Systemverwaltung ≠ Live-Order-Ausführung.
     Role.ADMINISTRATOR: {
         Permission.READ_STATUS,
         Permission.READ_METRICS,
@@ -150,6 +167,9 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.QUARANTINE_AGENT,
         Permission.MANAGE_USERS,
         Permission.MANAGE_SECRETS,
+        Permission.CANCEL_ORDERS,
+        Permission.MANAGE_KILL_SWITCH,
+        Permission.VIEW_LIVE_PNL,
     },
     Role.AUDITOR: {
         Permission.READ_STATUS,
@@ -179,6 +199,7 @@ LIVE_EXECUTION_BLOCKED = True
 VIEWER = Role.VIEWER
 RESEARCHER = Role.RESEARCHER
 OPERATOR = Role.OPERATOR
+LIVE_OPERATOR = Role.LIVE_OPERATOR
 RISK_MANAGER = Role.RISK_MANAGER
 ADMINISTRATOR = Role.ADMINISTRATOR
 AUDITOR = Role.AUDITOR

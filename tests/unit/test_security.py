@@ -25,6 +25,7 @@ class TestRoles:
         assert Role.VIEWER == "viewer"
         assert Role.RESEARCHER == "researcher"
         assert Role.OPERATOR == "operator"
+        assert Role.LIVE_OPERATOR == "live_operator"
         assert Role.RISK_MANAGER == "risk_manager"
         assert Role.ADMINISTRATOR == "administrator"
         assert Role.AUDITOR == "auditor"
@@ -39,6 +40,9 @@ class TestPermissions:
         assert Permission.PROMOTE_AGENT == "promote_agent"
         assert Permission.QUARANTINE_AGENT == "quarantine_agent"
         assert Permission.EXECUTE_LIVE == "execute_live"
+        assert Permission.CANCEL_ORDERS == "cancel_orders"
+        assert Permission.MANAGE_KILL_SWITCH == "manage_kill_switch"
+        assert Permission.VIEW_LIVE_PNL == "view_live_pnl"
         assert Permission.MANAGE_USERS == "manage_users"
         assert Permission.AUDIT_LOGS == "audit_logs"
         assert Permission.MANAGE_SECRETS == "manage_secrets"
@@ -64,15 +68,43 @@ class TestRolePermissions:
         assert not ctx.has_permission(Permission.EXECUTE_LIVE)
         assert not ctx.has_permission(Permission.MANAGE_USERS)
 
+    def test_live_operator_permissions(self) -> None:
+        ctx = SecurityContext(role=Role.LIVE_OPERATOR, user_id="lo1")
+        assert ctx.has_permission(Permission.EXECUTE_LIVE)
+        assert ctx.has_permission(Permission.CANCEL_ORDERS)
+        assert ctx.has_permission(Permission.VIEW_LIVE_PNL)
+        assert ctx.has_permission(Permission.READ_STATUS)
+        assert ctx.has_permission(Permission.READ_METRICS)
+        # Not a general admin — cannot manage the kill switch or users.
+        assert not ctx.has_permission(Permission.MANAGE_KILL_SWITCH)
+        assert not ctx.has_permission(Permission.MANAGE_USERS)
+        assert not ctx.has_permission(Permission.ANALYZE)
+
     def test_risk_manager_quarantine(self) -> None:
         ctx = SecurityContext(role=Role.RISK_MANAGER, user_id="rm1")
         assert ctx.has_permission(Permission.QUARANTINE_AGENT)
         assert not ctx.has_permission(Permission.PROMOTE_AGENT)
 
+    def test_risk_manager_live_permissions(self) -> None:
+        ctx = SecurityContext(role=Role.RISK_MANAGER, user_id="rm2")
+        assert ctx.has_permission(Permission.MANAGE_KILL_SWITCH)
+        assert ctx.has_permission(Permission.VIEW_LIVE_PNL)
+        # Risk manager does not execute live orders.
+        assert not ctx.has_permission(Permission.EXECUTE_LIVE)
+
     def test_administrator_full_access_except_live(self) -> None:
         ctx = SecurityContext(role=Role.ADMINISTRATOR, user_id="admin1")
         assert ctx.has_permission(Permission.MANAGE_USERS)
         assert ctx.has_permission(Permission.MANAGE_SECRETS)
+        assert not ctx.has_permission(Permission.EXECUTE_LIVE)
+
+    def test_administrator_live_permissions(self) -> None:
+        ctx = SecurityContext(role=Role.ADMINISTRATOR, user_id="admin2")
+        assert ctx.has_permission(Permission.MANAGE_KILL_SWITCH)
+        assert ctx.has_permission(Permission.VIEW_LIVE_PNL)
+        assert ctx.has_permission(Permission.CANCEL_ORDERS)
+        # Administrator is deliberately not allowed to execute live orders
+        # (least privilege) — that is the whole point of LIVE_OPERATOR.
         assert not ctx.has_permission(Permission.EXECUTE_LIVE)
 
     def test_auditor_audit_logs(self) -> None:

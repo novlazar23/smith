@@ -42,6 +42,12 @@ from apps.api.middleware import (
     create_auth_middleware,
     create_rate_limit_middleware,
 )
+from packages.security.hardening.api_rate_limiter import (
+    create_live_rate_limit_middleware,
+)
+from packages.security.hardening.ip_whitelist import (
+    create_live_ip_middleware,
+)
 
 # Live-Router — optional, behind feature flag
 try:
@@ -166,6 +172,11 @@ def create_app() -> FastAPI:  # type: ignore[return-value, valid-type]
     auth_middleware = create_auth_middleware()
     if auth_middleware is not None:
         app.middleware("http")(auth_middleware)
+
+    # Live Security: IP whitelist + per-IP rate limit for live endpoints.
+    # Order (outer → inner): metrics → live_ip → live_rate → auth → rate.
+    app.middleware("http")(create_live_ip_middleware())
+    app.middleware("http")(create_live_rate_limit_middleware())
 
     # Prometheus-Metrics — als letzte (äußere) Schicht, damit auch
     # abgewiesene Anfragen (401/429) gezählt werden

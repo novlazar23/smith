@@ -23,7 +23,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from packages.governance.audit import AuditTrail
 from packages.governance.feature_flags import feature_flags
 from packages.live_execution import (
@@ -36,6 +36,9 @@ from packages.live_execution import (
     OrderState,
 )
 from packages.rollout import get_rollout_controller
+from packages.security import Permission, Role
+from packages.security.hardening.audit_live import get_live_audit
+from packages.security.hardening.rbac_live import require_live_permission
 from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
@@ -433,7 +436,10 @@ def _build_order_record(result: OrderResult) -> OrderRecord:
 
 
 @router.post("/orders", response_model=SubmitOrderResponse, status_code=201)
-async def submit_live_order(request: SubmitOrderRequest) -> SubmitOrderResponse:
+async def submit_live_order(
+    request: SubmitOrderRequest,
+    _role: Role = Depends(require_live_permission(Permission.EXECUTE_LIVE)),  # noqa: B008
+) -> SubmitOrderResponse:
     """Submit a live order with full validation and audit trail.
 
     The endpoint checks the ``live_trading_enabled`` feature flag, checks
@@ -464,6 +470,7 @@ async def submit_live_order(request: SubmitOrderRequest) -> SubmitOrderResponse:
     }
     """
     _require_live_trading()
+    trail = get_live_audit()
 
     # --- Idempotency check ---
     existing = _find_by_idempotency(request.idempotency_key)
@@ -473,6 +480,17 @@ async def submit_live_order(request: SubmitOrderRequest) -> SubmitOrderResponse:
             instrument=request.instrument,
             idempotency_key=request.idempotency_key,
             existing_order_id=existing.order_id,
+        )
+        trail.record_order_submit(
+            actor=_role.value,
+            order_id=existing.order_id,
+            instrument=existing.symbol or "",
+            venue=existing.venue,
+            direction=existing.side or "",
+            quantity=existing.quantity,
+            status="idempotent",
+            order_type=existing.order_type,
+            idempotency_key=request.idempotency_key,
         )
         logger.info(
             "Idempotent order submit — returning cached order %s (audit: %s)",
@@ -510,6 +528,17 @@ async def submit_live_order(request: SubmitOrderRequest) -> SubmitOrderResponse:
             error=str(exc),
             idempotency_key=request.idempotency_key,
         )
+        trail.record_order_submit(
+            actor=_role.value,
+            order_id="",
+            instrument=request.instrument,
+            venue=request.venue,
+            direction=direction,
+            quantity=request.quantity,
+            status="rejected",
+            order_type=order_type,
+            idempotency_key=request.idempotency_key,
+        )
         logger.warning(
             "Gateway validation error for %s (audit: %s): %s",
             request.instrument, audit_id, exc,
@@ -519,6 +548,17 @@ async def submit_live_order(request: SubmitOrderRequest) -> SubmitOrderResponse:
             detail=f"Gateway validation failed: {exc}",
         ) from exc
     except GatewayIdempotencyError as exc:
+        trail.record_order_submit(
+            actor=_role.value,
+            order_id="",
+            instrument=request.instrument,
+            venue=request.venue,
+            direction=direction,
+            quantity=request.quantity,
+            status="duplicate",
+            order_type=order_type,
+            idempotency_key=request.idempotency_key,
+        )
         raise HTTPException(
             status_code=409,
             detail=f"Duplicate order detected: {exc}",
@@ -528,6 +568,17 @@ async def submit_live_order(request: SubmitOrderRequest) -> SubmitOrderResponse:
             "order_submit_execution_error",
             instrument=request.instrument,
             error=str(exc),
+            idempotency_key=request.idempotency_key,
+        )
+        trail.record_order_submit(
+            actor=_role.value,
+            order_id="",
+            instrument=request.instrument,
+            venue=request.venue,
+            direction=direction,
+            quantity=request.quantity,
+            status="error",
+            order_type=order_type,
             idempotency_key=request.idempotency_key,
         )
         logger.error(
@@ -554,6 +605,24 @@ async def submit_live_order(request: SubmitOrderRequest) -> SubmitOrderResponse:
         state=result.state.name,
         idempotency_key=request.idempotency_key,
     )
+    trail.record_order_submit(
+        actor=_role.value,
+        order_id=result.order_id,
+        instrument=request.instrument,
+        venue=request.venue,
+        direction=direction,
+        quantity=request.quantity,
+        status="submitted",
+        order_type=order_type,
+        idempotency_key=request.idempotency_key,
+    )
+    if result.state == OrderState.FILLED:
+        trail.record_order_fill(
+            actor=_role.value,
+            order_id=result.order_id,
+            filled_quantity=result.filled_quantity,
+            price=result.price,
+        )
     logger.info(
         "Order submitted successfully: %s state=%s (audit: %s)",
         result.order_id, result.state.name, audit_id,
@@ -579,6 +648,7 @@ async def list_orders(
     venue: str | None = Query(default=None, description="Filter by venue"),
     from_dt: datetime | None = Query(default=None, alias="from", description="Start datetime (inclusive)"),  # noqa: B008
     to_dt: datetime | None = Query(default=None, alias="to", description="End datetime (inclusive)"),  # noqa: B008
+    _role: Role = Depends(require_live_permission(Permission.READ_METRICS)),  # noqa: B008
 ) -> list[OrderRecord]:
     """Return order history with optional filters.
 
@@ -658,7 +728,10 @@ async def list_orders(
 
 
 @router.post("/cancel", response_model=CancelOrderResponse, status_code=200)
-async def cancel_live_order(request: CancelOrderRequest) -> CancelOrderResponse:
+async def cancel_live_order(
+    request: CancelOrderRequest,
+    _role: Role = Depends(require_live_permission(Permission.CANCEL_ORDERS)),  # noqa: B008
+) -> CancelOrderResponse:
     """Cancel a live order.
 
     Looks up the order in the registry, runs the gateway's cancel logic,
@@ -680,6 +753,7 @@ async def cancel_live_order(request: CancelOrderRequest) -> CancelOrderResponse:
     }
     """
     _require_live_trading()
+    trail = get_live_audit()
 
     # Find order in registry
     order = _order_registry.get(request.order_id)
@@ -710,6 +784,13 @@ async def cancel_live_order(request: CancelOrderRequest) -> CancelOrderResponse:
             reason=request.reason,
             error=str(exc),
         )
+        trail.record_order_cancel(
+            actor=_role.value,
+            order_id=request.order_id,
+            status="failed",
+            reason=request.reason,
+            error=str(exc),
+        )
         logger.error("Cancel order failed: %s (audit: %s)", exc, audit_id)
         raise HTTPException(
             status_code=500,
@@ -722,6 +803,13 @@ async def cancel_live_order(request: CancelOrderRequest) -> CancelOrderResponse:
         audit_id = _audit_event(
             "cancel_order_failed",
             order_id=request.order_id,
+            reason=request.reason,
+            error=cancel_result.error or cancel_result.status,
+        )
+        trail.record_order_cancel(
+            actor=_role.value,
+            order_id=request.order_id,
+            status="failed",
             reason=request.reason,
             error=cancel_result.error or cancel_result.status,
         )
@@ -747,6 +835,12 @@ async def cancel_live_order(request: CancelOrderRequest) -> CancelOrderResponse:
         reason=request.reason,
         new_state=cancel_result.state.name,
     )
+    trail.record_order_cancel(
+        actor=_role.value,
+        order_id=request.order_id,
+        status="cancelled",
+        reason=request.reason,
+    )
     logger.info(
         "Order %s cancelled (state=%s, reason=%s, audit: %s)",
         request.order_id, cancel_result.state.name, request.reason, audit_id,
@@ -764,7 +858,10 @@ async def cancel_live_order(request: CancelOrderRequest) -> CancelOrderResponse:
 
 
 @router.post("/kill-switch", response_model=KillSwitchResponse, status_code=200)
-async def kill_switch(request: KillSwitchRequest) -> KillSwitchResponse:
+async def kill_switch(
+    request: KillSwitchRequest,
+    _role: Role = Depends(require_live_permission(Permission.MANAGE_KILL_SWITCH)),  # noqa: B008
+) -> KillSwitchResponse:
     """Activate or deactivate the trading kill switch.
 
     The kill switch immediately halts all live trading activity and cancels
@@ -787,9 +884,11 @@ async def kill_switch(request: KillSwitchRequest) -> KillSwitchResponse:
     }
     """
     _require_live_trading()
+    trail = get_live_audit()
 
     # Shared rollout controller — state persists across requests
     rollout = get_rollout_controller()
+    previous_state = str(rollout.kill_switch.state)
 
     affected: list[str] = []
 
@@ -844,6 +943,12 @@ async def kill_switch(request: KillSwitchRequest) -> KillSwitchResponse:
             reason=request.reason,
             affected_order_count=len(affected),
         )
+        trail.record_kill_switch(
+            actor=_role.value,
+            action="activate",
+            reason=request.reason,
+            affected_order_count=len(affected),
+        )
         logger.critical(
             "KILL SWITCH ACTIVATED — reason=%s (audit: %s)",
             request.reason,
@@ -865,6 +970,11 @@ async def kill_switch(request: KillSwitchRequest) -> KillSwitchResponse:
             "kill_switch_deactivated",
             reason=request.reason,
         )
+        trail.record_kill_switch(
+            actor=_role.value,
+            action="deactivate",
+            reason=request.reason,
+        )
         logger.warning(
             "KILL SWITCH DEACTIVATED — reason=%s (audit: %s)",
             request.reason,
@@ -873,6 +983,12 @@ async def kill_switch(request: KillSwitchRequest) -> KillSwitchResponse:
 
     # Determine current state
     current_state = rollout.kill_switch.state
+    if str(current_state) != previous_state:
+        trail.record_rollout_state_change(
+            actor=_role.value,
+            previous_state=previous_state,
+            new_state=str(current_state),
+        )
 
     return KillSwitchResponse(
         state=current_state,
@@ -887,7 +1003,9 @@ async def kill_switch(request: KillSwitchRequest) -> KillSwitchResponse:
 
 
 @router.get("/pnl", response_model=PnlMetrics, status_code=200)
-async def get_pnl() -> PnlMetrics:
+async def get_pnl(
+    _role: Role = Depends(require_live_permission(Permission.VIEW_LIVE_PNL)),  # noqa: B008
+) -> PnlMetrics:
     """Return realized and unrealized PnL with risk-adjusted metrics.
 
     The PnL is computed deterministically by :class:`LivePnlTracker` from
@@ -918,7 +1036,9 @@ async def get_pnl() -> PnlMetrics:
 
 
 @router.get("/pnl/daily", response_model=list[DailyPnlPoint], status_code=200)
-async def get_daily_pnl() -> list[DailyPnlPoint]:
+async def get_daily_pnl(
+    _role: Role = Depends(require_live_permission(Permission.VIEW_LIVE_PNL)),  # noqa: B008
+) -> list[DailyPnlPoint]:
     """Return daily PnL aggregation for all tracked orders.
 
     Response schema
