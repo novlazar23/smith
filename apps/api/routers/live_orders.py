@@ -35,6 +35,7 @@ from packages.live_execution import (
     OrderResult,
     OrderState,
 )
+from packages.live_execution.credentials import build_ccxt_config_from_env
 from packages.rollout import get_rollout_controller
 from packages.security import Permission, Role
 from packages.security.hardening.audit_live import get_live_audit
@@ -60,7 +61,12 @@ def _get_gateway() -> LiveExecutionGateway:
     """Return the singleton gateway, creating it lazily."""
     global _gateway
     if _gateway is None:
-        _gateway = LiveExecutionGateway()
+        venues, ccxt_config, key_ring = build_ccxt_config_from_env()
+        _gateway = LiveExecutionGateway(
+            ccxt_config=ccxt_config,
+            venues=venues or ["binance"],
+            key_ring=key_ring,
+        )
     return _gateway
 
 
