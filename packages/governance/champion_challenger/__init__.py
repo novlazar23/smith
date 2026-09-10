@@ -7,8 +7,11 @@ Jede Variante: agent_id, champion_version, challenger_version, evaluation_window
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+
+from packages.schemas.agent_report import AgentStatus
 
 
 @dataclass
@@ -153,3 +156,86 @@ class ChampionChallengerEngine:
             promoted=promoted,
             promotion_reason="; ".join(reason_parts),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class AgentVersionPair:
+    """Champion- und Challenger-Version eines Agents für die Optimierung."""
+
+    champion: AgentVersion
+    challenger: AgentVersion
+    new_risks: tuple[str, ...] = ()
+    shadow_success: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class AgentOptimizationDecision:
+    """Empfehlung, wie ein Agent nach der Champion-Challenger-Prüfung läuft."""
+
+    agent_id: str
+    champion_version: str
+    challenger_version: str
+    promoted: bool
+    recommended_status: AgentStatus
+    recommended_weight: float
+    reason: str
+    evaluation: EvaluationResult
+
+
+class AgentOptimizer:
+    """Optimiert Agent-Versionen über das Champion-Challenger-System.
+
+    TradingAgents-inspirierte Nutzung: Neue oder veränderte Agenten-Versionen
+    treten als Challenger an und werden nur aktiv, wenn sie die Champion-
+    Version out-of-sample schlagen, stabil bleiben, marginalen Nutzen liefern
+    und keinen neuen kritischen Risk-Befund erzeugen.
+    """
+
+    def __init__(self, config: ChampionChallengerConfig | None = None) -> None:
+        """Initialisiert den Optimizer mit optionaler Champion-Konfiguration."""
+        self._engine = ChampionChallengerEngine(config)
+
+    def optimize(
+        self,
+        agent_id: str,
+        pair: AgentVersionPair,
+    ) -> AgentOptimizationDecision:
+        """Vergleicht Champion und Challenger und leitet Status/Gewicht ab."""
+        evaluation = self._engine.evaluate(
+            agent_id,
+            pair.champion,
+            pair.challenger,
+            list(pair.new_risks),
+            pair.shadow_success,
+        )
+        return AgentOptimizationDecision(
+            agent_id=agent_id,
+            champion_version=evaluation.champion_version,
+            challenger_version=evaluation.challenger_version,
+            promoted=evaluation.promoted,
+            recommended_status=AgentStatus.ACTIVE if evaluation.promoted else AgentStatus.SHADOW,
+            recommended_weight=1.0 if evaluation.promoted else 0.0,
+            reason=evaluation.promotion_reason,
+            evaluation=evaluation,
+        )
+
+    def optimize_many(
+        self,
+        pairs: Mapping[str, AgentVersionPair],
+    ) -> Mapping[str, AgentOptimizationDecision]:
+        """Optimiert alle übergebenen Agent-Paare."""
+        return {agent_id: self.optimize(agent_id, pair) for agent_id, pair in pairs.items()}
+
+    def status_overrides(
+        self,
+        decisions: Mapping[str, AgentOptimizationDecision],
+    ) -> Mapping[str, AgentStatus]:
+        """Liefert Status-Overrides pro Agent für das Ensemble."""
+        return {agent_id: decision.recommended_status for agent_id, decision in decisions.items()}
+
+    def weight_overrides(
+        self,
+        decisions: Mapping[str, AgentOptimizationDecision],
+    ) -> Mapping[str, float]:
+        """Liefert Konsens-Gewichte pro Agent für das Ensemble."""
+        return {agent_id: decision.recommended_weight for agent_id, decision in decisions.items()}

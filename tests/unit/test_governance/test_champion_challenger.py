@@ -5,11 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from packages.governance.champion_challenger import (
+    AgentOptimizer,
     AgentVersion,
+    AgentVersionPair,
     ChampionChallengerConfig,
     ChampionChallengerEngine,
     EvaluationResult,
 )
+from packages.schemas.agent_report import AgentStatus
 
 
 class TestAgentVersion:
@@ -289,3 +292,117 @@ class TestChampionChallengerEngine:
         )
         assert result.promoted is True
         assert result.champion_new_risks_empty is True
+
+
+class TestAgentOptimizer:
+    """Testet die Agent-Optimierung über Champion-Challenger."""
+
+    def _promoting_pair(self) -> AgentVersionPair:
+        return AgentVersionPair(
+            champion=AgentVersion(
+                agent_id="trend",
+                version="v1",
+                oos_score=0.70,
+                calibration_score=0.80,
+                stability_score=0.95,
+                marginal_contribution=0.01,
+                shadow_days=10,
+                samples=100,
+            ),
+            challenger=AgentVersion(
+                agent_id="trend",
+                version="v2",
+                oos_score=0.75,
+                calibration_score=0.82,
+                stability_score=0.94,
+                marginal_contribution=0.02,
+                shadow_days=10,
+                samples=100,
+            ),
+        )
+
+    def test_optimize_promotes_active_challenger_when_champion_criteria_met(self) -> None:
+        decision = AgentOptimizer().optimize("trend", self._promoting_pair())
+
+        assert decision.promoted is True
+        assert decision.recommended_status is AgentStatus.ACTIVE
+        assert decision.recommended_weight == 1.0
+        assert decision.agent_id == "trend"
+        assert decision.champion_version == "v1"
+        assert decision.challenger_version == "v2"
+        assert decision.reason
+
+    def test_optimize_keeps_shadow_when_oos_improvement_is_insufficient(self) -> None:
+        pair = AgentVersionPair(
+            champion=self._promoting_pair().champion,
+            challenger=AgentVersion(
+                agent_id="trend",
+                version="v2",
+                oos_score=0.71,
+                calibration_score=0.82,
+                stability_score=0.94,
+                marginal_contribution=0.02,
+                shadow_days=10,
+                samples=100,
+            ),
+        )
+
+        decision = AgentOptimizer().optimize("trend", pair)
+
+        assert decision.promoted is False
+        assert decision.recommended_status is AgentStatus.SHADOW
+        assert decision.recommended_weight == 0.0
+        assert "OOS improvement" in decision.reason
+
+    def test_optimize_blocks_promotion_when_new_risks_exist(self) -> None:
+        pair = AgentVersionPair(
+            champion=self._promoting_pair().champion,
+            challenger=self._promoting_pair().challenger,
+            new_risks=("drift",),
+        )
+
+        decision = AgentOptimizer().optimize("trend", pair)
+
+        assert decision.promoted is False
+        assert decision.recommended_status is AgentStatus.SHADOW
+        assert "New risks" in decision.reason
+
+    def test_optimize_blocks_promotion_when_shadow_failed(self) -> None:
+        pair = AgentVersionPair(
+            champion=self._promoting_pair().champion,
+            challenger=self._promoting_pair().challenger,
+            shadow_success=False,
+        )
+
+        decision = AgentOptimizer().optimize("trend", pair)
+
+        assert decision.promoted is False
+        assert decision.recommended_status is AgentStatus.SHADOW
+        assert "Shadow operation not successful" in decision.reason
+
+    def test_optimize_many_collects_status_and_weight_overrides(self) -> None:
+        optimizer = AgentOptimizer()
+        good = self._promoting_pair()
+        bad = AgentVersionPair(
+            champion=good.champion,
+            challenger=good.challenger,
+            new_risks=("calibration_regression",),
+        )
+        pairs = {
+            "trend": good,
+            "mean_reversion": AgentVersionPair(
+                champion=bad.champion,
+                challenger=bad.challenger,
+                new_risks=bad.new_risks,
+                shadow_success=bad.shadow_success,
+            ),
+        }
+
+        decisions = optimizer.optimize_many(pairs)
+        status_overrides = optimizer.status_overrides(decisions)
+        weight_overrides = optimizer.weight_overrides(decisions)
+
+        assert status_overrides["trend"] is AgentStatus.ACTIVE
+        assert status_overrides["mean_reversion"] is AgentStatus.SHADOW
+        assert weight_overrides["trend"] == 1.0
+        assert weight_overrides["mean_reversion"] == 0.0

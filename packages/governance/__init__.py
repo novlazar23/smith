@@ -16,7 +16,10 @@ from .audit.kill_criteria import (
     KillSeverity,
 )
 from .champion_challenger import (
+    AgentOptimizationDecision,
+    AgentOptimizer,
     AgentVersion,
+    AgentVersionPair,
     ChampionChallengerConfig,
     ChampionChallengerEngine,
     EvaluationResult,
@@ -49,8 +52,11 @@ __all__ = [
     "STATE_WEIGHTS",
     "VALID_TRANSITIONS",
     "ActiveAgent",
+    "AgentOptimizationDecision",
+    "AgentOptimizer",
     "AgentState",
     "AgentVersion",
+    "AgentVersionPair",
     "AuditEntry",
     "AuditTrail",
     "BlockingRules",
