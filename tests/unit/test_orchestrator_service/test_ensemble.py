@@ -116,6 +116,25 @@ class TestBuildEnsemble:
         for inner in inner_agents:
             assert inner.config.status is AgentStatus.ACTIVE
 
+    def test_build_ensemble_respects_champion_status_overrides(self) -> None:
+        """status_overrides überschreibt den Basis-Status nur für benannte Agenten."""
+        agents = build_ensemble(
+            "BTC/USDT",
+            "15m",
+            AgentStatus.ACTIVE,
+            status_overrides={"trend": AgentStatus.SHADOW},
+        )
+
+        statuses = {
+            agent.agent_id: agent._agent.config.status  # type: ignore[attr-defined]
+            for agent in agents
+        }
+
+        assert statuses["trend"] is AgentStatus.SHADOW
+        assert statuses["mean_reversion"] is AgentStatus.ACTIVE
+        assert statuses["volatility_regime"] is AgentStatus.ACTIVE
+        assert statuses["volume_conviction"] is AgentStatus.ACTIVE
+
     def test_agent_types_match(self) -> None:
         """Die AgentTypen stimmen mit den gewählten Klassen überein."""
         agents = build_ensemble("ETH/USDT", "15m")

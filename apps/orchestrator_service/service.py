@@ -19,7 +19,7 @@ import signal
 import threading
 import time
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -244,6 +244,7 @@ def build_ensemble(
     instrument: str,
     horizon: str,
     agent_status: AgentStatus = AgentStatus.SHADOW,
+    status_overrides: Mapping[str, AgentStatus] | None = None,
 ) -> list[ContextualAgent]:
     """Erzeugt frische Agenten für einen Zyklus (kanonisches Ensemble).
 
@@ -271,6 +272,8 @@ def build_ensemble(
         agent_status: Lebenszyklus-Status der Agenten. Default ``SHADOW``
             (konservativ für direkte Aufrufe); der Service übergibt den
             konfigurierten Status (Default ``ACTIVE`` = Realbetrieb).
+        status_overrides: Optionale Champion-Challenger-Overrides pro
+            ``agent_id``; nicht benannte Agenten behalten ``agent_status``.
     """
     specs: list[tuple[str, AgentType, type[BaseAgent]]] = [
         ("trend", AgentType.INDICATOR, TrendAgent),
@@ -280,12 +283,13 @@ def build_ensemble(
     ]
     agents: list[ContextualAgent] = []
     for agent_id, agent_type, agent_cls in specs:
+        status = status_overrides.get(agent_id, agent_status) if status_overrides else agent_status
         config = AgentConfig(
             agent_id=agent_id,
             agent_type=agent_type,
             instrument=instrument,
             horizon=horizon,
-            status=agent_status,
+            status=status,
         )
         agents.append(ContextualAgent(agent_cls(config=config)))
     return agents
