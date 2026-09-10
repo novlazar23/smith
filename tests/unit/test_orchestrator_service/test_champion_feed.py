@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -130,4 +131,66 @@ class TestBuildServiceWiring:
         path = _write(tmp_path, {"trend": _good_block(challenger_oos=0.70)})
         config = OrchestratorServiceConfig(instruments=("BTC/USDT",), status_overrides_path=path)
         service = build_service(config=config, provider=stub_provider, db=fake_db)
+        assert service._status_overrides == {"trend": AgentStatus.ACTIVE}
+
+    def test_build_service_without_artifact_starts_soft(
+        self, tmp_path: Path, fake_db: FakeDB, stub_provider: StubProvider
+    ) -> None:
+        config = OrchestratorServiceConfig(instruments=("BTC/USDT",), status_overrides_path=tmp_path / "fehlt.json")
+        service = build_service(config=config, provider=stub_provider, db=fake_db)
+        assert service._status_overrides is None
+
+
+class TestOverrideReload:
+    """Hot-Reload: Overrides werden bei Artefakt-Änderung pro Zyklus neu geladen."""
+
+    def test_reloads_when_artifact_changes(
+        self, tmp_path: Path, fake_db: FakeDB, stub_provider: StubProvider
+    ) -> None:
+        path = _write(tmp_path, {"trend": _good_block()})
+        config = OrchestratorServiceConfig(
+            instruments=("BTC/USDT",),
+            heartbeat_path=tmp_path / "heartbeat",
+            status_overrides_path=path,
+        )
+        service = build_service(config=config, provider=stub_provider, db=fake_db)
+        assert service._status_overrides == {"trend": AgentStatus.ACTIVE}
+        service.run_cycle()  # unverändertes Artefakt → keine Änderung
+        assert service._status_overrides == {"trend": AgentStatus.ACTIVE}
+
+        # Artefakt-Update: Challenger degradiert deutlich → SHADOW
+        _write(tmp_path, {"trend": _good_block(challenger_oos=0.60)})
+        os.utime(path, ns=(1_000_000_000_000_000_000, 1_000_000_001_000_000_000))
+        service.run_cycle()
+        assert service._status_overrides == {"trend": AgentStatus.SHADOW}
+
+    def test_keeps_old_overrides_on_corrupt_update(
+        self, tmp_path: Path, fake_db: FakeDB, stub_provider: StubProvider
+    ) -> None:
+        path = _write(tmp_path, {"trend": _good_block()})
+        config = OrchestratorServiceConfig(
+            instruments=("BTC/USDT",),
+            heartbeat_path=tmp_path / "heartbeat",
+            status_overrides_path=path,
+        )
+        service = build_service(config=config, provider=stub_provider, db=fake_db)
+        assert service._status_overrides == {"trend": AgentStatus.ACTIVE}
+
+        path.write_text("kein JSON", encoding="utf-8")
+        os.utime(path, ns=(1_000_000_000_000_000_000, 1_000_000_001_000_000_000))
+        service.run_cycle()
+        assert service._status_overrides == {"trend": AgentStatus.ACTIVE}
+
+    def test_picks_up_artifact_after_first_eval_run(
+        self, tmp_path: Path, fake_db: FakeDB, stub_provider: StubProvider
+    ) -> None:
+        config = OrchestratorServiceConfig(
+            instruments=("BTC/USDT",),
+            heartbeat_path=tmp_path / "heartbeat",
+            status_overrides_path=tmp_path / "champion_evals.json",
+        )
+        service = build_service(config=config, provider=stub_provider, db=fake_db)
+        assert service._status_overrides is None  # Start ohne Artefakt (fail-soft)
+        _write(tmp_path, {"trend": _good_block()})
+        service.run_cycle()  # erst nach dem ersten Evaluations-Lauf vorhanden
         assert service._status_overrides == {"trend": AgentStatus.ACTIVE}

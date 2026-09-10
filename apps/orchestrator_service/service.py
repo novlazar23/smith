@@ -12,6 +12,7 @@ Order-Ausführung statt — unabhängig vom Feature-Flag
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -360,6 +361,7 @@ class OrchestratorService:
         db: SQLAlchemyEngine,
         pipeline_factory: Callable[[], OrchestratorPipeline] | None = None,
         status_overrides: Mapping[str, AgentStatus] | None = None,
+        status_overrides_path: Path | None = None,
     ) -> None:
         """Initialisiert den Service.
 
@@ -373,12 +375,22 @@ class OrchestratorService:
             status_overrides: Optionale Champion-Challenger-Overrides pro
                 ``agent_id``; werden pro Zyklus an das Ensemble durchgereicht.
                 Default ``None`` = jeder Agent nutzt ``config.agent_status``.
+            status_overrides_path: Optionaler Pfad des Evaluations-Artefakts;
+                bei Mtime-Änderung lädt der Service die Overrides pro Zyklus
+                neu (Hot-Reload statt Neustart nach Artefakt-Update).
         """
         self._config = config
         self._provider = provider
         self._db = db
         self._pipeline_factory = pipeline_factory or build_calibrated_pipeline
         self._status_overrides = status_overrides
+        self._status_overrides_path = status_overrides_path
+        self._overrides_mtime: float | None = None
+        if status_overrides_path is not None:
+            # Datei fehlt beim Start (z. B. vor dem ersten Evaluations-Lauf):
+            # mtime bleibt None, der erste Zyklus übernimmt das Artefakt.
+            with contextlib.suppress(OSError):
+                self._overrides_mtime = status_overrides_path.stat().st_mtime
 
     @property
     def config(self) -> OrchestratorServiceConfig:
@@ -402,6 +414,7 @@ class OrchestratorService:
             len(self._config.instruments),
             live_enabled,
         )
+        self._maybe_reload_status_overrides()
         self._score_due_shadow_decisions()
         persisted = 0
         for instrument in self._config.instruments:
@@ -415,6 +428,34 @@ class OrchestratorService:
         except OSError as exc:
             logger.warning("Heartbeat-Datei nicht schreibbar: %s", exc)
         return persisted
+
+    def _maybe_reload_status_overrides(self) -> None:
+        """Lädt die Champion-Overrides neu, wenn sich das Artefakt geändert hat.
+
+        Mtime-Check pro Zyklus (billig); solange sich nichts geändert hat,
+        bleibt das geladene Mapping unverändert. Ein Reload-Fehler (fehlende
+        oder defekte Datei) lässt die letzten guten Overrides stehen.
+        """
+        path = self._status_overrides_path
+        if path is None:
+            return
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return  # Datei fehlt (z. B. zwischen Mount und erstem Evaluations-Lauf)
+        if mtime == self._overrides_mtime:
+            return
+        try:
+            overrides = load_status_overrides(path, config=REQUALIFICATION_CONFIG)
+        except Exception as exc:
+            logger.warning(
+                "Champion-Feed: Artefakt-Reload fehlgeschlagen (%s) — bisherige Overrides behalten", exc
+            )
+            self._overrides_mtime = mtime
+            return
+        self._status_overrides = overrides
+        self._overrides_mtime = mtime
+        logger.info("Champion-Feed: %d Status-Override(s) neu geladen aus %s", len(overrides), path)
 
     def _score_due_shadow_decisions(self) -> None:
         """Bewertet fällige Shadow-Entscheidungen (Brier/Calibration).
@@ -632,30 +673,37 @@ def build_service(
     """Setzt den Service aus Env-Defaults und injizierten Abhängigkeiten zusammen.
 
     Ist ``config.status_overrides_path`` gesetzt, werden die Champion-
-    Challenger-Status-Overrides einmal beim Start aus dem Artefakt geladen
-    und an das Ensemble durchgereicht.
+    Challenger-Status-Overrides beim Start aus dem Artefakt geladen und pro
+    Zyklus bei Artefakt-Änderung neu geladen (Mtime-Check in ``run_cycle``).
+    Fehlt das Artefakt beim Start, fährt der Service ohne Overrides fort
+    (fail-soft) und übernimmt es beim ersten Zyklus nach dem Erscheinen.
     """
     cfg = config if config is not None else config_from_env()
     status_overrides: Mapping[str, AgentStatus] | None = None
     if cfg.status_overrides_path is not None:
         # Re-Kalibrierung: stabiles OOS (≈ Kalibrierung) bleibt ACTIVE, nur
         # ein deutlicher OOS-Abfall degradiert auf SHADOW.
-        status_overrides = load_status_overrides(
-            cfg.status_overrides_path, config=REQUALIFICATION_CONFIG
-        )
-        logger.info(
-            "Champion-Feed: %d Status-Override(s) geladen aus %s",
-            len(status_overrides),
-            cfg.status_overrides_path,
-        )
-    # ponytail: Overrides werden einmal beim Start geladen; wenn das
-    # Evaluations-Artefakt öfter upgedatet wird als der Orchestrator neu
-    # startet, pro Zyklus in run_cycle neu laden und durchreichen.
+        try:
+            status_overrides = load_status_overrides(
+                cfg.status_overrides_path, config=REQUALIFICATION_CONFIG
+            )
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "Champion-Feed: Artefakt nicht verfügbar (%s) — ohne Status-Overrides gestartet",
+                exc,
+            )
+        else:
+            logger.info(
+                "Champion-Feed: %d Status-Override(s) geladen aus %s",
+                len(status_overrides),
+                cfg.status_overrides_path,
+            )
     return OrchestratorService(
         cfg,
         provider if provider is not None else build_ch_provider(),
         db if db is not None else build_db_engine(),
         status_overrides=status_overrides,
+        status_overrides_path=cfg.status_overrides_path,
     )
 
 
