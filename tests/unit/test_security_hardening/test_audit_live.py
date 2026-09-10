@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 
+import pytest
 from packages.security.hardening.audit_live import (
+    AUDIT_LOG_PATH_ENV,
     GENESIS_HASH,
     LiveAuditTrail,
     get_live_audit,
@@ -90,3 +94,42 @@ class TestModuleAccessors:
         assert len(trail2) == 0
         # Old trail keeps its entries (no shared mutation).
         assert len(trail1) == 1
+
+    def test_reset_live_audit_uses_env_path(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        audit_path = tmp_path / "nested" / "audit.jsonl"
+        monkeypatch.setenv(AUDIT_LOG_PATH_ENV, str(audit_path))
+        try:
+            trail = reset_live_audit(clock=_fixed_clock)
+            trail.record("persisted", actor="tester")
+            payload = json.loads(audit_path.read_text(encoding="utf-8").strip())
+            assert payload["action"] == "persisted"
+            assert payload["actor"] == "tester"
+            assert payload["entry_hash"] == trail.entries[0].entry_hash
+        finally:
+            monkeypatch.delenv(AUDIT_LOG_PATH_ENV, raising=False)
+            reset_live_audit()
+
+
+class TestPersistentAudit:
+    def test_record_appends_jsonl(self, tmp_path: Path) -> None:
+        audit_path = tmp_path / "audit.jsonl"
+        trail = LiveAuditTrail(clock=_fixed_clock, path=audit_path)
+        trail.record("op1", actor="a")
+        trail.record("op2", actor="b")
+        lines = audit_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+        first = json.loads(lines[0])
+        second = json.loads(lines[1])
+        assert first["action"] == "op1"
+        assert second["action"] == "op2"
+        assert second["previous_hash"] == first["entry_hash"]
+
+    def test_record_creates_missing_parent_dirs(self, tmp_path: Path) -> None:
+        audit_path = tmp_path / "a" / "b" / "audit.jsonl"
+        trail = LiveAuditTrail(path=audit_path)
+        trail.record("op")
+        assert audit_path.exists()

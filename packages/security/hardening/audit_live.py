@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "AUDIT_LOG_PATH_ENV",
     "GENESIS_HASH",
     "LiveAuditEntry",
     "LiveAuditTrail",
@@ -28,6 +31,7 @@ __all__ = [
 ]
 
 GENESIS_HASH = "0" * 64
+AUDIT_LOG_PATH_ENV = "LIVE_AUDIT_LOG_PATH"
 
 #: Details-Keys, deren Werte niemals roh im Audit-Trail landen dürfen.
 _SENSITIVE_KEY = re.compile(
@@ -95,14 +99,20 @@ class LiveAuditEntry:
 
 
 class LiveAuditTrail:
-    """Append-only, in-memory Audit-Trail mit SHA-256-Hash-Kette.
+    """Append-only Audit-Trail mit SHA-256-Hash-Kette.
 
     Der Clock ist injectierbar, damit Tests deterministisch laufen.
+    Bei ``path`` wird jeder Eintrag zusätzlich als JSON-Linie angehängt.
     """
 
-    def __init__(self, clock: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self,
+        clock: Callable[[], datetime] | None = None,
+        path: str | Path | None = None,
+    ) -> None:
         self._entries: list[LiveAuditEntry] = []
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._path = Path(path) if path is not None else None
 
     def record(
         self,
@@ -134,6 +144,13 @@ class LiveAuditTrail:
             entry_hash=entry_hash,
         )
         self._entries.append(entry)
+        # ponytail: JSONL-Append ist pro Prozess; Multi-Worker-APIs brauchen
+        # einen zentralen Audit-Writer oder DB-Persistenz für eine globale Kette.
+        if self._path is not None:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps(asdict(entry), sort_keys=True, default=str)
+            with self._path.open("a", encoding="utf-8") as handle:
+                handle.write(f"{line}\n")
         return entry
 
     def record_order_submit(
@@ -290,16 +307,26 @@ class LiveAuditTrail:
         return True
 
 
-_trail: LiveAuditTrail = LiveAuditTrail()
+_trail: LiveAuditTrail | None = None
+
+
+def _configured_audit_path() -> Path | None:
+    raw = os.environ.get(AUDIT_LOG_PATH_ENV, "").strip()
+    return Path(raw) if raw else None
 
 
 def get_live_audit() -> LiveAuditTrail:
     """App-weiter accessor — geeignet für FastAPI-Dependency-Injection."""
+    global _trail
+    if _trail is None:
+        _trail = LiveAuditTrail(path=_configured_audit_path())
     return _trail
 
 
-def reset_live_audit() -> LiveAuditTrail:
+def reset_live_audit(
+    clock: Callable[[], datetime] | None = None,
+) -> LiveAuditTrail:
     """Ersetzt den geteilten Trail durch einen frischen (für Tests)."""
     global _trail
-    _trail = LiveAuditTrail()
+    _trail = LiveAuditTrail(clock=clock, path=_configured_audit_path())
     return _trail
