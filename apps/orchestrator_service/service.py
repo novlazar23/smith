@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
+from apps.orchestrator_service.champion_feed import load_status_overrides
 from numpy.typing import NDArray
 from packages.agents.base import AgentConfig, AgentType, BaseAgent
 from packages.agents.mean_reversion_agent import MeanReversionAgent
@@ -108,6 +109,7 @@ class OrchestratorServiceConfig:
     shadow_range_threshold: float = DEFAULT_SHADOW_RANGE_THRESHOLD
     heartbeat_path: Path = HEARTBEAT_PATH
     log_level: str = "INFO"
+    status_overrides_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -537,7 +539,8 @@ def config_from_env() -> OrchestratorServiceConfig:
       (BTC/USDT,ETH/USDT), ORCHESTRATOR_CANDLE_LIMIT (200),
       ORCHESTRATOR_MIN_CANDLES (30), ORCHESTRATOR_HORIZON (15m),
       ORCHESTRATOR_AGENT_STATUS (ACTIVE), SHADOW_RANGE_THRESHOLD (0.001),
-      ORCHESTRATOR_HEARTBEAT (/tmp/orchestrator_heartbeat), LOG_LEVEL (INFO).
+      ORCHESTRATOR_HEARTBEAT (/tmp/orchestrator_heartbeat), LOG_LEVEL (INFO),
+      ORCHESTRATOR_CHAMPION_EVALS (leer = kein Champion-Feed).
     """
     raw_instruments = os.environ.get("ORCHESTRATOR_INSTRUMENTS", DEFAULT_INSTRUMENTS)
     try:
@@ -575,6 +578,7 @@ def config_from_env() -> OrchestratorServiceConfig:
             "Ungültiges SHADOW_RANGE_THRESHOLD → Default %.4f", DEFAULT_SHADOW_RANGE_THRESHOLD
         )
         shadow_range_threshold = DEFAULT_SHADOW_RANGE_THRESHOLD
+    raw_champion_evals = os.environ.get("ORCHESTRATOR_CHAMPION_EVALS", "").strip()
     return OrchestratorServiceConfig(
         interval_seconds=interval,
         instruments=parse_instruments(raw_instruments),
@@ -585,6 +589,7 @@ def config_from_env() -> OrchestratorServiceConfig:
         shadow_range_threshold=shadow_range_threshold,
         heartbeat_path=heartbeat,
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
+        status_overrides_path=Path(raw_champion_evals) if raw_champion_evals else None,
     )
 
 
@@ -624,11 +629,29 @@ def build_service(
     provider: CandleProvider | None = None,
     db: SQLAlchemyEngine | None = None,
 ) -> OrchestratorService:
-    """Setzt den Service aus Env-Defaults und injizierten Abhängigkeiten zusammen."""
+    """Setzt den Service aus Env-Defaults und injizierten Abhängigkeiten zusammen.
+
+    Ist ``config.status_overrides_path`` gesetzt, werden die Champion-
+    Challenger-Status-Overrides einmal beim Start aus dem Artefakt geladen
+    und an das Ensemble durchgereicht.
+    """
+    cfg = config if config is not None else config_from_env()
+    status_overrides: Mapping[str, AgentStatus] | None = None
+    if cfg.status_overrides_path is not None:
+        status_overrides = load_status_overrides(cfg.status_overrides_path)
+        logger.info(
+            "Champion-Feed: %d Status-Override(s) geladen aus %s",
+            len(status_overrides),
+            cfg.status_overrides_path,
+        )
+    # ponytail: Overrides werden einmal beim Start geladen; wenn das
+    # Evaluations-Artefakt öfter upgedatet wird als der Orchestrator neu
+    # startet, pro Zyklus in run_cycle neu laden und durchreichen.
     return OrchestratorService(
-        config if config is not None else config_from_env(),
+        cfg,
         provider if provider is not None else build_ch_provider(),
         db if db is not None else build_db_engine(),
+        status_overrides=status_overrides,
     )
 
 
