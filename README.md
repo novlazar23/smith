@@ -794,6 +794,8 @@ nie mit `docker compose up`, nur explizit via `docker compose run`.
 on-demand) führt `apps.champion_evals` täglich über BTC+ETH auf einem
 rollierenden 180-Tage-Fenster (5m) aus und schreibt das
 `champion_evals.json`-Artefakt in das Shared-Volume `backtest_reports`.
+Mit `--refresh-data` lädt er vor jedem Lauf `candles_history` idempotent
+nach (Binance-Futures-1m, nur Lücken), damit das Fensterende aktuell ist.
 Der Orchestrator lädt die daraus abgeleiteten Champion/Challenger-
 Status-Overrides beim Start und — dank Mtime-Check — bei jedem
 Artefakt-Update im laufenden Zyklus neu (kein Neustart nötig). Manueller
