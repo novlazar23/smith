@@ -109,10 +109,20 @@ class TestMiddleware:
         client = TestClient(app)
         assert client.get("/v1/live/ping").status_code == 200
 
-    def test_env_strict_loads(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_strict_is_strict_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("LIVE_IP_WHITELIST", raising=False)
         monkeypatch.delenv("LIVE_IP_WHITELIST_STRICT", raising=False)
         app = _app_with(create_live_ip_middleware())
         client = TestClient(app)
-        # Default (non-strict, empty) → allow all.
+        assert client.get("/v1/live/ping").status_code == 403
+
+    def test_env_strict_can_be_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("LIVE_IP_WHITELIST", raising=False)
+        monkeypatch.setenv("LIVE_IP_WHITELIST_STRICT", "false")
+        app = _app_with(create_live_ip_middleware())
+        client = TestClient(app)
         assert client.get("/v1/live/ping").status_code == 200

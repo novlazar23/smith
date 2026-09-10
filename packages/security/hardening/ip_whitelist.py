@@ -8,8 +8,8 @@
 
 Env-Config:
 - ``LIVE_IP_WHITELIST`` — kommagetrennte IPs/CIDRs
-- ``LIVE_IP_WHITELIST_STRICT`` — ``true``: leere Whitelist blockiert alle
-  Live-Endpunkte; Default (aus): leere Whitelist blockiert nichts.
+- ``LIVE_IP_WHITELIST_STRICT`` — Default ``true``: leere Whitelist blockiert
+  alle Live-Endpunkte; explizit ``false`` deaktiviert den Strict-Modus.
 - ``API_TRUST_PROXY_HEADERS`` — ``true``: erster ``X-Forwarded-For``-Wert
   wird als Client-IP verwendet.
 """
@@ -72,6 +72,14 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in _TRUE_VALUES
 
 
+def _strict_from_env() -> bool:
+    """Strict-by-Default: nur ein explizites falsches Wert deaktiviert."""
+    raw = os.environ.get(LIVE_IP_WHITELIST_STRICT_ENV)
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def _parse_entry(entry: str) -> Network | None:
     text = entry.strip()
     if not text:
@@ -119,11 +127,10 @@ class IPWhitelist:
 
 
 def load_ip_whitelist() -> tuple[IPWhitelist, bool]:
-    """Liest Whitelist und Strict-Modus aus ENV."""
+    """Liest Whitelist und Strict-Modus aus ENV (Strict-by-Default)."""
     raw = os.environ.get(LIVE_IP_WHITELIST_ENV, "")
     entries = [part.strip() for part in raw.split(",") if part.strip()]
-    strict = _truthy(os.environ.get(LIVE_IP_WHITELIST_STRICT_ENV))
-    return IPWhitelist(entries), strict
+    return IPWhitelist(entries), _strict_from_env()
 
 
 def resolve_client_ip(request: StarletteRequest) -> str:
@@ -149,17 +156,16 @@ def create_live_ip_middleware(
 ) -> Callable[[StarletteRequest, Callable[[StarletteRequest], Awaitable[object]]], Awaitable[object]]:
     """Erstellt die IP-Whitelist-Middleware für Live-Präfixe.
 
-    - Leere Whitelist + strict=True → blockiert alle Live-Endpunkte.
-    - Leere Whitelist + strict=False (Default) → blockiert nichts.
+    - Leere Whitelist + strict=True (Default) → blockiert alle Live-Endpunkte.
+    - Leere Whitelist + strict=False → blockiert nichts.
     - Sonst: nur erlaubte IPs; alle Abweisungen landen im Live-Audit-Trail.
     """
     from fastapi.responses import JSONResponse
 
-    env_strict = _truthy(os.environ.get(LIVE_IP_WHITELIST_STRICT_ENV))
     if whitelist is None:
         whitelist, _ = load_ip_whitelist()
     if strict is None:
-        strict = env_strict
+        strict = _strict_from_env()
 
     async def middleware(
         request: StarletteRequest,
