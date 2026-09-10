@@ -178,9 +178,16 @@ def build_artifact(metrics: Mapping[str, AgentMetrics], version: str = "current"
 
 
 def write_artifact(path: Path | str, metrics: Mapping[str, AgentMetrics], version: str = "current") -> Path:
-    """Schreibt das Artefakt als JSON (lesbar für ``champion_feed``) und liefert den Pfad."""
+    """Schreibt das Artefakt als JSON (lesbar für ``champion_feed``) und liefert den Pfad.
+
+    Atomar (tmp-Datei + ``Path.replace``): Der Orchestrator lädt das
+    Artefakt bei Mtime-Änderung neu und sieht nie einen halben Stand.
+    """
     out = Path(path)
-    out.write_text(json.dumps(build_artifact(metrics, version), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    payload = json.dumps(build_artifact(metrics, version), indent=2, ensure_ascii=False) + "\n"
+    tmp = out.with_name(out.name + ".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(out)
     return out
 
 

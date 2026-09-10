@@ -69,6 +69,22 @@ class TestScoreWindow:
         assert m["a"].oos_marginal > 0  # a senkt den Ensemble-Brier
         assert m["b"].oos_marginal < 0  # b erhöht den Ensemble-Brier
 
+    def test_pools_multi_instrument_samples_on_common_timeline(self) -> None:
+        # Quell-1 (Instrument A, Stunden 0-2) und Quell-2 (Instrument B,
+        # Stunden 3-5) werden in Quell-Reihenfolge concat'd, aber auf der
+        # gepoolten Zeitachse gesplittet: früherer Quell = Kalibrierung,
+        # späterer = OOS.
+        base = datetime(2024, 1, 1, tzinfo=UTC)
+        good = {"UP": 0.9, "DOWN": 0.05, "RANGE": 0.05}
+        bad = {"UP": 0.05, "DOWN": 0.9, "RANGE": 0.05}
+        source_a = [EvalSample(base + timedelta(hours=k), {"a": good}, "UP", 0.0) for k in range(3)]
+        source_b = [EvalSample(base + timedelta(hours=3 + k), {"a": bad}, "UP", 0.0) for k in range(3)]
+        m = score_window(source_a + source_b, calibration_ratio=0.5)
+        assert m["a"].cal_samples == 3
+        assert m["a"].oos_samples == 3
+        assert m["a"].cal_brier == pytest.approx(0.015)  # Kalibrierung = guter Quell A
+        assert m["a"].oos_brier == pytest.approx(1.715)  # OOS = schlechter Quell B
+
     def test_drops_incomplete_agents(self) -> None:
         base = datetime(2024, 1, 1, tzinfo=UTC)
         a = {"UP": 0.9, "DOWN": 0.05, "RANGE": 0.05}
