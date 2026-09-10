@@ -56,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--down-threshold", type=float, default=-0.01, help="DOWN-Schwelle für das Real-Outcome")
     parser.add_argument("--min-samples", type=int, default=20, help="Min. OOS-Samples pro Agent, sonst weggelassen")
     parser.add_argument("--loop", type=int, default=None, help="Dauerbetrieb: Lauf alle N Sekunden wiederholen (Default = Einzellauf)")
+    parser.add_argument(
+        "--refresh-data",
+        action="store_true",
+        help="candles_history für das Fenster idempotent nachladen (Binance-Klines), bevor der Lauf startet",
+    )
     parser.add_argument("--version", default="current", help="Versions-Label für das Artefakt")
     parser.add_argument("--output", required=True, help="Zielpfad des JSON-Artefakts")
     parser.add_argument("--ch-host", default=None, help="ClickHouse-Host (Env CH_HOST, Default clickhouse)")
@@ -97,6 +102,32 @@ def _window(args: argparse.Namespace) -> tuple[str | None, str | None]:
     return args.start, args.end
 
 
+def _refresh_history(
+    engine: ClickHouseEngine, instruments: tuple[str, ...], start: str, end: str
+) -> None:
+    """Lädt ``candles_history`` für das Fenster idempotent nach (nur Lücken).
+
+    Ohne diesen Schritt wächst bei einem rollierenden Fenster die Lücke am
+    Fensterende täglich (Backfill-Endstand bleibt stehen) und der OOS-Teil
+    bewertet ständige veraltete Daten.
+
+    Raises:
+        RuntimeError: Wenn das Backfill für ein Instrument fehlschlägt.
+    """
+    from apps.backfill import storage
+    from apps.backfill.client import KlineClient
+    from apps.backfill.service import BackfillConfig, BackfillService
+
+    window_start = datetime.fromisoformat(start).replace(tzinfo=UTC)
+    window_end = datetime.fromisoformat(end).replace(hour=23, minute=59, second=0, tzinfo=UTC)
+    storage.ensure_table(engine)
+    config = BackfillConfig(months=1, instruments=instruments, start=window_start, end=window_end)
+    with KlineClient() as client:
+        result = BackfillService(config, client, engine).run()
+    if result.failures:
+        raise RuntimeError(f"Backfill unvollständig: {[name for name, _ in result.failures]}")
+
+
 def _run_once(args: argparse.Namespace) -> int:
     """Ein kompletter Evaluationslauf über alle angebenen Instrumente."""
     from apps.backtest.ch_feed import ClickHouseDataFeed
@@ -107,6 +138,17 @@ def _run_once(args: argparse.Namespace) -> int:
     venue = args.venue or os.environ.get("CANDLE_VENUE", "BINANCE_FUTURES")
     engine = _ch_engine(args)
     start, end = _window(args)
+
+    if args.days is not None and not args.refresh_data:
+        logger.warning(
+            "--days ohne --refresh-data: nutzt candles_history wie vorhanden "
+            "(das Datenende kann hinter dem Fensterende liegen)"
+        )
+    if args.refresh_data:
+        if start is None or end is None:
+            logger.error("--refresh-data benötigt ein Fenster (--days oder --start/--end)")
+            return 1
+        _refresh_history(engine, instruments, start, end)
 
     # Samples aller Instrumente auf einer gemeinsamen Zeitachse poolen
     # (score_window sortiert nach as_of; ein Instrument mit zu wenigen

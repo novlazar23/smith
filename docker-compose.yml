@@ -567,6 +567,7 @@ services:
       - "0.5"
       - --min-samples
       - "20"
+      - --refresh-data
       - --output
       - /app/backtest_reports/champion_evals.json
       - --loop

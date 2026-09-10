@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from apps.champion_evals.score import (
@@ -140,6 +141,60 @@ class _FakePipeline:
                 _FakeReport("vol", {"up": 0.1, "down": 0.7, "range": 0.2}),
             ]
         )
+
+
+class TestRefreshHistory:
+    """Glue: Fenster-Daten → Backfill-Config; Fehlende Lücken → RuntimeError."""
+
+    def test_backfill_failure_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from apps.champion_evals import __main__ as cli
+
+        seen: dict[str, object] = {}
+
+        class _FakeService:
+            def __init__(self, config: object, client: object, engine: object) -> None:
+                seen["config"] = config
+
+            def run(self) -> SimpleNamespace:
+                return SimpleNamespace(summaries=(), failures=(("BTC/USDT", "boom"),))
+
+        class _FakeClient:
+            def __enter__(self) -> _FakeClient:
+                return self
+
+            def __exit__(self, *args: object) -> bool:
+                return False
+
+        monkeypatch.setattr("apps.backfill.service.BackfillService", _FakeService)
+        monkeypatch.setattr("apps.backfill.client.KlineClient", _FakeClient)
+        monkeypatch.setattr("apps.backfill.storage.ensure_table", lambda engine: None)
+        with pytest.raises(RuntimeError, match="Backfill unvollständig"):
+            cli._refresh_history(object(), ("BTC/USDT",), "2026-03-14", "2026-09-10")
+        config = seen["config"]
+        assert config.start == datetime(2026, 3, 14, tzinfo=UTC)
+        assert config.end == datetime(2026, 9, 10, 23, 59, tzinfo=UTC)
+
+    def test_no_failure_returns_quietly(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from apps.champion_evals import __main__ as cli
+
+        class _FakeService:
+            def __init__(self, config: object, client: object, engine: object) -> None:
+                pass
+
+            def run(self) -> SimpleNamespace:
+                return SimpleNamespace(summaries=(), failures=())
+
+        class _FakeClient:
+            def __enter__(self) -> _FakeClient:
+                return self
+
+            def __exit__(self, *args: object) -> bool:
+                return False
+
+        monkeypatch.setattr("apps.backfill.service.BackfillService", _FakeService)
+        monkeypatch.setattr("apps.backfill.client.KlineClient", _FakeClient)
+        monkeypatch.setattr("apps.backfill.storage.ensure_table", lambda engine: None)
+        assert cli._refresh_history(object(), ("BTC/USDT",), "2026-03-14", "2026-09-10") is None
 
 
 class TestReplayEnsemble:
