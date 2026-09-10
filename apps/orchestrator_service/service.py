@@ -357,6 +357,7 @@ class OrchestratorService:
         provider: CandleProvider,
         db: SQLAlchemyEngine,
         pipeline_factory: Callable[[], OrchestratorPipeline] | None = None,
+        status_overrides: Mapping[str, AgentStatus] | None = None,
     ) -> None:
         """Initialisiert den Service.
 
@@ -367,11 +368,15 @@ class OrchestratorService:
             pipeline_factory: Factory für die Pipeline (Testbarkeit).
                 Default: Pipeline mit der kalibrierten Ensemble-WeightConfig
                 (``CONSENSUS_MIN_THRESHOLD``).
+            status_overrides: Optionale Champion-Challenger-Overrides pro
+                ``agent_id``; werden pro Zyklus an das Ensemble durchgereicht.
+                Default ``None`` = jeder Agent nutzt ``config.agent_status``.
         """
         self._config = config
         self._provider = provider
         self._db = db
         self._pipeline_factory = pipeline_factory or build_calibrated_pipeline
+        self._status_overrides = status_overrides
 
     @property
     def config(self) -> OrchestratorServiceConfig:
@@ -450,7 +455,10 @@ class OrchestratorService:
         base_close = float(window.close[-1]) if window.close.size > 0 else None
         run_id = make_run_id(instrument)
         agents = build_ensemble(
-            instrument, self._config.horizon, AgentStatus[self._config.agent_status]
+            instrument,
+            self._config.horizon,
+            AgentStatus[self._config.agent_status],
+            status_overrides=self._status_overrides,
         )
         started = time.perf_counter()
         result = self._pipeline_factory().run(

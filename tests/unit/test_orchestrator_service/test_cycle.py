@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 import numpy as np
@@ -14,6 +15,7 @@ from apps.orchestrator_service.service import (
     OrchestratorServiceConfig,
     make_run_id,
 )
+from packages.schemas.agent_report import AgentStatus
 
 from .conftest import (
     FakeConnection,
@@ -34,6 +36,7 @@ def _service_with(
     provider: StubProvider,
     db: FakeDB,
     pipeline: StubPipeline,
+    status_overrides: Mapping[str, AgentStatus] | None = None,
 ) -> OrchestratorService:
     """Baut einen Service mit injizierten Stubs."""
     return OrchestratorService(
@@ -41,6 +44,7 @@ def _service_with(
         provider=provider,
         db=db,
         pipeline_factory=lambda: pipeline,
+        status_overrides=status_overrides,
     )
 
 
@@ -142,6 +146,36 @@ class TestRunCycle:
             "volatility_regime",
             "volume_conviction",
         }
+
+    def test_applies_champion_status_overrides(
+        self,
+        config: OrchestratorServiceConfig,
+        stub_provider: StubProvider,
+        fake_conn: FakeConnection,
+        stub_pipeline: StubPipeline,
+    ) -> None:
+        """Der Service reicht Champion-Overrides an das Ensemble durch."""
+        stub_provider.windows = {BTC: make_ohlcv(200)}
+        stub_pipeline.results = {BTC: make_result()}
+        service = _service_with(
+            config,
+            stub_provider,
+            FakeDB(fake_conn),
+            stub_pipeline,
+            status_overrides={"trend": AgentStatus.SHADOW},
+        )
+
+        service.run_cycle()
+
+        agents = stub_pipeline.calls[0]["agents"]
+        statuses = {
+            agent.agent_id: agent._agent.config.status  # type: ignore[attr-defined]
+            for agent in agents
+        }
+        assert statuses["trend"] is AgentStatus.SHADOW
+        assert statuses["mean_reversion"] is AgentStatus.ACTIVE
+        assert statuses["volatility_regime"] is AgentStatus.ACTIVE
+        assert statuses["volume_conviction"] is AgentStatus.ACTIVE
 
     def test_writes_heartbeat_after_cycle(
         self,
