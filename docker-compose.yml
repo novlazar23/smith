@@ -368,6 +368,14 @@ services:
       CANDLE_VENUE: "BINANCE_FUTURES"
       ORCHESTRATOR_INTERVAL_SECONDS: "900"
       ORCHESTRATOR_INSTRUMENTS: "BTC/USDT,ETH/USDT"
+      # Champion-Feed: pro-Agent-OOS-Artefakt des Evaluations-Jobs (backtest-
+      # Service, on-demand). Einmal beim Start geladen; nach Artefakt-Update
+      # neu starten. Datei fehlt = keine Overrides (alle Agenten bleiben ACTIVE).
+      ORCHESTRATOR_CHAMPION_EVALS: "/app/backtest_reports/champion_evals.json"
+    volumes:
+      # read-only: der Orchestrator liest nur das Evaluations-Artefakt; das
+      # Schreiben erfolgt im on-demand-Service `backtest` (apps.champion_evals).
+      - backtest_reports:/app/backtest_reports:ro
     depends_on:
       db-init:
         condition: service_completed_successfully
