@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
-from apps.orchestrator_service.champion_feed import load_status_overrides
+from apps.orchestrator_service.champion_feed import REQUALIFICATION_CONFIG, load_status_overrides
 from numpy.typing import NDArray
 from packages.agents.base import AgentConfig, AgentType, BaseAgent
 from packages.agents.mean_reversion_agent import MeanReversionAgent
@@ -638,7 +638,11 @@ def build_service(
     cfg = config if config is not None else config_from_env()
     status_overrides: Mapping[str, AgentStatus] | None = None
     if cfg.status_overrides_path is not None:
-        status_overrides = load_status_overrides(cfg.status_overrides_path)
+        # Re-Kalibrierung: stabiles OOS (≈ Kalibrierung) bleibt ACTIVE, nur
+        # ein deutlicher OOS-Abfall degradiert auf SHADOW.
+        status_overrides = load_status_overrides(
+            cfg.status_overrides_path, config=REQUALIFICATION_CONFIG
+        )
         logger.info(
             "Champion-Feed: %d Status-Override(s) geladen aus %s",
             len(status_overrides),

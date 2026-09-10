@@ -6,7 +6,11 @@ import json
 from pathlib import Path
 
 import pytest
-from apps.orchestrator_service.champion_feed import load_status_overrides, load_version_pairs
+from apps.orchestrator_service.champion_feed import (
+    REQUALIFICATION_CONFIG,
+    load_status_overrides,
+    load_version_pairs,
+)
 from apps.orchestrator_service.service import OrchestratorServiceConfig, build_service
 from packages.governance.champion_challenger import AgentVersionPair
 from packages.schemas.agent_report import AgentStatus
@@ -95,6 +99,14 @@ class TestLoadStatusOverrides:
         path = _write(tmp_path, {})
         assert load_status_overrides(path) == {}
 
+    def test_requalification_keeps_flat_oos_active(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, {"trend": _good_block(challenger_oos=0.70)})
+        assert load_status_overrides(path, config=REQUALIFICATION_CONFIG) == {"trend": AgentStatus.ACTIVE}
+
+    def test_requalification_degrades_worse_oos(self, tmp_path: Path) -> None:
+        path = _write(tmp_path, {"trend": _good_block(challenger_oos=0.60)})
+        assert load_status_overrides(path, config=REQUALIFICATION_CONFIG) == {"trend": AgentStatus.SHADOW}
+
 
 class TestBuildServiceWiring:
     def test_build_service_loads_overrides_from_path(
@@ -111,3 +123,11 @@ class TestBuildServiceWiring:
         config = OrchestratorServiceConfig(instruments=("BTC/USDT",))
         service = build_service(config=config, provider=stub_provider, db=fake_db)
         assert service._status_overrides is None
+
+    def test_build_service_uses_requalification(
+        self, tmp_path: Path, fake_db: FakeDB, stub_provider: StubProvider
+    ) -> None:
+        path = _write(tmp_path, {"trend": _good_block(challenger_oos=0.70)})
+        config = OrchestratorServiceConfig(instruments=("BTC/USDT",), status_overrides_path=path)
+        service = build_service(config=config, provider=stub_provider, db=fake_db)
+        assert service._status_overrides == {"trend": AgentStatus.ACTIVE}

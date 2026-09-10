@@ -39,8 +39,14 @@ from packages.governance.champion_challenger import (
     AgentOptimizer,
     AgentVersion,
     AgentVersionPair,
+    ChampionChallengerConfig,
 )
 from packages.schemas.agent_report import AgentStatus
+
+# Re-Kalibrierung: champion=Kalibrierungs-, challenger=OOS-Fenster desselben
+# Agenten (keine echten Challenger-Varianten). Negativer Schwellwert erlaubt
+# bis 0,05 OOS-Abfall (Score=Brier), ohne zu degradieren; nur >0,05 → SHADOW.
+REQUALIFICATION_CONFIG = ChampionChallengerConfig(min_oos_improvement=-0.05)
 
 
 def _version(agent_id: str, role: str, raw: Mapping[str, Any]) -> AgentVersion:
@@ -92,16 +98,20 @@ def load_version_pairs(path: Path | str) -> dict[str, AgentVersionPair]:
     return pairs
 
 
-def load_status_overrides(path: Path | str) -> dict[str, AgentStatus]:
+def load_status_overrides(
+    path: Path | str,
+    config: ChampionChallengerConfig | None = None,
+) -> dict[str, AgentStatus]:
     """Leitet aus dem Artefakt die Status-Overrides pro Agent ab.
 
-    Verwendet den ``AgentOptimizer`` mit Standard-Konfiguration: ein Agent
-    läuft ``ACTIVE``, wenn der Challenger die Champion-Version out-of-sample
-    schlägt, stabil bleibt, marginalen Nutzen liefert und keine neuen
-    kritischen Risiken aufweist — sonst ``SHADOW``.
+    ``config=None`` nutzt die Standard-Promotion-Konfiguration (Challenger
+    muss Champion OOS um mindestens ``min_oos_improvement`` schlagen). Für
+    die Re-Kalibrierung des laufenden Ensembles ``REQUALIFICATION_CONFIG``
+    übergeben, damit ein stabiler Agent (OOS ≈ Kalibrierung) ``ACTIVE`` bleibt.
 
     Args:
         path: Pfad zum JSON-Artefakt.
+        config: Champion-Konfiguration für den Optimizer (None = Default).
 
     Returns:
         Mapping ``agent_id`` → empfohlener ``AgentStatus`` (leer bei leerem
@@ -110,6 +120,6 @@ def load_status_overrides(path: Path | str) -> dict[str, AgentStatus]:
     pairs = load_version_pairs(path)
     if not pairs:
         return {}
-    optimizer = AgentOptimizer()
+    optimizer = AgentOptimizer(config)
     decisions = optimizer.optimize_many(pairs)
     return dict(optimizer.status_overrides(decisions))
