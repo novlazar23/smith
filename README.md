@@ -23,6 +23,7 @@ Redpanda-Topic `market_data`. Die App-Services starten erst danach.
 | `news-ingestion` | RSS-Zyklen (30 s), dedupliziert + klassifiziert | PostgreSQL `news_events` |
 | `orchestrator` | Shadow-Pipeline im 15-Min-Zyklus (Agenten → Konsens, **keine Order-Ausführung**) | PostgreSQL `shadow_decisions` |
 | `demo-trader` | Paper-Trading im 5-Min-Zyklus auf echten Kursdaten (ACTIVE-Agenten → Konsens → **virtuelle** Orders, 100.000 $ Startkapital) | PostgreSQL `demo_trades` + `demo_account` |
+| `champion-evals` | Tägliche pro-Agent-OOS-Evaluierung (BTC+ETH, rollierendes 180-Tage-Fenster); erzeugt `champion_evals.json`, aus dem der Orchestrator die Champion/Challenger-Status-Overrides lädt (Hot-Reload bei Artefakt-Update, kein Neustart) | Shared-Volume `backtest_reports` |
 | `alertmanager` | Alert-Ziel von Prometheus auf `127.0.0.1:9093` | — |
 
 Dazu: `postgres`, `clickhouse`, `redis`, `minio`, `redpanda`, `mlflow`,
@@ -788,6 +789,21 @@ Allokation) zu betrachten, nicht als Renditequelle.**
 
 Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
 nie mit `docker compose up`, nur explizit via `docker compose run`.
+
+**Champion-Evaluierung (laufend):** Der Service `champion-evals` (nicht
+on-demand) führt `apps.champion_evals` täglich über BTC+ETH auf einem
+rollierenden 180-Tage-Fenster (5m) aus und schreibt das
+`champion_evals.json`-Artefakt in das Shared-Volume `backtest_reports`.
+Der Orchestrator lädt die daraus abgeleiteten Champion/Challenger-
+Status-Overrides beim Start und — dank Mtime-Check — bei jedem
+Artefakt-Update im laufenden Zyklus neu (kein Neustart nötig). Manueller
+Einzellauf (z. B. anderes Fenster):
+
+```bash
+docker compose --profile on-demand run --rm backtest python -m apps.champion_evals \
+  --instrument BTC/USDT,ETH/USDT --start 2026-03-02 --end 2026-09-02 --resample 5m \
+  --output /app/backtest_reports/champion_evals.json
+```
 
 ### Hinweise
 

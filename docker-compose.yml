@@ -368,9 +368,10 @@ services:
       CANDLE_VENUE: "BINANCE_FUTURES"
       ORCHESTRATOR_INTERVAL_SECONDS: "900"
       ORCHESTRATOR_INSTRUMENTS: "BTC/USDT,ETH/USDT"
-      # Champion-Feed: pro-Agent-OOS-Artefakt des Evaluations-Jobs (backtest-
-      # Service, on-demand). Einmal beim Start geladen; nach Artefakt-Update
-      # neu starten. Datei fehlt = keine Overrides (alle Agenten bleiben ACTIVE).
+      # Champion-Feed: pro-Agent-OOS-Artefakt des Evaluations-Jobs
+      # (Service champion-evals, täglich). Beim Start geladen, bei
+      # Artefakt-Update im laufenden Zyklus neu geladen (Mtime-Check).
+      # Datei fehlt = keine Overrides (alle Agenten bleiben ACTIVE).
       ORCHESTRATOR_CHAMPION_EVALS: "/app/backtest_reports/champion_evals.json"
     volumes:
       # read-only: der Orchestrator liest nur das Evaluations-Artefakt; das
@@ -533,6 +534,58 @@ services:
       - clickhouse_password
       - llm_api_key
       - postgres_password
+    networks:
+      - backend
+
+  # ─── Champion-Evals (täglich) ─────────────────────────────────────────────
+  # Regeneriert das pro-Agent-OOS-Artefakt (champion_evals.json) für BTC+ETH
+  # über ein rollierendes 180-Tage-Fenster; der Orchestrator übernimmt
+  # Änderungen im laufenden Zyklus (Mtime-Check, kein Neustart nötig).
+  champion-evals:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command:
+      - python
+      - -m
+      - apps.champion_evals
+      - --instrument
+      - BTC/USDT,ETH/USDT
+      - --days
+      - "180"
+      - --resample
+      - "5m"
+      - --horizon
+      - "15m"
+      - --horizon-bars
+      - "3"
+      - --evaluate-every
+      - "12"
+      - --min-candles
+      - "120"
+      - --calibration-ratio
+      - "0.5"
+      - --min-samples
+      - "20"
+      - --output
+      - /app/backtest_reports/champion_evals.json
+      - --loop
+      - "86400"
+    restart: unless-stopped
+    healthcheck:
+      disable: true  # Kein API-Endpoint; Lauffehler werden geloggt und am nächsten Tag wiederholt
+    environment:
+      CH_HOST: clickhouse
+      CH_PORT: "8123"
+      CH_DB: trading_events
+      CANDLE_VENUE: "BINANCE_FUTURES"
+    volumes:
+      - backtest_reports:/app/backtest_reports
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    secrets:
+      - clickhouse_password
     networks:
       - backend
 
