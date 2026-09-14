@@ -23,6 +23,16 @@ Kalibrierungs-Hit-Rate; der Gewinner wird atomar in
 ``--output``). ``champion_evals.json`` bleibt dabei unverändert (Champion-
 block = Kalibrierung, Challenger = OOS, ``--min-samples``-Filter).
 
+``--evolve-agents N`` schaltet Stufe 2 an: Der LLM (via
+``LLMClient.from_env``) schlägt bis zu N neue Agenten-Logiken vor;
+Jail + Smoke-Test + OOS-Replay gegen die Zufalls-Basis (1 - Brier)
+entscheiden deterministisch über Zulassung (``--max-evolved``),
+Bestand wird jeden Lauf re-geprüft; zugelassene Agenten landen als
+SHADOW-Mitglieder in ``evolved_agents.json`` (``--agents-output``,
+Default: neben ``--output``), aus dem der Orchestrator das Ensemble
+hot-reloadet. Ohne LLM-Konfiguration läuft der Schritt trotzdem
+(Re-Prüfung des Bestands, keine neuen Kandidaten).
+
 Beispiele (Docker-Compose-Profil on-demand):
     docker compose --profile on-demand run --rm backtest python -m apps.champion_evals \
       --instrument BTC/USDT --start 2026-03-02 --end 2026-09-02 --resample 5m \
@@ -52,6 +62,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from apps.champion_evals.agent_evolve import MAX_EVOLVED_AGENTS
     from apps.champion_evals.evolve import PROMOTION_MARGIN
 
     parser = argparse.ArgumentParser(description="Pro-Agent OOS-Evaluationsdaten aus ClickHouse-Kerzen erzeugen.")
@@ -102,6 +113,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--configs-output",
         default=None,
         help="Zielpfad von champion_configs.json (Default: neben --output)",
+    )
+    parser.add_argument(
+        "--evolve-agents",
+        type=int,
+        default=0,
+        help="Stufe 2: max. N neue Agenten-Logiken vom LLM vorschlagen lassen (0 = aus; Bestand wird trotzdem re-geprüft)",
+    )
+    parser.add_argument(
+        "--llm-model",
+        default=None,
+        help="LLM-Modell für --evolve-agents (Default: SMITH_LLM_MODEL / Env-Default)",
+    )
+    parser.add_argument(
+        "--max-evolved",
+        type=int,
+        default=MAX_EVOLVED_AGENTS,
+        help="Max. zugelassene Evolved Agents im Ensemble (Default 3, nur mit --evolve-agents)",
+    )
+    parser.add_argument(
+        "--agents-output",
+        default=None,
+        help="Zielpfad von evolved_agents.json (Default: neben --output, nur mit --evolve-agents)",
     )
     parser.add_argument("--output", required=True, help="Zielpfad des JSON-Artefakts")
     parser.add_argument("--ch-host", default=None, help="ClickHouse-Host (Env CH_HOST, Default clickhouse)")
@@ -209,9 +242,10 @@ def _run_once(args: argparse.Namespace) -> int:
         logger.error("Keine Kerzen geladen (zu wenige Kerzen oder Fenster zu klein)")
         return 1
 
-    if args.evolve:
-        return _run_evolve(args, series)
-    return _run_eval(args, series)
+    result = _run_evolve(args, series) if args.evolve else _run_eval(args, series)
+    if args.evolve_agents:
+        result = max(result, _run_agent_evolve(args, series))
+    return result
 
 
 def _run_eval(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]) -> int:
@@ -251,6 +285,22 @@ def _run_eval(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]) 
     path = write_artifact(args.output, scored, version=args.version)
     _print_summary(scored, args, path)
     return 0
+
+
+def _run_agent_evolve(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]) -> int:
+    """Stufe 2: LLM schlägt neue Agenten-Logik vor → Sandbox → Replay → Zulassung.
+
+    Fail-soft: ein interner Fehler lässt das Eval-Artefakt unberührt und
+    meldet den Lauf als fehlgeschlagen (Exit-Code), ohne den Hauptlauf zu
+    verwerfen.
+    """
+    from apps.champion_evals.agent_evolve import run_agent_evolution
+
+    try:
+        return run_agent_evolution(args=args, series=series)
+    except Exception:
+        logger.exception("Agent-Evolution fehlgeschlagen (Eval-Artefakt bleibt unverändert)")
+        return 1
 
 
 def _evolve_seed(args: argparse.Namespace) -> int:

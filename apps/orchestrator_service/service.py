@@ -65,6 +65,7 @@ DEFAULT_CANDLE_VENUE = "BINANCE_FUTURES"
 DEFAULT_AGENT_STATUS = "ACTIVE"
 DEFAULT_SHADOW_RANGE_THRESHOLD = 0.001
 DEFAULT_CHAMPION_CONFIGS = "/app/backtest_reports/champion_configs.json"
+DEFAULT_EVOLVED_AGENTS = "/app/backtest_reports/evolved_agents.json"
 HEARTBEAT_PATH = Path("/tmp/orchestrator_heartbeat")
 
 # Konsens-Kalibrierung für das 4-Agenten-Ensemble (gleichgewichtet):
@@ -114,6 +115,7 @@ class OrchestratorServiceConfig:
     log_level: str = "INFO"
     status_overrides_path: Path | None = None
     champion_configs_path: Path | None = None
+    evolved_agents_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -252,6 +254,7 @@ def build_ensemble(
     agent_status: AgentStatus = AgentStatus.SHADOW,
     status_overrides: Mapping[str, AgentStatus] | None = None,
     champion_params: Mapping[str, Mapping[str, float | int]] | None = None,
+    evolved_agents: Mapping[str, str] | None = None,
 ) -> list[ContextualAgent]:
     """Erzeugt frische Agenten für einen Zyklus (kanonisches Ensemble).
 
@@ -285,6 +288,11 @@ def build_ensemble(
             ``champion_configs.json`` (``agent_id`` → Parameter-Dict).
             Benannte Agenten mit nicht-leerem Satz erhalten die evolvierten
             Parameter; alle anderen behalten die Defaults.
+        evolved_agents: Optionale LLM-generierte Agenten-Logik aus
+            ``evolved_agents.json`` (``name`` → Code-String). Jeder
+            wiederbaubare Agent wird als SHADOW-Mitglied angehängt
+            (Promotion zu ACTIVE bleibt ein manueller Schritt); defekter
+            Code wird verworfen, nicht der Zyklus.
     """
     specs: list[tuple[str, AgentType, Callable[..., BaseAgent]]] = [
         ("trend", AgentType.INDICATOR, TrendAgent),
@@ -316,6 +324,21 @@ def build_ensemble(
             agents.append(ContextualAgent(agent_cls(config=config, params=params)))
         else:
             agents.append(ContextualAgent(agent_cls(config=config)))
+    if evolved_agents:
+        # Local Import: die Agent-Sandbox wird nur bei Evolved Agents gebraucht.
+        from apps.champion_evals.agent_sandbox import build_evolved_agent
+
+        for name, code in evolved_agents.items():
+            agent = build_evolved_agent(
+                name,
+                {"code": code},
+                AgentStatus.SHADOW,
+                instrument=instrument,
+                horizon=horizon,
+            )
+            if agent is None:
+                continue
+            agents.append(ContextualAgent(agent))
     return agents
 
 
@@ -384,6 +407,7 @@ class OrchestratorService:
         status_overrides: Mapping[str, AgentStatus] | None = None,
         status_overrides_path: Path | None = None,
         champion_configs_path: Path | None = None,
+        evolved_agents_path: Path | None = None,
     ) -> None:
         """Initialisiert den Service.
 
@@ -404,6 +428,12 @@ class OrchestratorService:
                 ``champion_configs.json``; die evolvierten Parametersätze
                 werden wie die Overrides per Mtime-Check pro Zyklus
                 neu geladen (fail-soft: fehlende/defekte Datei = Defaults).
+            evolved_agents_path: Optionaler Pfad von
+                ``evolved_agents.json`` (Stufe 2); die zugelassenen
+                Agenten-Logiken werden wie die Parametersätze per
+                Mtime-Check pro Zyklus neu geladen und als SHADOW-
+                Mitglieder an das Ensemble angehängt (fail-soft:
+                fehlende/defekte Datei = nur kanonisches Ensemble).
         """
         self._config = config
         self._provider = provider
@@ -426,6 +456,12 @@ class OrchestratorService:
             # bleibt None ("noch nicht geladen") — der erste Zyklus lädt.
             with contextlib.suppress(OSError):
                 self._configs_mtime = champion_configs_path.stat().st_mtime
+        self._evolved_agents_path = evolved_agents_path
+        self._evolved_agents: dict[str, str] | None = None
+        self._evolved_mtime: float | None = None
+        if evolved_agents_path is not None:
+            with contextlib.suppress(OSError):
+                self._evolved_mtime = evolved_agents_path.stat().st_mtime
 
     @property
     def config(self) -> OrchestratorServiceConfig:
@@ -451,6 +487,7 @@ class OrchestratorService:
         )
         self._maybe_reload_status_overrides()
         self._maybe_reload_champion_configs()
+        self._maybe_reload_evolved_agents()
         self._score_due_shadow_decisions()
         persisted = 0
         for instrument in self._config.instruments:
@@ -524,6 +561,38 @@ class OrchestratorService:
         self._configs_mtime = mtime
         logger.info("Champion-Config: %d Parametersatz(e) neu geladen aus %s", len(params), path)
 
+    def _maybe_reload_evolved_agents(self) -> None:
+        """Lädt die zugelassenen Evolved Agents neu, wenn sich das Artefakt geändert hat.
+
+        Mtime-Check pro Zyklus (billig); ``load_evolved_agents`` ist selbst
+        fail-soft (fehlende/defekte Datei = leerer Satz → nur kanonisches
+        Ensemble). ``None`` und ein leeres Mapping bedeuten dasselbe für
+        das Ensemble (keine Evolved Agents).
+        """
+        path = self._evolved_agents_path
+        if path is None:
+            return
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return
+        if mtime == self._evolved_mtime and self._evolved_agents is not None:
+            return
+        try:
+            from apps.champion_evals.agent_sandbox import agents_by_code, load_evolved_agents
+
+            agents = agents_by_code(load_evolved_agents(path))
+        except Exception as exc:
+            logger.warning(
+                "Evolved Agents: Artefakt-Reload fehlgeschlagen (%s) — bisherige Evolved Agents behalten",
+                exc,
+            )
+            self._evolved_mtime = mtime
+            return
+        self._evolved_agents = agents
+        self._evolved_mtime = mtime
+        logger.info("Evolved Agents: %d Agent(en) neu geladen aus %s", len(agents), path)
+
     def _score_due_shadow_decisions(self) -> None:
         """Bewertet fällige Shadow-Entscheidungen (Brier/Calibration).
 
@@ -570,6 +639,7 @@ class OrchestratorService:
             AgentStatus[self._config.agent_status],
             status_overrides=self._status_overrides,
             champion_params=self._champion_params,
+            evolved_agents=self._evolved_agents,
         )
         started = time.perf_counter()
         result = self._pipeline_factory().run(
@@ -649,10 +719,12 @@ def config_from_env() -> OrchestratorServiceConfig:
       ORCHESTRATOR_MIN_CANDLES (30), ORCHESTRATOR_HORIZON (15m),
       ORCHESTRATOR_AGENT_STATUS (ACTIVE), SHADOW_RANGE_THRESHOLD (0.001),
       ORCHESTRATOR_HEARTBEAT (/tmp/orchestrator_heartbeat), LOG_LEVEL (INFO),
-      ORCHESTRATOR_CHAMPION_EVALS (leer = kein Champion-Feed),
-      ORCHESTRATOR_CHAMPION_CONFIGS
-      (/app/backtest_reports/champion_configs.json; leer = keine
-      Champion-Parameter).
+       ORCHESTRATOR_CHAMPION_EVALS (leer = kein Champion-Feed),
+       ORCHESTRATOR_CHAMPION_CONFIGS
+       (/app/backtest_reports/champion_configs.json; leer = keine
+       Champion-Parameter), ORCHESTRATOR_EVOLVED_AGENTS
+       (/app/backtest_reports/evolved_agents.json; leer = keine
+       Evolved Agents).
     """
     raw_instruments = os.environ.get("ORCHESTRATOR_INSTRUMENTS", DEFAULT_INSTRUMENTS)
     try:
@@ -692,6 +764,7 @@ def config_from_env() -> OrchestratorServiceConfig:
         shadow_range_threshold = DEFAULT_SHADOW_RANGE_THRESHOLD
     raw_champion_evals = os.environ.get("ORCHESTRATOR_CHAMPION_EVALS", "").strip()
     raw_champion_configs = os.environ.get("ORCHESTRATOR_CHAMPION_CONFIGS", DEFAULT_CHAMPION_CONFIGS).strip()
+    raw_evolved_agents = os.environ.get("ORCHESTRATOR_EVOLVED_AGENTS", DEFAULT_EVOLVED_AGENTS).strip()
     return OrchestratorServiceConfig(
         interval_seconds=interval,
         instruments=parse_instruments(raw_instruments),
@@ -704,6 +777,7 @@ def config_from_env() -> OrchestratorServiceConfig:
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         status_overrides_path=Path(raw_champion_evals) if raw_champion_evals else None,
         champion_configs_path=Path(raw_champion_configs) if raw_champion_configs else None,
+        evolved_agents_path=Path(raw_evolved_agents) if raw_evolved_agents else None,
     )
 
 
@@ -756,6 +830,10 @@ def build_service(
     per Mtime-Check pro Zyklus, fail-soft: fehlt die Datei beim Start,
     fahren alle Agenten mit Defaults, bis der erste Evolutions-Lauf
     das Artefakt schreibt.
+
+    ``config.evolved_agents_path`` (Stufe 2) macht dasselbe für die
+    zugelassenen Agenten-Logiken (``evolved_agents.json``): Hot-Reload
+    per Mtime-Check, fail-soft, Mitgliederstatus immer SHADOW.
     """
     cfg = config if config is not None else config_from_env()
     status_overrides: Mapping[str, AgentStatus] | None = None
@@ -784,6 +862,7 @@ def build_service(
         status_overrides=status_overrides,
         status_overrides_path=cfg.status_overrides_path,
         champion_configs_path=cfg.champion_configs_path,
+        evolved_agents_path=cfg.evolved_agents_path,
     )
 
 

@@ -378,6 +378,11 @@ services:
       # Zyklus geladen, danach per Mtime-Check bei jedem Update (Hot-Reload).
       # Datei fehlt/defekt = Agenten-Defaults (fail-soft).
       ORCHESTRATOR_CHAMPION_CONFIGS: "/app/backtest_reports/champion_configs.json"
+      # Evolierte Agenten-Logik (evolved_agents.json, von champion-evals mit
+      # --evolve-agents geschrieben). Beim Start vorhanden = wird im ersten
+      # Zyklus geladen, danach per Mtime-Check bei jedem Update (Hot-Reload).
+      # Datei fehlt/defekt = keine Evolved Agents (fail-soft).
+      ORCHESTRATOR_EVOLVED_AGENTS: "/app/backtest_reports/evolved_agents.json"
     volumes:
       # read-only: der Orchestrator liest nur das Evaluations-Artefakt; das
       # Schreiben erfolgt im on-demand-Service `backtest` (apps.champion_evals).
@@ -587,6 +592,8 @@ services:
       - "20"
       - --refresh-data
       - --evolve
+      - --evolve-agents
+      - "3"
       - --output
       - /app/backtest_reports/champion_evals.json
       - --loop
@@ -599,6 +606,10 @@ services:
       CH_PORT: "8123"
       CH_DB: trading_events
       CANDLE_VENUE: "BINANCE_FUTURES"
+      # LLM-Endpoint für Stufe 2 (Agenten-Logik-Evolution, --evolve-agents);
+      # API-Key als Docker-Secret unter /run/secrets/llm_api_key
+      LITELLM_BASE_URL: "https://ymir-api.ifak.eu/v1"
+      SMITH_LLM_MODEL: "local-fast"
     volumes:
       - backtest_reports:/app/backtest_reports
     depends_on:
@@ -606,6 +617,7 @@ services:
         condition: service_healthy
     secrets:
       - clickhouse_password
+      - llm_api_key
     networks:
       - backend
 

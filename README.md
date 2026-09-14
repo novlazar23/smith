@@ -821,9 +821,34 @@ Increment bei Änderung); dieser wird von Orchestrator (Hot-Reload per
 Mtime-Check) und Demo-Trader eingelesen und für deren Ensembles genutzt —
 die Hyperparameter der vier Agenten (Entscheidungs-Schwellen,
 EMA/RSI/BB-Perioden, Kalibrierungs-Gewichte) evolviert damit im
-laufenden System. Der Seed ist Default = UTC-Tag, also jeden Tag neue
-Varianten (tageskonstant reproduzierbar). Fehlende/defekte
-`champion_configs.json` = Agenten-Defaults (Fail-Soft, kein Crash).
+ laufenden System. Der Seed ist Default = UTC-Tag, also jeden Tag neue
+ Varianten (tageskonstant reproduzierbar). Fehlende/defekte
+ `champion_configs.json` = Agenten-Defaults (Fail-Soft, kein Crash).
+
+**Champion-Logik-Evolution (`--evolve-agents N`):** Daneben schlägt der
+LLM (via `LLMClient`/LiteLLM, `LITELLM_BASE_URL`/`SMITH_LLM_MODEL`,
+API-Key als Secret) bis zu N neue Agenten-Logiken als Code vor: eine
+Funktion `predict(open, high, low, close, volume) -> (p_up, p_down,
+p_range)`. Jede Vorschlags-Logik läuft durch eine dreischichtige
+Sandbox (statischer AST-Jail: nur `numpy`/`math`/`typing`-Imports, nur
+`predict`, keine gefährlichen Aufrufe; isolierte Ausführung mit
+einschränkter Builtin- und Import-Allowlist; Smoke-Test auf
+synthetischen Fenstern mit Laufzeit-Limit). Die Zulassung entscheiden
+deterministische, preregistrierte Gates (der LLM kennt sie nicht):
+OOS-Score (1 − Brier) ≥ Zufalls-Basis (uniformer 3-Klassen-Prädiktor
+= 1/3) + Margin 0,02, OOS-Hit-Rate nicht mehr als 0,05 unter der
+Kalibrierungs-Hit-Rate (Overfitting-Guard) und positiver
+LOO-Marginal-Beitrag gegenüber dem 4er-Basis-Ensemble (der Agent muss
+das Ensemble messbar besser machen, nicht nur redundant sein).
+Bereits zugelassene Agenten werden jeden Lauf re-geprüft (unter der
+Zufalls-Basis oder ohne LOO-Beitrag → entfernt); maximal 3 Agenten
+(im Deckelfall der höchste OOS-Score bleibt). Zugelassene Agenten
+landen atomar in `evolved_agents.json` (Code, Claim, Version, Score);
+der Orchestrator hot-reloadet die Datei und hängt die Agenten dem
+Ensemble als `SHADOW`-Mitglieder an (Gewicht 0,5) — die Promotion zu
+`ACTIVE` bleibt ein manueller Schritt. Ohne LLM-Konfiguration läuft
+der Schritt trotzdem (Bestand wird re-geprüft, nur keine neuen
+Vorschläge) — Fail-Soft wie Stufe 1.
 
 ### Hinweise
 
