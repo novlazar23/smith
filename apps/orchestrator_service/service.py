@@ -27,9 +27,10 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
+from apps.champion_evals.evolve import load_champion_params
 from apps.orchestrator_service.champion_feed import REQUALIFICATION_CONFIG, load_status_overrides
 from numpy.typing import NDArray
-from packages.agents.base import AgentConfig, AgentType, BaseAgent
+from packages.agents.base import AgentConfig, AgentType, BaseAgent, BaseParams
 from packages.agents.mean_reversion_agent import MeanReversionAgent
 from packages.agents.trend_agent import TrendAgent
 from packages.agents.volatility_regime_agent import VolatilityRegimeAgent
@@ -63,6 +64,7 @@ DEFAULT_HORIZON = "15m"
 DEFAULT_CANDLE_VENUE = "BINANCE_FUTURES"
 DEFAULT_AGENT_STATUS = "ACTIVE"
 DEFAULT_SHADOW_RANGE_THRESHOLD = 0.001
+DEFAULT_CHAMPION_CONFIGS = "/app/backtest_reports/champion_configs.json"
 HEARTBEAT_PATH = Path("/tmp/orchestrator_heartbeat")
 
 # Konsens-Kalibrierung für das 4-Agenten-Ensemble (gleichgewichtet):
@@ -111,6 +113,7 @@ class OrchestratorServiceConfig:
     heartbeat_path: Path = HEARTBEAT_PATH
     log_level: str = "INFO"
     status_overrides_path: Path | None = None
+    champion_configs_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -248,6 +251,7 @@ def build_ensemble(
     horizon: str,
     agent_status: AgentStatus = AgentStatus.SHADOW,
     status_overrides: Mapping[str, AgentStatus] | None = None,
+    champion_params: Mapping[str, Mapping[str, float | int]] | None = None,
 ) -> list[ContextualAgent]:
     """Erzeugt frische Agenten für einen Zyklus (kanonisches Ensemble).
 
@@ -277,13 +281,25 @@ def build_ensemble(
             konfigurierten Status (Default ``ACTIVE`` = Realbetrieb).
         status_overrides: Optionale Champion-Challenger-Overrides pro
             ``agent_id``; nicht benannte Agenten behalten ``agent_status``.
+        champion_params: Optionale Champion-Parametersätze aus
+            ``champion_configs.json`` (``agent_id`` → Parameter-Dict).
+            Benannte Agenten mit nicht-leerem Satz erhalten die evolvierten
+            Parameter; alle anderen behalten die Defaults.
     """
-    specs: list[tuple[str, AgentType, type[BaseAgent]]] = [
+    specs: list[tuple[str, AgentType, Callable[..., BaseAgent]]] = [
         ("trend", AgentType.INDICATOR, TrendAgent),
         ("mean_reversion", AgentType.INDICATOR, MeanReversionAgent),
         ("volatility_regime", AgentType.REGIME, VolatilityRegimeAgent),
         ("volume_conviction", AgentType.ORDERFLOW, VolumeConvictionAgent),
     ]
+    param_classes: Mapping[str, type[BaseParams]] | None = None
+    if champion_params:
+        # Local Import: Parameter-Registry zieht das Agent-Subsystem nach und
+        # wird nur bei Champion-Parameter-Injection gebraucht (kein Import-
+        # Zeit-Kosten auf dem Default-Pfad).
+        from apps.champion_evals.agent_params import PARAM_CLASSES
+
+        param_classes = PARAM_CLASSES
     agents: list[ContextualAgent] = []
     for agent_id, agent_type, agent_cls in specs:
         status = status_overrides.get(agent_id, agent_status) if status_overrides else agent_status
@@ -294,7 +310,12 @@ def build_ensemble(
             horizon=horizon,
             status=status,
         )
-        agents.append(ContextualAgent(agent_cls(config=config)))
+        raw_params = champion_params.get(agent_id) if champion_params is not None else None
+        if param_classes is not None and raw_params:
+            params = param_classes[agent_id].from_dict(dict(raw_params))
+            agents.append(ContextualAgent(agent_cls(config=config, params=params)))
+        else:
+            agents.append(ContextualAgent(agent_cls(config=config)))
     return agents
 
 
@@ -362,6 +383,7 @@ class OrchestratorService:
         pipeline_factory: Callable[[], OrchestratorPipeline] | None = None,
         status_overrides: Mapping[str, AgentStatus] | None = None,
         status_overrides_path: Path | None = None,
+        champion_configs_path: Path | None = None,
     ) -> None:
         """Initialisiert den Service.
 
@@ -378,6 +400,10 @@ class OrchestratorService:
             status_overrides_path: Optionaler Pfad des Evaluations-Artefakts;
                 bei Mtime-Änderung lädt der Service die Overrides pro Zyklus
                 neu (Hot-Reload statt Neustart nach Artefakt-Update).
+            champion_configs_path: Optionaler Pfad von
+                ``champion_configs.json``; die evolvierten Parametersätze
+                werden wie die Overrides per Mtime-Check pro Zyklus
+                neu geladen (fail-soft: fehlende/defekte Datei = Defaults).
         """
         self._config = config
         self._provider = provider
@@ -391,6 +417,15 @@ class OrchestratorService:
             # mtime bleibt None, der erste Zyklus übernimmt das Artefakt.
             with contextlib.suppress(OSError):
                 self._overrides_mtime = status_overrides_path.stat().st_mtime
+        self._champion_configs_path = champion_configs_path
+        self._champion_params: dict[str, dict[str, float | int]] | None = None
+        self._configs_mtime: float | None = None
+        if champion_configs_path is not None:
+            # Wie bei den Status-Overrides: mtime vorab abfragen, damit ein
+            # unverändertes Artefakt keine Reloads auslöst. ``_champion_params``
+            # bleibt None ("noch nicht geladen") — der erste Zyklus lädt.
+            with contextlib.suppress(OSError):
+                self._configs_mtime = champion_configs_path.stat().st_mtime
 
     @property
     def config(self) -> OrchestratorServiceConfig:
@@ -415,6 +450,7 @@ class OrchestratorService:
             live_enabled,
         )
         self._maybe_reload_status_overrides()
+        self._maybe_reload_champion_configs()
         self._score_due_shadow_decisions()
         persisted = 0
         for instrument in self._config.instruments:
@@ -456,6 +492,37 @@ class OrchestratorService:
         self._status_overrides = overrides
         self._overrides_mtime = mtime
         logger.info("Champion-Feed: %d Status-Override(s) neu geladen aus %s", len(overrides), path)
+
+    def _maybe_reload_champion_configs(self) -> None:
+        """Lädt die Champion-Parametersätze neu, wenn sich das Artefakt geändert hat.
+
+        Mtime-Check pro Zyklus (billig); solange sich nichts geändert hat,
+        bleibt der geladene Parametersatz unverändert. Ein Reload-Fehler
+        lässt die letzten guten Parametersätze stehen. ``load_champion_params``
+        ist selbst fail-soft: fehlende oder defekte Datei = leerer Satz
+        (alle Agenten fahren mit Defaults).
+        """
+        path = self._champion_configs_path
+        if path is None:
+            return
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return  # Datei fehlt (z. B. vor dem ersten Evolutions-Lauf)
+        if mtime == self._configs_mtime and self._champion_params is not None:
+            return
+        try:
+            params = load_champion_params(path)
+        except Exception as exc:
+            logger.warning(
+                "Champion-Config: Artefakt-Reload fehlgeschlagen (%s) — bisherige Parametersätze behalten",
+                exc,
+            )
+            self._configs_mtime = mtime
+            return
+        self._champion_params = params
+        self._configs_mtime = mtime
+        logger.info("Champion-Config: %d Parametersatz(e) neu geladen aus %s", len(params), path)
 
     def _score_due_shadow_decisions(self) -> None:
         """Bewertet fällige Shadow-Entscheidungen (Brier/Calibration).
@@ -502,6 +569,7 @@ class OrchestratorService:
             self._config.horizon,
             AgentStatus[self._config.agent_status],
             status_overrides=self._status_overrides,
+            champion_params=self._champion_params,
         )
         started = time.perf_counter()
         result = self._pipeline_factory().run(
@@ -581,7 +649,10 @@ def config_from_env() -> OrchestratorServiceConfig:
       ORCHESTRATOR_MIN_CANDLES (30), ORCHESTRATOR_HORIZON (15m),
       ORCHESTRATOR_AGENT_STATUS (ACTIVE), SHADOW_RANGE_THRESHOLD (0.001),
       ORCHESTRATOR_HEARTBEAT (/tmp/orchestrator_heartbeat), LOG_LEVEL (INFO),
-      ORCHESTRATOR_CHAMPION_EVALS (leer = kein Champion-Feed).
+      ORCHESTRATOR_CHAMPION_EVALS (leer = kein Champion-Feed),
+      ORCHESTRATOR_CHAMPION_CONFIGS
+      (/app/backtest_reports/champion_configs.json; leer = keine
+      Champion-Parameter).
     """
     raw_instruments = os.environ.get("ORCHESTRATOR_INSTRUMENTS", DEFAULT_INSTRUMENTS)
     try:
@@ -620,6 +691,7 @@ def config_from_env() -> OrchestratorServiceConfig:
         )
         shadow_range_threshold = DEFAULT_SHADOW_RANGE_THRESHOLD
     raw_champion_evals = os.environ.get("ORCHESTRATOR_CHAMPION_EVALS", "").strip()
+    raw_champion_configs = os.environ.get("ORCHESTRATOR_CHAMPION_CONFIGS", DEFAULT_CHAMPION_CONFIGS).strip()
     return OrchestratorServiceConfig(
         interval_seconds=interval,
         instruments=parse_instruments(raw_instruments),
@@ -631,6 +703,7 @@ def config_from_env() -> OrchestratorServiceConfig:
         heartbeat_path=heartbeat,
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         status_overrides_path=Path(raw_champion_evals) if raw_champion_evals else None,
+        champion_configs_path=Path(raw_champion_configs) if raw_champion_configs else None,
     )
 
 
@@ -677,6 +750,12 @@ def build_service(
     Zyklus bei Artefakt-Änderung neu geladen (Mtime-Check in ``run_cycle``).
     Fehlt das Artefakt beim Start, fährt der Service ohne Overrides fort
     (fail-soft) und übernimmt es beim ersten Zyklus nach dem Erscheinen.
+
+    ``config.champion_configs_path`` überträgt die evolvierten
+    Parametersätze (``champion_configs.json``) an das Ensemble — ebenfalls
+    per Mtime-Check pro Zyklus, fail-soft: fehlt die Datei beim Start,
+    fahren alle Agenten mit Defaults, bis der erste Evolutions-Lauf
+    das Artefakt schreibt.
     """
     cfg = config if config is not None else config_from_env()
     status_overrides: Mapping[str, AgentStatus] | None = None
@@ -704,6 +783,7 @@ def build_service(
         db if db is not None else build_db_engine(),
         status_overrides=status_overrides,
         status_overrides_path=cfg.status_overrides_path,
+        champion_configs_path=cfg.champion_configs_path,
     )
 
 

@@ -23,11 +23,45 @@ import numpy as np
 from numpy.typing import NDArray
 from packages.schemas.agent_report import AgentReport
 
-from .base import AgentConfig, AgentType, BaseAgent
+from .base import AgentConfig, AgentType, BaseAgent, BaseParams, ParamSpace
 
 REQUIRED_KEYS = frozenset({"open", "high", "low", "close", "volume"})
 
 type ReversionDirection = Literal["reversion_up", "reversion_down", "range"]
+
+
+@dataclass(frozen=True, slots=True)
+class MeanReversionParams(BaseParams):
+    """Evolvierbare Mean-Reversion-Parameter (Defaults = bisherige Konstanten).
+
+    Entscheidungsknobs (SMA/Std- und RSI-Lookbacks, z- und RSI-Schwellen)
+    plus Kalibrierung (Basis, Extremity-/RSI-Gewichte, Gewinner-Deckel);
+    ``MIN_BARS``, Evidenz-Texte und der 0,65-Boden bleiben fest.
+    """
+
+    sma_period: int = 50
+    std_window: int = 100
+    rsi_period: int = 14
+    z_threshold: float = 2.0
+    rsi_oversold: float = 45.0
+    rsi_overbought: float = 55.0
+    strength_base: float = 0.62
+    strength_z_weight: float = 0.16
+    strength_rsi_weight: float = 0.07
+    p_cap: float = 0.85
+
+    PARAM_SPACE: ClassVar[ParamSpace] = {
+        "sma_period": ("int", 20, 100, 1),
+        "std_window": ("int", 50, 200, 1),
+        "rsi_period": ("int", 5, 30, 1),
+        "z_threshold": ("float", 1.0, 3.5, 0.1),
+        "rsi_oversold": ("float", 30.0, 50.0, 1.0),
+        "rsi_overbought": ("float", 50.0, 70.0, 1.0),
+        "strength_base": ("float", 0.50, 0.75, 0.01),
+        "strength_z_weight": ("float", 0.0, 0.30, 0.01),
+        "strength_rsi_weight": ("float", 0.0, 0.20, 0.005),
+        "p_cap": ("float", 0.70, 0.95, 0.01),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,20 +78,17 @@ class MeanReversionAgent(BaseAgent):
     """Mean-Reversion-Agent — Überdehnung (z-Score, RSI) und Reversionspotenzial."""
 
     MIN_BARS: int = 100
-    SMA_PERIOD: int = 50
-    STD_WINDOW: int = 100
-    RSI_PERIOD: int = 14
-    Z_THRESHOLD: float = 2.0
-    RSI_OVERSOLD: float = 45.0
-    RSI_OVERBOUGHT: float = 55.0
 
-    def __init__(self, config: AgentConfig | None = None) -> None:
+    def __init__(
+        self, config: AgentConfig | None = None, params: MeanReversionParams | None = None
+    ) -> None:
         if config is None:
             config = AgentConfig(
                 agent_id="mean_reversion",
                 agent_type=AgentType.INDICATOR,
             )
         super().__init__(config)
+        self._params = params if params is not None else MeanReversionParams()
 
     def analyze(self, data: dict[str, NDArray[np.float64]]) -> AgentReport:
         """Analysiert OHLCV-Daten auf Überdehnung und Reversionspotenzial.
@@ -127,11 +158,12 @@ class MeanReversionAgent(BaseAgent):
 
     def _compute_state(self, close: NDArray[np.float64]) -> ReversionState:
         """Berechnet z-Score, RSI14 und Prozentabstand für die aktuelle Kerze."""
-        sma50 = float(close[-self.SMA_PERIOD :].mean())
-        std_window = float(close[-self.STD_WINDOW :].std())
+        p = self._params
+        sma50 = float(close[-p.sma_period :].mean())
+        std_window = float(close[-p.std_window :].std())
         std_safe = std_window if std_window > 1e-12 else 1e-12
         z = float((close[-1] - sma50) / std_safe)
-        rsi = self._rsi(close, self.RSI_PERIOD)
+        rsi = self._rsi(close, p.rsi_period)
         sma_safe = sma50 if abs(sma50) > 1e-12 else 1e-12
         pct_distance = float((close[-1] - sma50) / sma_safe)
         return ReversionState(
@@ -151,9 +183,10 @@ class MeanReversionAgent(BaseAgent):
         positiv ABER RSI niedrig) ist ein laufender Trend, keine
         Reversion → „range".
         """
-        if state.z <= -self.Z_THRESHOLD and state.rsi < self.RSI_OVERSOLD:
+        p = self._params
+        if state.z <= -p.z_threshold and state.rsi < p.rsi_oversold:
             return "reversion_up"
-        if state.z >= self.Z_THRESHOLD and state.rsi > self.RSI_OVERBOUGHT:
+        if state.z >= p.z_threshold and state.rsi > p.rsi_overbought:
             return "reversion_down"
         return "range"
 
@@ -166,13 +199,14 @@ class MeanReversionAgent(BaseAgent):
         Bestätigung, desto höher die richtungsweisende Wahrscheinlichkeit
         (Deckel bei 0,85); „range" bleibt immer >= 0,5. Summe exakt 1,0 (± 1e-6).
         """
+        p = self._params
         match direction:
             case "reversion_up":
                 return self._directional_probabilities(
                     "up",
                     self._reversion_strength(
                         -state.z,
-                        self.RSI_OVERSOLD - state.rsi,
+                        p.rsi_oversold - state.rsi,
                     ),
                 )
             case "reversion_down":
@@ -180,23 +214,23 @@ class MeanReversionAgent(BaseAgent):
                     "down",
                     self._reversion_strength(
                         state.z,
-                        state.rsi - self.RSI_OVERBOUGHT,
+                        state.rsi - p.rsi_overbought,
                     ),
                 )
             case "range":
                 return self._range_probabilities(state)
 
-    @staticmethod
-    def _reversion_strength(extremity: float, confirmation: float) -> float:
-        """Richtungs-Wahrscheinlichkeit einer Reversion (monoton, [0,65, 0,85]).
+    def _reversion_strength(self, extremity: float, confirmation: float) -> float:
+        """Richtungs-Wahrscheinlichkeit einer Reversion (monoton, [0,65, p_cap]).
 
         `extremity`: |z| oberhalb des Schwellwerts; `confirmation`: RSI-
         Abstand in die Reversionsrichtung (beide trend-seitig positiv).
         """
-        z_score = min(max(extremity - 2.0, 0.0), 2.0)
+        p = self._params
+        z_score = min(max(extremity - p.z_threshold, 0.0), 2.0)
         rsi_score = min(max(confirmation, 0.0), 25.0) / 25.0
-        raw = 0.62 + 0.16 * (z_score / 2.0) + 0.07 * rsi_score
-        return float(min(0.85, max(0.65, raw)))
+        raw = p.strength_base + p.strength_z_weight * (z_score / 2.0) + p.strength_rsi_weight * rsi_score
+        return float(min(p.p_cap, max(0.65, raw)))
 
     def _directional_probabilities(
         self, winner: Literal["up", "down"], p_winner: float
@@ -322,7 +356,7 @@ class MeanReversionAgent(BaseAgent):
             self._make_invalidations(
                 condition="RSI14 crosses the reversion-confirmation band against the signal",
                 indicator="rsi14",
-                threshold=self.RSI_OVERSOLD if direction == "reversion_up" else self.RSI_OVERBOUGHT,
+                threshold=self._params.rsi_oversold if direction == "reversion_up" else self._params.rsi_overbought,
                 direction="above" if direction == "reversion_up" else "below",
             ),
             self._make_invalidations(

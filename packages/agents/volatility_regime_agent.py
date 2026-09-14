@@ -26,11 +26,46 @@ import numpy as np
 from numpy.typing import NDArray
 from packages.schemas.agent_report import AgentReport
 
-from .base import AgentConfig, AgentType, BaseAgent
+from .base import AgentConfig, AgentType, BaseAgent, BaseParams, ParamSpace
 
 REQUIRED_KEYS = frozenset({"open", "high", "low", "close", "volume"})
 
 type RegimeDirection = Literal["up", "down", "range"]
+
+
+@dataclass(frozen=True, slots=True)
+class VolatilityRegimeParams(BaseParams):
+    """Evolvierbare Volatilitäts-Regime-Parameter (Defaults = bisherige Konstanten).
+
+    Entscheidungsknobs (Band-Breite-/Baseline-/Pre-Fenster, Squeeze- und
+    Positions-Schwellen) plus Kalibrierung (Basis, Squeeze-/Edge-Gewichte,
+    Gewinner-Deckel). ATR-Periode (nur Bericht) und Expansions-Schwelle
+    (nur Evidenz-Text) bleiben fest.
+    """
+
+    bb_period: int = 20
+    baseline_bars: int = 150
+    pre_window: int = 20
+    pre_offset: int = 10
+    squeeze_threshold: float = 0.5
+    position_edge: float = 0.8
+    strength_base: float = 0.63
+    strength_squeeze_weight: float = 0.17
+    strength_edge_weight: float = 0.05
+    p_cap: float = 0.85
+
+    PARAM_SPACE: ClassVar[ParamSpace] = {
+        "bb_period": ("int", 10, 50, 1),
+        "baseline_bars": ("int", 100, 200, 1),
+        "pre_window": ("int", 10, 50, 1),
+        "pre_offset": ("int", 5, 25, 1),
+        "squeeze_threshold": ("float", 0.2, 0.9, 0.05),
+        "position_edge": ("float", 0.6, 0.95, 0.05),
+        "strength_base": ("float", 0.50, 0.75, 0.01),
+        "strength_squeeze_weight": ("float", 0.0, 0.30, 0.01),
+        "strength_edge_weight": ("float", 0.0, 0.20, 0.005),
+        "p_cap": ("float", 0.70, 0.95, 0.01),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,21 +91,17 @@ class VolatilityRegimeAgent(BaseAgent):
     """Volatility-Regime-Agent — Squeeze-Breakouts und Vol-Expansion gegen Baseline."""
 
     MIN_BARS: int = 150
-    BB_PERIOD: int = 20
-    ATR_PERIOD: int = 14
-    SQUEEZE_THRESHOLD: float = 0.5
-    EXPANSION_THRESHOLD: float = 1.5
-    POSITION_EDGE: float = 0.8
-    PRE_WINDOW: int = 20
-    PRE_OFFSET: int = 10
 
-    def __init__(self, config: AgentConfig | None = None) -> None:
+    def __init__(
+        self, config: AgentConfig | None = None, params: VolatilityRegimeParams | None = None
+    ) -> None:
         if config is None:
             config = AgentConfig(
                 agent_id="volatility_regime",
                 agent_type=AgentType.REGIME,
             )
         super().__init__(config)
+        self._params = params if params is not None else VolatilityRegimeParams()
 
     def analyze(self, data: dict[str, NDArray[np.float64]]) -> AgentReport:
         """Analysiert OHLCV-Daten auf das aktuelle Volatilitätsregime.
@@ -134,11 +165,12 @@ class VolatilityRegimeAgent(BaseAgent):
         nur Kerzen <= ending (kein Lookahead).
         """
         n = len(close)
-        start = max(self.BB_PERIOD - 1, n - 150)
+        p = self._params
+        start = max(p.bb_period - 1, n - p.baseline_bars)
         endings = np.arange(start, n, dtype=np.int64)
         bw = np.empty_like(endings, dtype=np.float64)
         for j, e in enumerate(endings):
-            window = close[e - self.BB_PERIOD + 1 : e + 1]
+            window = close[e - p.bb_period + 1 : e + 1]
             center = float(window.mean())
             spread = float(window.std())
             center_safe = center if abs(center) > 1e-12 else 1e-12
@@ -160,7 +192,7 @@ class VolatilityRegimeAgent(BaseAgent):
                 np.abs(low[1:] - prev_close),
             ),
         )
-        return float(true_range[-self.ATR_PERIOD :].mean())
+        return float(true_range[-14:].mean())
 
     def _compute_state(
         self,
@@ -170,11 +202,12 @@ class VolatilityRegimeAgent(BaseAgent):
     ) -> RegimeState:
         """Berechnet Squeeze-, Expansions- und Positions-Indikatoren."""
         n = len(close)
+        p = self._params
         bw, endings = self._bandwidth_series(close)
-        hist = bw[endings <= n - 1 - self.PRE_WINDOW - self.PRE_OFFSET]
+        hist = bw[endings <= n - 1 - p.pre_window - p.pre_offset]
         pre = bw[
-            (endings > n - 1 - self.PRE_WINDOW - self.PRE_OFFSET)
-            & (endings <= n - 1 - self.PRE_OFFSET)
+            (endings > n - 1 - p.pre_window - p.pre_offset)
+            & (endings <= n - 1 - p.pre_offset)
         ]
         now = bw[endings == n - 1]
         hist_mean = float(hist.mean()) if len(hist) else 1e-12
@@ -183,8 +216,8 @@ class VolatilityRegimeAgent(BaseAgent):
         squeeze_ratio = pre_mean / hist_safe
         expansion_ratio = float(now[0]) / hist_safe if len(now) else 1.0
 
-        low20 = float(low[-self.BB_PERIOD :].min())
-        high20 = float(high[-self.BB_PERIOD :].max())
+        low20 = float(low[-p.bb_period :].min())
+        high20 = float(high[-p.bb_period :].max())
         bar_range = high20 - low20
         position20 = (
             0.5
@@ -209,10 +242,11 @@ class VolatilityRegimeAgent(BaseAgent):
         kurz vor dem aktuellen Zehntel war <= 0,5x der Baseline UND der
         Schlusskurs steht an der jeweiligen 20-Bar-Grenze (>= 0,8 / <= 0,2).
         """
-        if state.squeeze_ratio <= self.SQUEEZE_THRESHOLD:
-            if state.position20 >= self.POSITION_EDGE:
+        p = self._params
+        if state.squeeze_ratio <= p.squeeze_threshold:
+            if state.position20 >= p.position_edge:
                 return "up"
-            if state.position20 <= 1.0 - self.POSITION_EDGE:
+            if state.position20 <= 1.0 - p.position_edge:
                 return "down"
         return "range"
 
@@ -225,14 +259,15 @@ class VolatilityRegimeAgent(BaseAgent):
         desto höher die richtungsweisende Wahrscheinlichkeit (Deckel 0,85);
         „range" bleibt immer >= 0,5. Summe exakt 1,0 (± 1e-6).
         """
+        p = self._params
         match direction:
             case "up":
                 return self._directional_probabilities(
                     "up",
                     self._breakout_strength(
                         state.squeeze_ratio,
-                        (state.position20 - self.POSITION_EDGE)
-                        / (1.0 - self.POSITION_EDGE),
+                        (state.position20 - p.position_edge)
+                        / (1.0 - p.position_edge),
                     ),
                 )
             case "down":
@@ -240,8 +275,8 @@ class VolatilityRegimeAgent(BaseAgent):
                     "down",
                     self._breakout_strength(
                         state.squeeze_ratio,
-                        ((1.0 - self.POSITION_EDGE) - state.position20)
-                        / (1.0 - self.POSITION_EDGE),
+                        ((1.0 - p.position_edge) - state.position20)
+                        / (1.0 - p.position_edge),
                     ),
                 )
             case "range":
@@ -250,15 +285,17 @@ class VolatilityRegimeAgent(BaseAgent):
     def _breakout_strength(self, squeeze_ratio: float, edge: float) -> float:
         """Richtungs-Wahrscheinlichkeit eines Squeeze-Ausbruchs (monoton).
 
-        `squeeze_ratio` <= 0,5 (eng = stark), `edge` in [0, 1] (0 = an der
-        Kante, 1 = Mitte des 20-Bar-Bands) — beide sind im Breakout-Fall
-        bereits nur in der richtungsbestimmten Kombination erreichbar.
+        `squeeze_ratio` <= squeeze_threshold (eng = stark), `edge` in [0, 1]
+        (0 = an der Kante, 1 = Mitte des 20-Bar-Bands) — beide sind im
+        Breakout-Fall bereits nur in der richtungsbestimmten Kombination
+        erreichbar.
         """
-        squeeze_score = max(0.0, min(1.0, (self.SQUEEZE_THRESHOLD - squeeze_ratio)
-                                     / self.SQUEEZE_THRESHOLD))
+        p = self._params
+        squeeze_score = max(0.0, min(1.0, (p.squeeze_threshold - squeeze_ratio)
+                                       / p.squeeze_threshold))
         edge_score = max(0.0, min(1.0, edge))
-        raw = 0.63 + 0.17 * squeeze_score + 0.05 * edge_score
-        return float(min(0.85, max(0.65, raw)))
+        raw = p.strength_base + p.strength_squeeze_weight * squeeze_score + p.strength_edge_weight * edge_score
+        return float(min(p.p_cap, max(0.65, raw)))
 
     def _directional_probabilities(
         self, winner: Literal["up", "down"], p_winner: float
@@ -312,18 +349,19 @@ class VolatilityRegimeAgent(BaseAgent):
 
     def _build_evidence(self, state: RegimeState) -> list:
         """Evidenz — Indikatorsnapshot der aktuellen Kerze, nur Scores, keine Behauptungen."""
+        p = self._params
         return [
             self._make_evidence(
                 "squeeze_ratio",
                 f"pre-window bandwidth vs baseline: {state.squeeze_ratio:.3f} "
-                f"(<= {self.SQUEEZE_THRESHOLD} = squeeze)",
-                "negative" if state.squeeze_ratio <= self.SQUEEZE_THRESHOLD else "neutral",
+                f"(<= {p.squeeze_threshold} = squeeze)",
+                "negative" if state.squeeze_ratio <= p.squeeze_threshold else "neutral",
                 min(abs(state.squeeze_ratio - 1.0), 1.0),
             ),
             self._make_evidence(
                 "expansion_ratio",
                 f"current bandwidth vs baseline: {state.expansion_ratio:.3f} "
-                f"(>= {self.EXPANSION_THRESHOLD} = expansion)",
+                f"(>= 1.5 = expansion)",
                 "neutral",
                 min(abs(state.expansion_ratio - 1.0), 1.0),
             ),

@@ -373,6 +373,11 @@ services:
       # Artefakt-Update im laufenden Zyklus neu geladen (Mtime-Check).
       # Datei fehlt = keine Overrides (alle Agenten bleiben ACTIVE).
       ORCHESTRATOR_CHAMPION_EVALS: "/app/backtest_reports/champion_evals.json"
+      # Evolierte Agenten-Parameter (champion_configs.json, von champion-evals
+      # mit --evolve geschrieben). Beim Start vorhanden = wird im ersten
+      # Zyklus geladen, danach per Mtime-Check bei jedem Update (Hot-Reload).
+      # Datei fehlt/defekt = Agenten-Defaults (fail-soft).
+      ORCHESTRATOR_CHAMPION_CONFIGS: "/app/backtest_reports/champion_configs.json"
     volumes:
       # read-only: der Orchestrator liest nur das Evaluations-Artefakt; das
       # Schreiben erfolgt im on-demand-Service `backtest` (apps.champion_evals).
@@ -428,6 +433,14 @@ services:
       # MLflow-Experiment-Tracking pro Zyklus (ML-Tab der zentralen Web-UI)
       MLFLOW_ENABLED: "true"
       MLFLOW_TRACKING_URI: "http://mlflow:5000"
+      # Evolierte Agenten-Parameter (champion_configs.json, von champion-evals
+      # mit --evolve geschrieben); pro Zyklus neu eingelesen. Datei fehlt/defekt
+      # = Agenten-Defaults (fail-soft).
+      DEMO_CHAMPION_CONFIGS: "/app/backtest_reports/champion_configs.json"
+    volumes:
+      # read-only: der Demo-Trader liest nur das Evolutions-Artefakt; das
+      # Schreiben erfolgt im Service champion-evals.
+      - backtest_reports:/app/backtest_reports:ro
     depends_on:
       db-init:
         condition: service_completed_successfully
@@ -541,6 +554,11 @@ services:
   # Regeneriert das pro-Agent-OOS-Artefakt (champion_evals.json) für BTC+ETH
   # über ein rollierendes 180-Tage-Fenster; der Orchestrator übernimmt
   # Änderungen im laufenden Zyklus (Mtime-Check, kein Neustart nötig).
+  # --evolve: zusätzlich wird pro Agent-Familie der Champion gegen mutierte
+  # Parametersätze gewettert; der Gewinner landet in champion_configs.json,
+  # aus dem Orchestrator (Hot-Reload) und Demo-Trader die Parameter lesen.
+  # Der Seed ist Default = UTC-Tag: jeden Tag neue Varianten, tageskonstant
+  # reproduzierbar.
   champion-evals:
     build:
       context: .
@@ -568,6 +586,7 @@ services:
       - --min-samples
       - "20"
       - --refresh-data
+      - --evolve
       - --output
       - /app/backtest_reports/champion_evals.json
       - --loop

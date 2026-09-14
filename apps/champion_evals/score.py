@@ -15,6 +15,8 @@ späteres (OOS = challenger) Fenster gesplittet — derselbe Agent, zwei Zeiten.
 from __future__ import annotations
 
 import json
+import logging
+import math
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -23,9 +25,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from packages.agents.base import BaseAgent
 from packages.backtesting.core import Candle
 from packages.validation.ablation.loo import AgentEnsemble, LeaveOneOutAblation
 from packages.validation.target_variables import TargetConfig, encode_target
+
+logger = logging.getLogger(__name__)
 
 # AgentReport-Probabilities (lowercase) → Brier/Target-Encoding (uppercase)
 _PROB_KEY_MAP = {"up": "UP", "down": "DOWN", "range": "RANGE"}
@@ -261,6 +266,71 @@ def replay_ensemble(
             probs = normalize_probs(raw)
             if probs:
                 per_agent[str(agent_id)] = probs
+        realized_return = float(candles[i + horizon_bars].close / candle.close - 1.0)
+        samples.append(
+            EvalSample(
+                as_of=candle.timestamp,
+                per_agent_probs=per_agent,
+                actual=str(encode_target(realized_return, target)),
+                realized_return=realized_return,
+            )
+        )
+    return samples
+
+
+def replay_instances(
+    candles: Sequence[Candle],
+    instances: Mapping[str, BaseAgent],
+    *,
+    candle_limit: int = 200,
+    min_candles: int = 30,
+    evaluate_every: int = 5,
+    horizon_bars: int = 3,
+    target_config: TargetConfig | None = None,
+) -> list[EvalSample]:
+    """Führt gegebene Agent-Instanzen (Champion + Varianten) rückwärts aus.
+
+    Alle Instanzen sehen auf jedem Schritt exakt dasselbe Fenster (faire
+    Vergleichbarkeit innerhalb der Familie) und werden direkt per
+    ``agent.analyze`` befragt — die Pipeline-Erste-Runde ist exakt dieser
+    Aufruf (``run_first_round``). Gleiche Randbedingungen wie
+    ``replay_ensemble``: Outcome realisiert sich nur innerhalb der Kerzen.
+
+    Fail-Closed für mutierte Parameter: ein instanzweiser Fehler oder
+    nicht-finite Probabilities gilt in diesem Schritt als „nicht
+    geliefert"; ``score_window`` entfernt solche Instanzen dann aus dem
+    Scoring (fehlerhafte Varianten werden nicht promoviert).
+    """
+    from apps.orchestrator_service.service import CandleWindow, build_market_data
+
+    target = target_config or TargetConfig()
+    window: deque[Candle] = deque(maxlen=candle_limit)
+    samples: list[EvalSample] = []
+    n = len(candles)
+    for i, candle in enumerate(candles):
+        window.append(candle)
+        if (i + 1) % evaluate_every != 0 or len(window) < min_candles or i + horizon_bars >= n:
+            continue
+        md = build_market_data(
+            CandleWindow(
+                open=np.array([c.open for c in window], dtype=np.float64),
+                high=np.array([c.high for c in window], dtype=np.float64),
+                low=np.array([c.low for c in window], dtype=np.float64),
+                close=np.array([c.close for c in window], dtype=np.float64),
+                volume=np.array([c.volume for c in window], dtype=np.float64),
+            )
+        )
+        per_agent: dict[str, dict[str, float]] = {}
+        for agent_id, agent in instances.items():
+            try:
+                raw = getattr(agent.analyze(md), "probabilities", None)
+            except Exception:
+                logger.debug("Replay-Instanz %s fehlgeschlagen (Schritt %d)", agent_id, i, exc_info=True)
+                continue
+            if isinstance(raw, Mapping):
+                probs = normalize_probs(raw)
+                if probs and all(math.isfinite(v) for v in probs.values()):
+                    per_agent[agent_id] = probs
         realized_return = float(candles[i + horizon_bars].close / candle.close - 1.0)
         samples.append(
             EvalSample(

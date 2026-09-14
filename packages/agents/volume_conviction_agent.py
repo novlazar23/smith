@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import ClassVar
 
 import numpy as np
 from numpy.typing import NDArray
@@ -14,9 +15,42 @@ from packages.schemas.agent_report import (
     InvalidationCondition,
 )
 
-from .base import AgentConfig, AgentType, BaseAgent
+from .base import AgentConfig, AgentType, BaseAgent, BaseParams, ParamSpace
 
 REQUIRED_KEYS = frozenset({"open", "high", "low", "close", "volume"})
+
+
+@dataclass(frozen=True, slots=True)
+class VolumeConvictionParams(BaseParams):
+    """Evolvierbare Volumen-Konviktions-Parameter (Defaults = bisherige Konstanten).
+
+    Entscheidungsknobs (Fenster, Ratio-Schwellen, Partizipations-Minimum)
+    plus Kalibrierung (Basis, Signal-Gewichte, Gewinner-Deckel). OBV-/
+    Partizipations-Normalisierung, Evidenz-Texte und der 0,65-Boden
+    bleiben fest.
+    """
+
+    window: int = 20
+    ratio_up: float = 1.5
+    ratio_down: float = 0.7
+    participation_min: float = 0.5
+    strength_base: float = 0.62
+    strength_ratio_weight: float = 0.08
+    strength_slope_weight: float = 0.10
+    strength_part_weight: float = 0.05
+    p_cap: float = 0.85
+
+    PARAM_SPACE: ClassVar[ParamSpace] = {
+        "window": ("int", 10, 50, 1),
+        "ratio_up": ("float", 1.1, 3.0, 0.1),
+        "ratio_down": ("float", 0.4, 1.2, 0.05),
+        "participation_min": ("float", 0.3, 0.8, 0.05),
+        "strength_base": ("float", 0.50, 0.75, 0.01),
+        "strength_ratio_weight": ("float", 0.0, 0.20, 0.005),
+        "strength_slope_weight": ("float", 0.0, 0.25, 0.005),
+        "strength_part_weight": ("float", 0.0, 0.15, 0.005),
+        "p_cap": ("float", 0.70, 0.95, 0.01),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,16 +73,17 @@ class VolumeConvictionAgent(BaseAgent):
     """Volumen-Konviktions-Agent — Up/Down-Volumen, OBV-Steigung, Partizipation."""
 
     MIN_BARS: int = 50
-    RATIO_UP: float = 1.5
-    RATIO_DOWN: float = 0.7
 
-    def __init__(self, config: AgentConfig | None = None) -> None:
+    def __init__(
+        self, config: AgentConfig | None = None, params: VolumeConvictionParams | None = None
+    ) -> None:
         if config is None:
             config = AgentConfig(
                 agent_id="volume_conviction",
                 agent_type=AgentType.ORDERFLOW,
             )
         super().__init__(config)
+        self._params = params if params is not None else VolumeConvictionParams()
 
     def analyze(self, data: dict[str, NDArray[np.float64]]) -> AgentReport:
         """Analysiert aufsteigende OHLCV-Arrays (älteste → neueste Kerze, Index -1 = aktuell) auf Volumen-Überzeugung."""
@@ -96,16 +131,17 @@ class VolumeConvictionAgent(BaseAgent):
         volume: NDArray[np.float64],
     ) -> _Features:
         """Up/Down-Volumen-Verhältnis, OBV-Steigung, Partizipation (kein Lookahead)."""
-        sma20 = float(np.mean(close[-20:]))
-        up_mask = close[-20:] >= open_[-20:]
-        up_volume = float(volume[-20:][up_mask].sum())
-        down_volume = float(volume[-20:][~up_mask].sum())
+        w = self._params.window
+        sma = float(np.mean(close[-w:]))
+        up_mask = close[-w:] >= open_[-w:]
+        up_volume = float(volume[-w:][up_mask].sum())
+        down_volume = float(volume[-w:][~up_mask].sum())
         ratio = up_volume / max(down_volume, 1e-12)
 
         signed = np.sign(close - open_) * volume
         obv = np.cumsum(signed)
         scale = float(np.mean(np.abs(signed)[-50:])) * 20.0
-        obv_slope = float(np.clip((obv[-1] - obv[-21]) / max(scale, 1e-12), -1.5, 1.5))
+        obv_slope = float(np.clip((obv[-1] - obv[-w - 1]) / max(scale, 1e-12), -1.5, 1.5))
 
         participation = float(np.mean(volume[-5:])) / max(float(np.mean(volume[-50:])), 1e-12)
 
@@ -113,43 +149,45 @@ class VolumeConvictionAgent(BaseAgent):
             ratio=ratio,
             obv_slope=obv_slope,
             participation=participation,
-            price_up=bool(close[-1] > sma20),
-            price_down=bool(close[-1] < sma20),
+            price_up=bool(close[-1] > sma),
+            price_down=bool(close[-1] < sma),
         )
 
     def _conviction_side(self, f: _Features) -> str:
         """Votingsseite: 'up', 'down', 'range' (divergent/schwach) oder 'neutral'."""
-        if f.price_up and f.ratio > self.RATIO_UP and f.obv_slope > 0.0:
+        p = self._params
+        if f.price_up and f.ratio > p.ratio_up and f.obv_slope > 0.0:
             return "up"
-        if f.price_down and f.ratio < self.RATIO_DOWN and f.obv_slope < 0.0:
+        if f.price_down and f.ratio < p.ratio_down and f.obv_slope < 0.0:
             return "down"
-        divergent = (f.price_up and f.ratio < self.RATIO_DOWN) or (
-            f.price_down and f.ratio > self.RATIO_UP
+        divergent = (f.price_up and f.ratio < p.ratio_down) or (
+            f.price_down and f.ratio > p.ratio_up
         )
-        if divergent or f.participation < 0.5:
+        if divergent or f.participation < p.participation_min:
             return "range"
         return "neutral"
 
-    @staticmethod
-    def _conviction_score(ratio_excess: float, slope: float, participation: float) -> float:
+    def _conviction_score(self, ratio_excess: float, slope: float, participation: float) -> float:
         """Monotone Konviktionsformel — steigt mit Ratio-Exzess, OBV-Steigung, Partizipation."""
+        p = self._params
         score = (
-            0.62
-            + 0.08 * min(max(ratio_excess, 0.0), 1.5)
-            + 0.1 * min(max(slope, 0.0), 1.0)
-            + 0.05 * min(participation, 2.0) / 2.0
+            p.strength_base
+            + p.strength_ratio_weight * min(max(ratio_excess, 0.0), 1.5)
+            + p.strength_slope_weight * min(max(slope, 0.0), 1.0)
+            + p.strength_part_weight * min(participation, 2.0) / 2.0
         )
-        return float(min(max(score, 0.65), 0.85))
+        return float(min(max(score, 0.65), p.p_cap))
 
     def _probabilities(self, side: str, f: _Features) -> dict[str, float]:
         """Wahrscheinlichkeiten — summieren sich exakt auf 1.0."""
+        p = self._params
         if side == "up":
-            score = self._conviction_score(f.ratio - self.RATIO_UP, f.obv_slope, f.participation)
+            score = self._conviction_score(f.ratio - p.ratio_up, f.obv_slope, f.participation)
             up = round(score, 4)
             down = round((1.0 - up) * 0.25, 4)
             return {"up": up, "down": down, "range": round(1.0 - up - down, 4)}
         if side == "down":
-            excess = (self.RATIO_DOWN - f.ratio) / self.RATIO_DOWN * 1.5
+            excess = (p.ratio_down - f.ratio) / p.ratio_down * 1.5
             score = self._conviction_score(excess, -f.obv_slope, f.participation)
             down = round(score, 4)
             up = round((1.0 - down) * 0.25, 4)
@@ -173,12 +211,13 @@ class VolumeConvictionAgent(BaseAgent):
 
     def _evidence(self, f: _Features) -> list[EvidenceReference]:
         """Evidenz — die drei Konviktions-Features als Scores, keine Behauptungen."""
-        if f.ratio > self.RATIO_UP:
+        p = self._params
+        if f.ratio > p.ratio_up:
             ratio_dir = "positive"
-            ratio_rel = min(1.0, 0.2 + (f.ratio - self.RATIO_UP) / self.RATIO_UP * 0.8)
-        elif f.ratio < self.RATIO_DOWN:
+            ratio_rel = min(1.0, 0.2 + (f.ratio - p.ratio_up) / p.ratio_up * 0.8)
+        elif f.ratio < p.ratio_down:
             ratio_dir = "negative"
-            ratio_rel = min(1.0, 0.2 + (self.RATIO_DOWN - f.ratio) / self.RATIO_DOWN * 0.8)
+            ratio_rel = min(1.0, 0.2 + (p.ratio_down - f.ratio) / p.ratio_down * 0.8)
         else:
             ratio_dir = "neutral"
             ratio_rel = 0.2

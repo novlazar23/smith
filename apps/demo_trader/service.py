@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
+from apps.champion_evals.evolve import load_champion_params
 from apps.orchestrator_service.service import (
     CandleWindow,
     ContextualAgent,
@@ -68,6 +69,7 @@ DEFAULT_CANDLE_LIMIT = 200
 DEFAULT_MIN_CANDLES = 30
 DEFAULT_HORIZON = "15m"
 DEFAULT_ACCOUNT_ID = "demo"
+DEFAULT_CHAMPION_CONFIGS = "/app/backtest_reports/champion_configs.json"
 HEARTBEAT_PATH = Path("/tmp/demo_trader_heartbeat")
 
 ACTION_BUY = "BUY"
@@ -202,8 +204,16 @@ def build_active_ensemble(instrument: str, horizon: str) -> list[ContextualAgent
     Volumen-Konviktions), damit der gewichtete Konsens echte
     Entscheidungen statt NO_TRADE ("No active agents (all shadow)")
     liefert.
+
+    Die Agenten erhalten die evolvierten Champion-Parameter aus
+    ``champion_configs.json`` (Pfad: Env ``DEMO_CHAMPION_CONFIGS``,
+    Default ``/app/backtest_reports/champion_configs.json``), sofern das
+    Artefakt vorhanden und lesbar ist. Fail-soft: fehlende oder defekte
+    Datei = Defaults (``load_champion_params`` wirft nie aus).
     """
-    return build_ensemble(instrument, horizon, AgentStatus.ACTIVE)
+    raw_path = os.environ.get("DEMO_CHAMPION_CONFIGS", DEFAULT_CHAMPION_CONFIGS).strip()
+    champion_params = load_champion_params(Path(raw_path)) if raw_path else None
+    return build_ensemble(instrument, horizon, AgentStatus.ACTIVE, champion_params=champion_params)
 
 
 def plan_trade(

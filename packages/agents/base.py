@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, fields
 from enum import StrEnum
+from typing import ClassVar, Self
 
 import numpy as np
 from numpy.typing import NDArray
@@ -13,6 +15,51 @@ from packages.schemas.agent_report import (
     EvidenceReference,
     InvalidationCondition,
 )
+
+# Parameterraum pro evolvierbarem Agent: Feldname →
+# (Typ "int" | "float", Untergrenze, Obergrenze, Schrittweite)
+type ParamSpace = dict[str, tuple[str, float, float, float]]
+
+
+def _coerce(name: str, kind: str, raw: object) -> float | int:
+    """Wandelt einen JSON-Wert fail-closed in den deklarierten Parametertyp um.
+
+    Raises:
+        ValueError: Wert ist kein Zahl (Boolean zählt nicht) — korruptes Artefakt.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError(f"Parameter {name} erwartet einen Zahlwert, bekam {type(raw).__name__}: {raw!r}")
+    return int(raw) if kind == "int" else float(raw)
+
+
+@dataclass(frozen=True, slots=True)
+class BaseParams:
+    """Basis für evolvierbare Agenten-Parameter.
+
+    Subklassen (z. B. ``TrendParams``) sind frozen Dataclasses, deren
+    Felder die bisherigen (gehärteten) Agenten-Konstanten als Defaults
+    tragen und deren ``PARAM_SPACE`` die mutierbare Spanne je Feld
+    beschreibt. ``to_dict``/``from_dict`` ermöglichen die
+    Serialisierung nach ``champion_configs.json`` (unbekannte Schlüssel
+    werden ignoriert, fehlende Felder bleiben auf ihren Defaults).
+    """
+
+    PARAM_SPACE: ClassVar[ParamSpace]
+
+    def to_dict(self) -> dict[str, float | int]:
+        """Parametersatz als JSON-serialisierbares Dict (Feldreihenfolge)."""
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, object]) -> Self:
+        """Baut eine Instanz aus einem Dict (unbekannte Schlüssel ignoriert)."""
+        space: ParamSpace = cls.PARAM_SPACE
+        values: dict[str, float | int] = {
+            name: _coerce(name, space[name][0], raw)
+            for name, raw in d.items()
+            if name in space
+        }
+        return cls(**values)
 
 
 class AgentType(StrEnum):

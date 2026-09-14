@@ -22,11 +22,46 @@ import numpy as np
 from numpy.typing import NDArray
 from packages.schemas.agent_report import AgentReport
 
-from .base import AgentConfig, AgentType, BaseAgent
+from .base import AgentConfig, AgentType, BaseAgent, BaseParams, ParamSpace
 
 REQUIRED_KEYS = frozenset({"open", "high", "low", "close", "volume"})
 
 type TrendDirection = Literal["up", "down", "range"]
+
+
+@dataclass(frozen=True, slots=True)
+class TrendParams(BaseParams):
+    """Evolvierbare Trend-Parameter (Defaults = bisherige harte Konstanten).
+
+    Parameterisiert sind nur die Entscheidungsknobs (Lookbacks,
+    Trennungsgate) und die Kalibrierung (Basis, Signal-Gewichte,
+    Gewinner-Deckel); ``MIN_BARS``, Evidenz-/Gegenhypothesen-Texte und der
+    0,65-Boden bleiben fest.
+    """
+
+    ema_fast: int = 12
+    ema_slow: int = 26
+    roc_period: int = 10
+    atr_period: int = 14
+    separation_gate: float = 0.5
+    strength_base: float = 0.62
+    strength_sep_weight: float = 0.15
+    strength_slope_weight: float = 0.10
+    strength_roc_weight: float = 0.10
+    p_cap: float = 0.85
+
+    PARAM_SPACE: ClassVar[ParamSpace] = {
+        "ema_fast": ("int", 5, 50, 1),
+        "ema_slow": ("int", 10, 100, 1),
+        "roc_period": ("int", 3, 50, 1),
+        "atr_period": ("int", 5, 50, 1),
+        "separation_gate": ("float", 0.1, 1.5, 0.05),
+        "strength_base": ("float", 0.50, 0.75, 0.01),
+        "strength_sep_weight": ("float", 0.0, 0.30, 0.01),
+        "strength_slope_weight": ("float", 0.0, 0.30, 0.01),
+        "strength_roc_weight": ("float", 0.0, 0.30, 0.01),
+        "p_cap": ("float", 0.70, 0.95, 0.01),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,18 +89,15 @@ class TrendAgent(BaseAgent):
     """Trend-Agent — Richtung und Stärke aus EMA-Ausrichtung, ROC, ATR-normierter Trennung."""
 
     MIN_BARS: int = 50
-    EMA_FAST: int = 12
-    EMA_SLOW: int = 26
-    ROC_PERIOD: int = 10
-    ATR_PERIOD: int = 14
 
-    def __init__(self, config: AgentConfig | None = None) -> None:
+    def __init__(self, config: AgentConfig | None = None, params: TrendParams | None = None) -> None:
         if config is None:
             config = AgentConfig(
                 agent_id="trend",
                 agent_type=AgentType.INDICATOR,
             )
         super().__init__(config)
+        self._params = params if params is not None else TrendParams()
 
     def analyze(self, data: dict[str, NDArray[np.float64]]) -> AgentReport:
         """Analysiert OHLCV-Daten auf nachhaltige Trendrichtung und -stärke.
@@ -154,7 +186,7 @@ class TrendAgent(BaseAgent):
                 np.abs(low[1:] - prev_close),
             ),
         )
-        return float(true_range[-self.ATR_PERIOD :].mean())
+        return float(true_range[-self._params.atr_period :].mean())
 
     def _compute_state(
         self,
@@ -163,13 +195,14 @@ class TrendAgent(BaseAgent):
         low: NDArray[np.float64],
     ) -> TrendState:
         """Berechnet alle Trend-Indikatoren für die aktuelle Kerze."""
-        ema_fast = self._ema(close, self.EMA_FAST)
-        ema_slow = self._ema(close, self.EMA_SLOW)
+        p = self._params
+        ema_fast = self._ema(close, p.ema_fast)
+        ema_slow = self._ema(close, p.ema_slow)
         atr14 = self._atr(high, low, close)
         atr_safe = atr14 if atr14 > 1e-12 else 1e-12
         separation = (ema_fast[-1] - ema_slow[-1]) / atr_safe
         slope = (ema_fast[-1] - ema_fast[-6]) / (5.0 * atr_safe)
-        roc_base = close[-1 - self.ROC_PERIOD]
+        roc_base = close[-1 - p.roc_period]
         roc10 = float(close[-1] / roc_base - 1.0) if abs(roc_base) > 1e-12 else 0.0
         return TrendState(
             ema_fast=float(ema_fast[-1]),
@@ -184,18 +217,19 @@ class TrendAgent(BaseAgent):
 
     def _classify(self, state: TrendState) -> TrendDirection:
         """Klassifiziert den Trendzustand: starker Auf-, starker Ab- oder Seitwärtstrend."""
+        gate = self._params.separation_gate
         if (
             state.ema_fast > state.ema_slow
             and state.slope > 0.0
             and state.roc10 > 0.0
-            and state.separation > 0.5
+            and state.separation > gate
         ):
             return "up"
         if (
             state.ema_fast < state.ema_slow
             and state.slope < 0.0
             and state.roc10 < 0.0
-            and state.separation < -0.5
+            and state.separation < -gate
         ):
             return "down"
         return "range"
@@ -223,18 +257,18 @@ class TrendAgent(BaseAgent):
             case "range":
                 return self._range_probabilities(state)
 
-    @staticmethod
-    def _trend_strength(separation: float, slope: float, roc: float) -> float:
-        """Richtungs-Wahrscheinlichkeit eines starken Trends (monoton, [0,65, 0,85]).
+    def _trend_strength(self, separation: float, slope: float, roc: float) -> float:
+        """Richtungs-Wahrscheinlichkeit eines starken Trends (monoton, [0,65, p_cap]).
 
         Eingaben sind die Trend-seitigen (d. h. für Aufwärtstrends positive,
         für Abwärtstrends negierte) Indikatoren.
         """
+        p = self._params
         sep_score = min(max(separation, 0.0), 3.0) / 3.0
         slope_score = min(max(slope, 0.0), 1.0)
         roc_score = min(max(roc / 0.05, 0.0), 1.0)
-        raw = 0.62 + 0.15 * sep_score + 0.10 * slope_score + 0.10 * roc_score
-        return float(min(0.85, max(0.65, raw)))
+        raw = p.strength_base + p.strength_sep_weight * sep_score + p.strength_slope_weight * slope_score + p.strength_roc_weight * roc_score
+        return float(min(p.p_cap, max(0.65, raw)))
 
     def _directional_probabilities(
         self, winner: Literal["up", "down"], p_winner: float

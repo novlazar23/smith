@@ -807,6 +807,24 @@ docker compose --profile on-demand run --rm backtest python -m apps.champion_eva
   --output /app/backtest_reports/champion_evals.json
 ```
 
+**Champion-Evolution (`--evolve`):** Der tägliche Lauf führt zusätzlich
+einen Evolutionsschritt aus: Pro Agent-Familie (`trend`,
+`mean_reversion`, `volatility_regime`, `volume_conviction`) wettert der
+aktuelle Champion (Parametersatz des Vorlaufs) gegen `--variants`
+(Default 8) mutierte Parametersätze auf demselben Kerzenfenster. Eine
+Variante gewinnt nur, wenn sie den Champion im OOS-Score (1 − Brier) um
+mindestens `--promotion-margin` (Default 0,005) schlägt und ihre
+OOS-Hit-Rate nicht mehr als 0,05 unter ihrer eigenen
+Kalibrierungs-Hit-Rate liegt (Overfitting-Guard). Der Gewinner-Parametersatz
+wird atomar in `champion_configs.json` persistiert (Version-
+Increment bei Änderung); dieser wird von Orchestrator (Hot-Reload per
+Mtime-Check) und Demo-Trader eingelesen und für deren Ensembles genutzt —
+die Hyperparameter der vier Agenten (Entscheidungs-Schwellen,
+EMA/RSI/BB-Perioden, Kalibrierungs-Gewichte) evolviert damit im
+laufenden System. Der Seed ist Default = UTC-Tag, also jeden Tag neue
+Varianten (tageskonstant reproduzierbar). Fehlende/defekte
+`champion_configs.json` = Agenten-Defaults (Fail-Soft, kein Crash).
+
 ### Hinweise
 
 - **Agenten im Realbetrieb**: Der Orchestrator läuft standardmäßig mit

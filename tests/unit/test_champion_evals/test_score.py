@@ -12,6 +12,7 @@ from apps.champion_evals.score import (
     build_artifact,
     normalize_probs,
     replay_ensemble,
+    replay_instances,
     score_window,
     write_artifact,
 )
@@ -219,3 +220,40 @@ class TestReplayEnsemble:
             assert s.per_agent_probs["trend"]["UP"] == pytest.approx(0.7)
             assert seen[k] == pytest.approx(by_ts[s.as_of])  # nur Kerzen bis as_of
         assert all(s.actual == "UP" for s in samples)
+
+
+class _StubInstance:
+    """Duck-typing-Doppel für eine Replay-Instanz (nur ``analyze`` wird gerufen)."""
+
+    def __init__(self, probs: dict[str, float]) -> None:
+        self._probs = probs
+
+    def analyze(self, data: object) -> SimpleNamespace:
+        return SimpleNamespace(probabilities=self._probs)
+
+
+class _BoomInstance:
+    def analyze(self, data: object) -> None:
+        raise RuntimeError("gestörter Agent (mutierter Parameter)")
+
+
+class _NanInstance:
+    def analyze(self, data: object) -> SimpleNamespace:
+        return SimpleNamespace(probabilities={"up": float("nan"), "down": 0.5, "range": 0.5})
+
+
+class TestReplayInstances:
+    def test_failing_and_nan_instances_are_dropped(self) -> None:
+        instances = {
+            "good": _StubInstance({"up": 0.8, "down": 0.1, "range": 0.1}),
+            "boom": _BoomInstance(),
+            "nan": _NanInstance(),
+        }
+        samples = replay_instances(
+            _candles(40), instances, candle_limit=200, min_candles=10, evaluate_every=5, horizon_bars=2
+        )
+        assert samples
+        for s in samples:
+            assert set(s.per_agent_probs) == {"good"}
+            assert s.per_agent_probs["good"]["UP"] == pytest.approx(0.8)
+            assert s.actual in ("UP", "DOWN", "RANGE")

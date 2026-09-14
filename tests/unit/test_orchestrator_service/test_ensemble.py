@@ -11,6 +11,10 @@ from apps.orchestrator_service.service import (
 )
 from numpy.typing import NDArray
 from packages.agents.base import AgentConfig, AgentType, BaseAgent
+from packages.agents.mean_reversion_agent import MeanReversionAgent, MeanReversionParams
+from packages.agents.trend_agent import TrendAgent, TrendParams
+from packages.agents.volatility_regime_agent import VolatilityRegimeAgent, VolatilityRegimeParams
+from packages.agents.volume_conviction_agent import VolumeConvictionAgent, VolumeConvictionParams
 from packages.orchestrator.second_round import RoundContext
 from packages.schemas.agent_report import AgentReport, AgentStatus, EvidenceReference
 
@@ -134,6 +138,56 @@ class TestBuildEnsemble:
         assert statuses["mean_reversion"] is AgentStatus.ACTIVE
         assert statuses["volatility_regime"] is AgentStatus.ACTIVE
         assert statuses["volume_conviction"] is AgentStatus.ACTIVE
+
+    def test_injects_champion_params_for_named_agent(self) -> None:
+        """champion_params injiziert evolvierte Parameter in benannte Agenten."""
+        agents = build_ensemble(
+            "BTC/USDT",
+            "15m",
+            champion_params={"trend": {"ema_fast": 7, "p_cap": 0.9}},
+        )
+        inner = {agent.agent_id: agent._agent for agent in agents}  # type: ignore[attr-defined]
+
+        assert isinstance(inner["trend"], TrendAgent)
+        assert inner["trend"]._params.ema_fast == 7
+        assert inner["trend"]._params.p_cap == 0.9
+        # Nicht benannte Agenten behalten die Defaults
+        assert isinstance(inner["mean_reversion"], MeanReversionAgent)
+        assert inner["mean_reversion"]._params == MeanReversionParams()
+        assert isinstance(inner["volatility_regime"], VolatilityRegimeAgent)
+        assert inner["volatility_regime"]._params == VolatilityRegimeParams()
+        assert isinstance(inner["volume_conviction"], VolumeConvictionAgent)
+        assert inner["volume_conviction"]._params == VolumeConvictionParams()
+
+    def test_without_champion_params_uses_defaults(self) -> None:
+        """Ohne champion_params bleibt das Verhalten unverändert (Defaults)."""
+        agents = build_ensemble("BTC/USDT", "15m")
+        inner = {agent.agent_id: agent._agent for agent in agents}  # type: ignore[attr-defined]
+
+        assert isinstance(inner["trend"], TrendAgent)
+        assert inner["trend"]._params == TrendParams()
+
+    def test_unknown_agent_id_in_champion_params_ignored(self) -> None:
+        """Unbekannte agent_ids im Champion-Satz werden stillschweigend ignoriert."""
+        agents = build_ensemble(
+            "BTC/USDT",
+            "15m",
+            champion_params={"kein_agent": {"foo": 1}, "trend": {"ema_fast": 9}},
+        )
+        inner = {agent.agent_id: agent._agent for agent in agents}  # type: ignore[attr-defined]
+
+        assert isinstance(inner["trend"], TrendAgent)
+        assert inner["trend"]._params.ema_fast == 9
+        assert isinstance(inner["mean_reversion"], MeanReversionAgent)
+        assert inner["mean_reversion"]._params == MeanReversionParams()
+
+    def test_empty_params_mapping_uses_defaults(self) -> None:
+        """Leerer Parameter-Mapping = kein Satz → Defaults."""
+        agents = build_ensemble("BTC/USDT", "15m", champion_params={"trend": {}})
+        inner = {agent.agent_id: agent._agent for agent in agents}  # type: ignore[attr-defined]
+
+        assert isinstance(inner["trend"], TrendAgent)
+        assert inner["trend"]._params == TrendParams()
 
     def test_agent_types_match(self) -> None:
         """Die AgentTypen stimmen mit den gewählten Klassen überein."""

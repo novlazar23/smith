@@ -12,6 +12,17 @@ gemeinsamen Zeitachse gepoolt (``score_window`` sortiert die Samples nach
 expliziter ``--start``/``--end``; ``--loop N`` wiederholt den Lauf alle N
 Sekunden (Dauerbetrieb als Scheduled-Service).
 
+``--evolve`` schaltet den Lauf auf den Evolutions-Schritt um: Pro
+Agent-Familie (``trend``, ``mean_reversion``, ``volatility_regime``,
+``volume_conviction``) wettert der Champion (Parameter aus
+``champion_configs.json``, sonst Defaults) gegen ``--variants`` mutierte
+Sätze auf dem selben Kerzenfenster. Eine Variante gewinnt nur mit
+OOS-Score-Vorsprung ≥ ``--promotion-margin`` und stabiler OOS- vs.
+Kalibrierungs-Hit-Rate; der Gewinner wird atomar in
+``champion_configs.json`` persistiert (``--configs-output``, Default: neben
+``--output``). ``champion_evals.json`` bleibt dabei unverändert (Champion-
+block = Kalibrierung, Challenger = OOS, ``--min-samples``-Filter).
+
 Beispiele (Docker-Compose-Profil on-demand):
     docker compose --profile on-demand run --rm backtest python -m apps.champion_evals \
       --instrument BTC/USDT --start 2026-03-02 --end 2026-09-02 --resample 5m \
@@ -26,9 +37,11 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from packages.backtesting.core import Candle
 from packages.persistence.clickhouse.engine import (
     ClickHouseConfig,
     ClickHouseEngine,
@@ -39,6 +52,8 @@ logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from apps.champion_evals.evolve import PROMOTION_MARGIN
+
     parser = argparse.ArgumentParser(description="Pro-Agent OOS-Evaluationsdaten aus ClickHouse-Kerzen erzeugen.")
     parser.add_argument("--instrument", default="BTC/USDT", help="Instrument oder Komma-Liste (z. B. BTC/USDT,ETH/USDT)")
     parser.add_argument("--venue", default=None, help="Venue-Filter (Default Env CANDLE_VENUE / BINANCE_FUTURES)")
@@ -62,6 +77,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="candles_history für das Fenster idempotent nachladen (Binance-Klines), bevor der Lauf startet",
     )
     parser.add_argument("--version", default="current", help="Versions-Label für das Artefakt")
+    parser.add_argument(
+        "--evolve",
+        action="store_true",
+        help="Evolutionsschritt: mutierte Agenten-Parameter selektieren (champion_configs.json)",
+    )
+    parser.add_argument("--variants", type=int, default=8, help="Anzahl mutierte Varianten pro Agent (nur mit --evolve)")
+    parser.add_argument(
+        "--promotion-margin",
+        type=float,
+        default=PROMOTION_MARGIN,
+        help="Min. OOS-Score-Vorsprung (1 - Brier) für eine Promotion (nur mit --evolve)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Zufalls-Seed für die Mutationen (nur mit --evolve). "
+            "Default: aktueller UTC-Tag → tageskonstant, aber jeden Tag neue Varianten"
+        ),
+    )
+    parser.add_argument(
+        "--configs-output",
+        default=None,
+        help="Zielpfad von champion_configs.json (Default: neben --output)",
+    )
     parser.add_argument("--output", required=True, help="Zielpfad des JSON-Artefakts")
     parser.add_argument("--ch-host", default=None, help="ClickHouse-Host (Env CH_HOST, Default clickhouse)")
     parser.add_argument("--ch-port", type=int, default=None, help="ClickHouse-Port (Env CH_PORT, Default 8123)")
@@ -129,10 +170,8 @@ def _refresh_history(
 
 
 def _run_once(args: argparse.Namespace) -> int:
-    """Ein kompletter Evaluationslauf über alle angebenen Instrumente."""
+    """Ein kompletter Lauf: Kerzen laden, dann Eval- oder Evolutions-Schritt."""
     from apps.backtest.ch_feed import ClickHouseDataFeed
-    from apps.champion_evals.score import EvalSample, replay_ensemble, score_window, write_artifact
-    from packages.validation.target_variables import TargetConfig
 
     instruments = tuple(item.strip() for item in args.instrument.split(",") if item.strip())
     venue = args.venue or os.environ.get("CANDLE_VENUE", "BINANCE_FUTURES")
@@ -150,10 +189,9 @@ def _run_once(args: argparse.Namespace) -> int:
             return 1
         _refresh_history(engine, instruments, start, end)
 
-    # Samples aller Instrumente auf einer gemeinsamen Zeitachse poolen
-    # (score_window sortiert nach as_of; ein Instrument mit zu wenigen
-    # Kerzen wird übersprungen, nicht der gesamte Lauf gescheitert).
-    samples: list[EvalSample] = []
+    # Alle Kerzen erst laden (Eval und Evolve teilen sich die Daten); ein
+    # Instrument mit zu wenigen Kerzen wird übersprungen, nicht der Lauf.
+    series: list[tuple[str, list[Candle]]] = []
     for instrument in instruments:
         feed = ClickHouseDataFeed(engine, instrument, venue=venue, start=start, end=end, resample=args.resample)
         candles = feed.get_candles()
@@ -166,7 +204,26 @@ def _run_once(args: argparse.Namespace) -> int:
                 args.horizon_bars,
             )
             continue
-        target = TargetConfig(up_threshold=args.up_threshold, down_threshold=args.down_threshold, horizon=args.horizon)
+        series.append((instrument, list(candles)))
+    if not series:
+        logger.error("Keine Kerzen geladen (zu wenige Kerzen oder Fenster zu klein)")
+        return 1
+
+    if args.evolve:
+        return _run_evolve(args, series)
+    return _run_eval(args, series)
+
+
+def _run_eval(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]) -> int:
+    """Klassische Evaluierung: ACTIVE-Ensemble rückwärts, ein Artefakt."""
+    from apps.champion_evals.score import EvalSample, replay_ensemble, score_window, write_artifact
+    from packages.validation.target_variables import TargetConfig
+
+    # Samples aller Instrumente auf einer gemeinsamen Zeitachse poolen
+    # (score_window sortiert nach as_of).
+    target = TargetConfig(up_threshold=args.up_threshold, down_threshold=args.down_threshold, horizon=args.horizon)
+    samples: list[EvalSample] = []
+    for instrument, candles in series:
         samples.extend(
             replay_ensemble(
                 candles,
@@ -183,13 +240,115 @@ def _run_once(args: argparse.Namespace) -> int:
         logger.error("Keine Bewertungsschritte erzeugt (zu wenige Kerzen oder Warmup zu groß)")
         return 1
 
-    scored = {a: m for a, m in score_window(samples, calibration_ratio=args.calibration_ratio).items() if m.oos_samples >= args.min_samples}
+    scored = {
+        a: m for a, m in score_window(samples, calibration_ratio=args.calibration_ratio).items()
+        if m.oos_samples >= args.min_samples
+    }
     if not scored:
         logger.error("Kein Agent erfüllt --min-samples=%d (Fenster zu klein?)", args.min_samples)
         return 1
 
     path = write_artifact(args.output, scored, version=args.version)
     _print_summary(scored, args, path)
+    return 0
+
+
+def _evolve_seed(args: argparse.Namespace) -> int:
+    """Seed der Mutationen: explizites ``--seed`` gewinnt, sonst UTC-Tag.
+
+    Ohne expliziten Seed wäre der tägliche Lauf deterministisch auf denselben
+    Varianten-Pfad festgelegt (Stabil-Champion + fester Seed = immer dieselben
+    Mutationen) — der Tag als Seed macht jeden Lauf neu erkundend, wobei ein
+    einzelner Tag reproduzierbar bleibt.
+    """
+    return args.seed if args.seed is not None else int(datetime.now(UTC).strftime("%Y%m%d"))
+
+
+def _run_evolve(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]) -> int:
+    """Evolutionsschritt: pro Familie Champion vs. k mutierte Varianten.
+
+    Schreibt ``champion_evals.json`` unverändert (nur Champion-Metriken,
+    ``--min-samples``-Filter) plus ``champion_configs.json`` (Parametersatz
+    des Gewinners, atomar, versioned) — die Persistenz der Selektion.
+    """
+    from apps.champion_evals.agent_params import AGENT_TYPES, build_agent, default_params
+    from apps.champion_evals.evolve import (
+        build_configs_artifact,
+        generate_variants,
+        load_champion_configs,
+        select,
+        write_json_atomic,
+    )
+    from apps.champion_evals.score import (
+        AgentMetrics,
+        EvalSample,
+        replay_instances,
+        score_window,
+        write_artifact,
+    )
+    from packages.agents.base import BaseAgent
+    from packages.validation.target_variables import TargetConfig
+
+    target = TargetConfig(up_threshold=args.up_threshold, down_threshold=args.down_threshold, horizon=args.horizon)
+    seed = _evolve_seed(args)
+    config_path = Path(args.configs_output or Path(args.output).with_name("champion_configs.json"))
+    previous_configs = load_champion_configs(config_path) or {}
+
+    scored: dict[str, AgentMetrics] = {}
+    current: dict[str, tuple[dict[str, float | int], float]] = {}
+    for agent_id in AGENT_TYPES:
+        champion_params = default_params(agent_id)
+        previous = previous_configs.get(agent_id)
+        previous_score = 0.0
+        if previous is not None and isinstance(previous.get("params"), Mapping):
+            champion_params = type(champion_params).from_dict(dict(previous["params"]))
+            previous_score = float(previous.get("score", 0.0))
+
+        instances: dict[str, BaseAgent] = {agent_id: build_agent(agent_id, champion_params)}
+        params_by_id: dict[str, dict[str, float | int]] = {agent_id: champion_params.to_dict()}
+        variants = generate_variants(agent_id, champion_params.to_dict(), args.variants, seed=seed)
+        for variant_id, variant_params in variants:
+            instances[variant_id] = build_agent(agent_id, variant_params.to_dict())
+            params_by_id[variant_id] = variant_params.to_dict()
+
+        family_samples: list[EvalSample] = []
+        for _instrument, candles in series:
+            family_samples.extend(
+                replay_instances(
+                    candles,
+                    instances,
+                    candle_limit=args.candle_limit,
+                    min_candles=args.min_candles,
+                    evaluate_every=args.evaluate_every,
+                    horizon_bars=args.horizon_bars,
+                    target_config=target,
+                )
+            )
+        metrics = score_window(family_samples, calibration_ratio=args.calibration_ratio)
+        champion_metrics = metrics.get(agent_id)
+        if champion_metrics is None:
+            # Fail-Closed: Champion lieferte nicht in jedem Schritt (z. B.
+            # gestürzt durch einen mutierten Parameter) oder zu wenige
+            # Schritte — nichts promoten, vorheriger Satz bleibt.
+            logger.warning("Agent %s: keine Metriken (Champion lieferte nicht durchgehend) — Champion bleibt", agent_id)
+            current[agent_id] = (params_by_id[agent_id], previous_score)
+            continue
+        result = select(agent_id, agent_id, metrics, promotion_margin=args.promotion_margin)
+        winner_id = result.selected_id
+        current[agent_id] = (params_by_id[winner_id], 1.0 - metrics[winner_id].oos_brier)
+        action = "PROMOTED" if result.promoted else "KEPT"
+        print(f"{agent_id}: champion={result.champion_score:.4f} best={winner_id}={result.best_score:.4f} → {action}")
+        if champion_metrics.oos_samples >= args.min_samples:
+            scored[agent_id] = champion_metrics
+
+    if not scored:
+        logger.error("Kein Agent erfüllt --min-samples=%d (Fenster zu klein?)", args.min_samples)
+        return 1
+
+    path = write_artifact(args.output, scored, version=args.version)
+    configs_path = write_json_atomic(config_path, build_configs_artifact(current, previous_configs))
+    _print_summary(scored, args, path)
+    print(f"Config-Artefakt: {configs_path}")
     return 0
 
 
