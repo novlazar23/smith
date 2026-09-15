@@ -825,11 +825,14 @@ EMA/RSI/BB-Perioden, Kalibrierungs-Gewichte) evolviert damit im
  Varianten (tageskonstant reproduzierbar). Fehlende/defekte
  `champion_configs.json` = Agenten-Defaults (Fail-Soft, kein Crash).
 
-**Champion-Logik-Evolution (`--evolve-agents N`):** Daneben schlägt der
-LLM (via `LLMClient`/LiteLLM, `LITELLM_BASE_URL`/`SMITH_LLM_MODEL`,
-API-Key als Secret) bis zu N neue Agenten-Logiken als Code vor: eine
-Funktion `predict(open, high, low, close, volume) -> (p_up, p_down,
-p_range)`. Jede Vorschlags-Logik läuft durch eine dreischichtige
+**Champion-Logik-Evolution (`--evolve-agents N`):** Daneben schlägt ein
+LLM-Persona-Panel bis zu N neue Agenten-Logiken als Code vor: vier
+diversifizierte Personas (Trend, Reversion, Mikrostruktur, Regime —
+jeweils eigener LLM-Aufruf mit eigenem Markt-Prior via
+`LLMClient`/LiteLLM, `LITELLM_BASE_URL`/`SMITH_LLM_MODEL`, API-Key als
+Secret), deren Vorschläge gemergt und dedupliziert werden. Jede
+Logik ist eine Funktion
+`predict(open, high, low, close, volume) -> (p_up, p_down, p_range)`. Jede Vorschlags-Logik läuft durch eine dreischichtige
 Sandbox (statischer AST-Jail: nur `numpy`/`math`/`typing`-Imports, nur
 `predict`, keine gefährlichen Aufrufe; isolierte Ausführung mit
 einschränkter Builtin- und Import-Allowlist; Smoke-Test auf

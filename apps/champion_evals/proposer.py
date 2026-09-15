@@ -1,8 +1,16 @@
-"""LLM-Phase für Stufe 2: Personas schlagen neue Agenten-Logik vor.
+"""LLM-Phase für Stufe 2: ein Persona-Panel schlägt neue Agenten-Logik vor.
 
-Gleiche Muster wie ``apps.evolution.personas``: ein Aufruf, in dem drei
-Rollen diskutieren (Forscher, Skeptiker, Risiko). Der LLM liefert ein
-JSON-Array von Vorschlägen (``name``/``claim``/``code``), das hier gegen
+Jede Persona aus ``PERSONAS`` (unterschiedliche Markt-Priors: Trend,
+Reversion, Mikrostruktur, Regime) erhält **einen eigenen LLM-Aufruf**
+mit ihrem Prior und schlägt darin Kandidaten vor (``name``/``claim``/
+``code``). Die Vorschläge aller Personas werden gemergt, nach Namen
+dedupliziert und auf ``max_candidates`` gekappt — die Diversifikation
+der Priors stattet das Gate-Panel mit unabhängigeren Kandidaten aus.
+Der Skeptiker-Teil der Diskussion entfällt als LLM-Rolle, weil die
+deterministischen Gates (OOS/LOO/Stabilität in ``agent_evolve``) diese
+Funktion besser und nachprüfbar übernehmen.
+
+Der LLM liefert pro Persona ein JSON-Array, das hier gegen
 Name-Muster, Sperrliste und Mindestlängen validiert wird. Ungültige
 Vorschläge werden verworfen (mit Log), nicht „repariert" — Reparieren
 wäre bereits eine nachträgliche Einflussnahme.
@@ -10,7 +18,8 @@ wäre bereits eine nachträgliche Einflussnahme.
 Der LLM entscheidet **nichts**: er registriert nur Kandidaten; Zulassung
 und Re-Prüfung sind deterministisch (``agent_evolve``). Alle
 Fehlerszenarien (LLM-Timeout, schlechtes JSON, ungültige Vorschläge)
-sind nicht-fatal: der Lauf fährt ohne LLM-Vorschläge weiter.
+sind nicht-fatal — pro Persona: der Lauf fährt mit den Vorschlägen der
+übrigen Personas weiter, bei Totalausfall ohne Vorschläge.
 """
 
 from __future__ import annotations
@@ -30,6 +39,66 @@ logger = logging.getLogger(__name__)
 #: Minuten, nicht Sekunden).
 PROPOSER_TIMEOUT = 600.0
 
+#: Das Persona-Panel: (id, Markt-Prior). Jede Persona bekommt einen
+#: eigenen LLM-Aufruf — der Prior ist eine Arbeits-Hypothese, keine
+#: Tatsache (im Prompt so erklärt, damit nicht der Prior selbst
+#: implementiert wird).
+PERSONAS: tuple[tuple[str, str], ...] = (
+    (
+        "trend",
+        "Kursbewegungen zeigen kurzfristige Autokorrelation: Momentum, "
+        "Brüche und Trend-Struktur haben über einen 15-Minuten-Horizont "
+        "Richtungsvorhersagekraft.",
+    ),
+    (
+        "reversion",
+        "Übertriebene 15-Minuten-Bewegungen revertieren zum Mittelwert: "
+        "Extreme (ausgeprägte Z-Score-/Bollinger-Bänder, RSI-Extremzonen) "
+        "vorhersagen eher Gegenbewegung als Fortsetzung.",
+    ),
+    (
+        "mikrostruktur",
+        "Volumen- und Orderflow-Signale vorwegnehmen die Preisbewegung: "
+        "Up/Down-Volumen-Asymmetrie, OBV-Drift und Range-Nutzung "
+        "(Teilnahme) sind vorwärts-indikativ für die nächste Bewegung.",
+    ),
+    (
+        "regime",
+        "Der Markt verbringt die meisten Kerzen seitwärts in "
+        "Volatilitäts-Clustern: Squeeze- und Regimewechsel-Vorläufer "
+        "trennen die Wahrscheinlichkeit für Richtungs- von der für "
+        "Seitwärts-Ausbrüche.",
+    ),
+)
+
+#: Gemeinsame harte Regeln für alle Persona-Aufrufe (N = Platzhalter
+#: für die Vorschlags-Obergrenze).
+_CONTRACT = (
+    "Harte Regeln: "
+    "1. Maximal N Vorschläge; lieber 1 starker als N schwache. "
+    "2. Vorschläge werden VOR dem Test registriert und danach nur noch "
+    "mechanisch beurteilt — nichts ist verhandelbar. Overfitting auf "
+    "das aktuelle Fenster, Redundanz mit bestehenden Agenten und "
+    "Lookahead-Fallen sind Ausschlusskriterien. "
+    "3. Jeder Vorschlag: name (snake_case, neu, nicht aus der Sperrliste), "
+    "claim (1-2 Sätze: WARUM die Logik funktionieren sollte), "
+    "code (vollständiger Quelltext der predict-Funktion, Format s. "
+    "user-Nachricht). "
+    "4. Konservative Wahrscheinlichkeiten, keine Extremwerte, klare "
+    "Invalidierung. "
+    "5. Antworte NUR mit einem JSON-Array (kein Markdown, keine Kommentare)."
+)
+
+_ROLE_TEMPLATE = (
+    "Du bist die {name}-Persona in einer Agenten-Entwicklungs-Diskussion "
+    "und schlägst mechanismusplausible, falsifizierbare Prognose-Logik "
+    "für die Kursrichtung über einen 15-Minuten-Horizont vor. "
+    "Dein Markt-Prior: {prior} Behandle den Prior als Hypothese, nicht "
+    "als Tatsache — die Logik muss ohne ihn plausibel bleiben."
+)
+
+#: Legacy-Prompt (``build_messages`` ohne ``role``): ein Aufruf, in dem
+#: drei Rollen simuliert diskutieren.
 _SYSTEM_PROMPT = (
     "Du moderierst eine Agenten-Entwicklungs-Diskussion mit drei Rollen: "
     "FORSCHER (schlägt mechanismusplausible, falsifizierbare Prognose-Logik "
@@ -67,8 +136,14 @@ def build_messages(
     digest: str,
     taken_names: tuple[str, ...],
     max_candidates: int,
+    *,
+    role: str | None = None,
 ) -> list[dict[str, str]]:
-    """System- und User-Nachricht für den Vorschlags-Aufruf."""
+    """System- und User-Nachricht für den Vorschlags-Aufruf.
+
+    Mit ``role`` (einer Persona-ID aus ``PERSONAS``) erhält der Aufruf
+    den Persona-Prompt; ohne bleibt der Legacy-Diskussions-Prompt.
+    """
     user = (
         f"Maximale Anzahl Vorschläge: {max_candidates}.\n"
         f"{_CODE_FORMAT}\n\n"
@@ -76,8 +151,13 @@ def build_messages(
         f"Evidenz-Digest (aktuelle Ensemble-Performance, OOS = Out-of-Sample):\n{digest}\n\n"
         "Liefere jetzt das JSON-Array der Vorschläge."
     )
+    if role is None:
+        system = _SYSTEM_PROMPT
+    else:
+        prior = dict(PERSONAS)[role]
+        system = _ROLE_TEMPLATE.format(name=role, prior=prior) + " " + _CONTRACT
     return [
-        {"role": "system", "content": _SYSTEM_PROMPT.replace("N", str(max_candidates))},
+        {"role": "system", "content": system.replace("N", str(max_candidates))},
         {"role": "user", "content": user},
     ]
 
@@ -124,35 +204,50 @@ def propose(
     taken_names: tuple[str, ...],
     *,
     max_candidates: int = 3,
+    personas: tuple[tuple[str, str], ...] = PERSONAS,
 ) -> list[dict[str, str]]:
-    """Führt die Persona-Diskussion aus und liefert validierte Vorschläge.
+    """Führt das Persona-Panel aus und liefert validierte Vorschläge.
 
-    Alle Fehlerszenarien sind **nicht fatal**: der Lauf fährt ohne
-    LLM-Vorschläge weiter (leere Liste mit Warning-Log).
+    Jede Persona erhält einen eigenen LLM-Aufruf; die Vorschläge werden
+    gemergt, nach Namen dedupliziert und auf ``max_candidates`` gekappt.
+    Fehlerszenarien sind pro Persona **nicht fatal** (Warning-Log,
+    übrige Personas laufen weiter); bei Totalausfall: leere Liste.
     """
     client.timeout = PROPOSER_TIMEOUT
-    try:
-        raw = client.complete(build_messages(digest, taken_names, max_candidates), temperature=0.3)
-    except LLMError as exc:
-        logger.warning("Agent-Proposer fehlgeschlagen (%s: %s) — ohne LLM-Vorschläge", exc.code, exc)
-        return []
-    except Exception as exc:
-        logger.warning("Agent-Proposer unerwarteter Fehler (%s: %s)", type(exc).__name__, exc)
-        return []
-
-    try:
-        items = parse_agent_proposals(raw)
-    except (ValueError, json.JSONDecodeError) as exc:
-        logger.warning("Agent-Proposer-Antwort nicht parsbar: %s — ohne LLM-Vorschläge", exc)
-        return []
-
     taken = frozenset(taken_names)
+    # ponytail: sequentielle Persona-Aufrufe (4 x ~20-60 s im Daily-Lauf);
+    # bei Engpass im Zeitbudget auf ThreadPoolExecutor umstellen.
+    per_persona = max(1, max_candidates // max(1, len(personas)))
     proposals: list[dict[str, str]] = []
     seen: set[str] = set()
-    for item in items[:max_candidates]:
-        proposal = _validate(item, taken)
-        if proposal is not None and proposal["name"] not in seen:
-            seen.add(proposal["name"])
-            proposals.append(proposal)
-    logger.info("Agent-Proposer: %d Vorschläge, %d valide", len(items), len(proposals))
-    return proposals
+    for persona in personas:
+        persona_id = persona[0]
+        try:
+            raw = client.complete(
+                build_messages(digest, taken_names, per_persona, role=persona_id),
+                temperature=0.3,
+            )
+        except LLMError as exc:
+            logger.warning("Agent-Proposer[%s] fehlgeschlagen (%s: %s)", persona_id, exc.code, exc)
+            continue
+        except Exception as exc:
+            logger.warning(
+                "Agent-Proposer[%s] unerwarteter Fehler (%s: %s)", persona_id, type(exc).__name__, exc
+            )
+            continue
+        try:
+            items = parse_agent_proposals(raw)
+        except (ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Agent-Proposer[%s]-Antwort nicht parsbar: %s", persona_id, exc)
+            continue
+        accepted = 0
+        for item in items[:per_persona]:
+            proposal = _validate(item, taken)
+            if proposal is not None and proposal["name"] not in seen:
+                seen.add(proposal["name"])
+                proposals.append(proposal)
+                accepted += 1
+        logger.info("Agent-Proposer[%s]: %d Vorschläge, %d neu/valide", persona_id, len(items), accepted)
+        if len(proposals) >= max_candidates:
+            break
+    return proposals[:max_candidates]
