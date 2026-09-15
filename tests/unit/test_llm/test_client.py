@@ -81,6 +81,19 @@ class TestComplete:
         assert kwargs["timeout"] == 60.0
         assert kwargs["messages"] == [{"role": "user", "content": "hi"}]
 
+    def test_reasoning_is_disabled_to_survive_gateway_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Der Gateway bricht nicht-streamende Aufrufe nach 90 s ab; das
+        # Reasoning-Modell braucht im Thinking-Modus >190 s bis zum ersten
+        # Token. Daher wird das Thinking per chat_template_kwargs deaktiviert.
+        fake = _FakeCompletion(response=_Response("hello"))
+        _patch_completion(monkeypatch, fake)
+
+        _make_client().complete([{"role": "user", "content": "hi"}])
+
+        assert fake.calls[0]["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+
     def test_bare_model_name_is_prefixed_for_litellm(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

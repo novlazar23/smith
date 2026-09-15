@@ -66,6 +66,10 @@ class LLMClient:
                 api_key=self.api_key,
                 temperature=temperature,
                 timeout=self.timeout,
+                # Reasoning abschalten: der Gateway bricht nicht-streamende
+                # Aufrufe nach 90 s ab, das Reasoning-Modell braucht aber
+                # >190 s bis zum ersten Token (thinking-modus = Timeout-Garantie).
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
         except Exception as exc:  # wird unten auf LLMError umgemappt
             raise _map_error(exc) from exc
