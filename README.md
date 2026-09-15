@@ -826,12 +826,17 @@ EMA/RSI/BB-Perioden, Kalibrierungs-Gewichte) evolviert damit im
  `champion_configs.json` = Agenten-Defaults (Fail-Soft, kein Crash).
 
 **Champion-Logik-Evolution (`--evolve-agents N`):** Daneben schlägt ein
-LLM-Persona-Panel bis zu N neue Agenten-Logiken als Code vor: vier
-diversifizierte Personas (Trend, Reversion, Mikrostruktur, Regime —
-jeweils eigener LLM-Aufruf mit eigenem Markt-Prior via
-`LLMClient`/LiteLLM, `LITELLM_BASE_URL`/`SMITH_LLM_MODEL`, API-Key als
-Secret), deren Vorschläge gemergt und dedupliziert werden. Jede
-Logik ist eine Funktion
+LLM-Persona-Panel bis zu N neue Agenten-Logiken als Code vor — eine
+dreirundige Diskussion: (1) sechs diversifizierte Personas (Trend,
+Reversion, Mikrostruktur, Regime, Ereignis, Liquidität — je ein
+paralleler LLM-Aufruf mit eigenem Markt-Prior via `LLMClient`/LiteLLM,
+`LITELLM_BASE_URL`/`SMITH_LLM_MODEL`, API-Key als Secret) schlagen
+Kandidaten vor; (2) ein SKEPTIKER-Aufruf kritisiert alle Kandidaten
+konkret (Overfitting, Redundanz, Lookahead, Fragilität) — advisory,
+er entscheidet nichts; (3) jede Persona revidiert ihren Vorschlag
+einmalig nach der Kritik (ungültige Revision → Original bleibt, Name
+bleibt bei der Preregistrierung immer identisch). Jede Logik ist eine
+Funktion
 `predict(open, high, low, close, volume) -> (p_up, p_down, p_range)`. Jede Vorschlags-Logik läuft durch eine dreischichtige
 Sandbox (statischer AST-Jail: nur `numpy`/`math`/`typing`-Imports, nur
 `predict`, keine gefährlichen Aufrufe; isolierte Ausführung mit

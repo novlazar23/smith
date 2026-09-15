@@ -1,31 +1,37 @@
-"""LLM-Phase für Stufe 2: ein Persona-Panel schlägt neue Agenten-Logik vor.
+"""LLM-Phase für Stufe 2: Persona-Panel mit Skeptiker-Diskussion.
 
-Jede Persona aus ``PERSONAS`` (unterschiedliche Markt-Priors: Trend,
-Reversion, Mikrostruktur, Regime) erhält **einen eigenen LLM-Aufruf**
-mit ihrem Prior und schlägt darin Kandidaten vor (``name``/``claim``/
-``code``). Die Vorschläge aller Personas werden gemergt, nach Namen
-dedupliziert und auf ``max_candidates`` gekappt — die Diversifikation
-der Priors stattet das Gate-Panel mit unabhängigeren Kandidaten aus.
-Der Skeptiker-Teil der Diskussion entfällt als LLM-Rolle, weil die
-deterministischen Gates (OOS/LOO/Stabilität in ``agent_evolve``) diese
-Funktion besser und nachprüfbar übernehmen.
+Dreirundige Diskussion (Muster: multi-agent deliberation):
 
-Der LLM liefert pro Persona ein JSON-Array, das hier gegen
-Name-Muster, Sperrliste und Mindestlängen validiert wird. Ungültige
-Vorschläge werden verworfen (mit Log), nicht „repariert" — Reparieren
-wäre bereits eine nachträgliche Einflussnahme.
+1. **Vorschlag:** Jede Persona aus ``PERSONAS`` (unterschiedliche
+   Markt-Priors) erhält einen eigenen LLM-Aufruf mit ihrem Prior und
+   schlägt Kandidaten vor (``name``/``claim``/``code``). Die Aufrufe
+   laufen parallel (``ThreadPoolExecutor``); die Vorschläge werden in
+   Persona-Reihenfolge gemergt, nach Namen dedupliziert und auf
+   ``max_candidates`` gekappt.
+2. **Kritik:** Ein SKEPTIKER-Aufruf bewertet alle Pool-Kandidaten auf
+   Overfitting, Redundanz, Lookahead und Fragilität. Die Kritik ist
+   **advisory** — der SKEPTIKER entscheidet nichts (Zulassung bleiben
+   die deterministischen Gates in ``agent_evolve``), er liefert nur
+   Verbesserungsvorschläge an Runde 3.
+3. **Revision:** Jede Persona überarbeitet ihren (kritisierten)
+   Vorschlag einmalig; ist die Kritik unbegründet oder die Revision
+   ungültig, bleibt der Originalvorschlag stehen (Name bleibt bei
+   allen Revisionen unverändert — Preregistrierungs-Identität).
 
-Der LLM entscheidet **nichts**: er registriert nur Kandidaten; Zulassung
-und Re-Prüfung sind deterministisch (``agent_evolve``). Alle
-Fehlerszenarien (LLM-Timeout, schlechtes JSON, ungültige Vorschläge)
-sind nicht-fatal — pro Persona: der Lauf fährt mit den Vorschlägen der
-übrigen Personas weiter, bei Totalausfall ohne Vorschläge.
+Alle Runden sind fail-soft: eine ausgefallene Persona/Kritik/Revision
+kostet nur ihren eigenen Beitrag; bei Totalausfall läuft der Lauf
+ohne LLM-Vorschläge weiter. Der LLM liefert pro Aufruf ein
+JSON-Array, das gegen Name-Muster, Sperrliste und Mindestlängen
+validiert wird — ungültige Vorschläge werden verworfen (mit Log),
+nicht „repariert" (Reparieren wäre bereits nachträgliche
+Einflussnahme).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from packages.llm.client import LLMClient
@@ -35,8 +41,8 @@ from .agent_sandbox import NAME_PATTERN
 
 logger = logging.getLogger(__name__)
 
-#: Standard-Timeout für den Vorschlags-Aufruf (Code-Generierung braucht
-#: Minuten, nicht Sekunden).
+#: Standard-Timeout für einen Vorschlags-/Kritik-/Revisions-Aufruf
+#: (Code-Generierung braucht Minuten, nicht Sekunden).
 PROPOSER_TIMEOUT = 600.0
 
 #: Das Persona-Panel: (id, Markt-Prior). Jede Persona bekommt einen
@@ -69,6 +75,21 @@ PERSONAS: tuple[tuple[str, str], ...] = (
         "trennen die Wahrscheinlichkeit für Richtungs- von der für "
         "Seitwärts-Ausbrüche.",
     ),
+    (
+        "ereignis",
+        "Ereignisse hinterlassen Signaturen im Preisband: Volumen-Spitzen "
+        "mit ungewöhnlicher Range-Expansion (Nachrichten, Liquiditäts-"
+        "Schocks) werden danach häufiger fortgesetzt oder revertiert — "
+        "Spike-Größe, Wick-Struktur und das Verhalten nach dem Spike "
+        "sind vorwärts-indikativ.",
+    ),
+    (
+        "liquiditaet",
+        "Kursbewegungen jagen Liquidität: lange Dochte über vorherige "
+        "Extrema sind Stop-Läufe und kehren oft zurück; Docht-Länge, "
+        "Docht-Seite und das Verhältnis von Kerzenkörper zur Range "
+        "zeigen, welche Seite Liquidität absorbiert.",
+    ),
 )
 
 #: Gemeinsame harte Regeln für alle Persona-Aufrufe (N = Platzhalter
@@ -95,6 +116,31 @@ _ROLE_TEMPLATE = (
     "für die Kursrichtung über einen 15-Minuten-Horizont vor. "
     "Dein Markt-Prior: {prior} Behandle den Prior als Hypothese, nicht "
     "als Tatsache — die Logik muss ohne ihn plausibel bleiben."
+)
+
+_SKEPTIC_SYSTEM = (
+    "Du bist der SKEPTIKER in einer Agenten-Entwicklungs-Diskussion. "
+    "Kritisier jeden vorliegenden Agenten-Vorschlag konkret auf: "
+    "Overfitting auf das aktuelle Fenster, Redundanz mit bestehenden "
+    "Agenten, Lookahead-Fallen, numerische Fragilität (Division durch "
+    "~0, Extremwerte) und fehlende Invalidierung. Nenne pro Vorschlag "
+    "genau das, was überarbeitet werden sollte. Du entscheidest nichts "
+    "und darfst keine Vorschläge verwerfen — deine Kritik dient nur "
+    "der Überarbeitung durch die jeweiligen Personas. "
+    "Antworte NUR mit einem JSON-Array von {name, critique} "
+    "(1-3 Sätze pro critique, kein Markdown, keine Kommentare)."
+)
+
+_REFINE_SYSTEM = (
+    "Du überarbeitest einen Agenten-Vorschlag nach Kritik des SKEPTIKERS. "
+    "Ist die Kritik berechtigt (Overfitting auf das aktuelle Fenster, "
+    "Redundanz mit bestehenden Agenten, Lookahead, numerische Fragilität, "
+    "fehlende Invalidierung), überarbeite den Code einmalig und gezielt; "
+    "ist sie unbegründet, liefere den Vorschlag unverändert. Der Name "
+    "bleibt in jedem Fall unverändert. Das Code-Format gilt weiterhin "
+    "(def predict(open, high, low, close, volume) -> (p_up, p_down, "
+    "p_range)). Antworte NUR mit einem JSON-Array mit genau einem Element "
+    "({name, claim, code}); kein Markdown, keine Kommentare."
 )
 
 #: Legacy-Prompt (``build_messages`` ohne ``role``): ein Aufruf, in dem
@@ -198,6 +244,163 @@ def _validate(item: dict[str, Any], taken_names: frozenset[str]) -> dict[str, st
     return {"name": name, "claim": claim, "code": code}
 
 
+def _round_proposals(
+    client: LLMClient,
+    digest: str,
+    taken_names: tuple[str, ...],
+    taken: frozenset[str],
+    per_persona: int,
+    personas: tuple[tuple[str, str], ...],
+) -> list[dict[str, str]]:
+    """Runde 1: Jede Persona schlägt parallel vor; Merge in Persona-Reihenfolge."""
+
+    def call_one(persona_id: str) -> list[dict[str, str]]:
+        try:
+            raw = client.complete(
+                build_messages(digest, taken_names, per_persona, role=persona_id),
+                temperature=0.3,
+            )
+        except LLMError as exc:
+            logger.warning("Agent-Proposer[%s] fehlgeschlagen (%s: %s)", persona_id, exc.code, exc)
+            return []
+        except Exception as exc:
+            logger.warning(
+                "Agent-Proposer[%s] unerwarteter Fehler (%s: %s)", persona_id, type(exc).__name__, exc
+            )
+            return []
+        try:
+            items = parse_agent_proposals(raw)
+        except (ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Agent-Proposer[%s]-Antwort nicht parsbar: %s", persona_id, exc)
+            return []
+        out: list[dict[str, str]] = []
+        for item in items[:per_persona]:
+            proposal = _validate(item, taken)
+            if proposal is not None:
+                out.append(proposal)
+        logger.info("Agent-Proposer[%s]: %d Vorschläge, %d valide", persona_id, len(items), len(out))
+        return out
+
+    merged: list[dict[str, str]] = []
+    seen: set[str] = set()
+    with ThreadPoolExecutor(max_workers=max(1, len(personas))) as executor:
+        futures = [executor.submit(call_one, persona[0]) for persona in personas]
+        for future in futures:
+            for proposal in future.result():
+                if proposal["name"] not in seen:
+                    seen.add(proposal["name"])
+                    merged.append(proposal)
+    return merged
+
+
+def _round_critique(client: LLMClient, digest: str, pool: list[dict[str, str]]) -> dict[str, str]:
+    """Runde 2: SKEPTIKER kritisiert alle Pool-Kandidaten (advisory)."""
+    user = (
+        f"Evidenz-Digest (aktuelles Basis-Ensemble, OOS = Out-of-Sample):\n{digest}\n\n"
+        "Vorliegende Vorschläge:\n"
+        f"{json.dumps(pool, ensure_ascii=False, indent=2)}\n\n"
+        "Liefere jetzt das JSON-Array der Kritiken ({name, critique})."
+    )
+    try:
+        raw = client.complete(
+            [
+                {"role": "system", "content": _SKEPTIC_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.2,
+        )
+    except LLMError as exc:
+        logger.warning("Agent-Proposer[skeptiker] fehlgeschlagen (%s: %s)", exc.code, exc)
+        return {}
+    except Exception as exc:
+        logger.warning("Agent-Proposer[skeptiker] unerwarteter Fehler (%s: %s)", type(exc).__name__, exc)
+        return {}
+    try:
+        items = parse_agent_proposals(raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        logger.warning("Agent-Proposer[skeptiker]-Antwort nicht parsbar: %s", exc)
+        return {}
+    critiques = {
+        item["name"]: item["critique"].strip()
+        for item in items
+        if isinstance(item.get("name"), str)
+        and isinstance(item.get("critique"), str)
+        and len(item["critique"].strip()) >= 10
+    }
+    logger.info("Agent-Proposer[skeptiker]: %d Kritiken für %d Vorschläge", len(critiques), len(pool))
+    return critiques
+
+
+def _round_refine(
+    client: LLMClient,
+    pool: list[dict[str, str]],
+    critiques: dict[str, str],
+    taken: frozenset[str],
+) -> list[dict[str, str]]:
+    """Runde 3: Jede Persona revidiert ihren kritisierten Vorschlag (parallel)."""
+
+    def refine_one(proposal: dict[str, str]) -> dict[str, str]:
+        critique = critiques.get(proposal["name"])
+        if critique is None:
+            return proposal
+        user = (
+            "Ursprünglicher Vorschlag:\n"
+            f"{json.dumps(proposal, ensure_ascii=False, indent=2)}\n\n"
+            f"Kritik des SKEPTIKERS:\n{critique}\n\n"
+            "Liefere jetzt das überarbeitete JSON-Array."
+        )
+        try:
+            raw = client.complete(
+                [
+                    {"role": "system", "content": _REFINE_SYSTEM},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.3,
+            )
+        except LLMError as exc:
+            logger.warning(
+                "Agent-Proposer[refine:%s] fehlgeschlagen (%s: %s) — Vorschlag unverändert",
+                proposal["name"],
+                exc.code,
+                exc,
+            )
+            return proposal
+        except Exception as exc:
+            logger.warning(
+                "Agent-Proposer[refine:%s] unerwarteter Fehler (%s: %s) — Vorschlag unverändert",
+                proposal["name"],
+                type(exc).__name__,
+                exc,
+            )
+            return proposal
+        try:
+            items = parse_agent_proposals(raw)
+        except (ValueError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Agent-Proposer[refine:%s]-Antwort nicht parsbar: %s — Vorschlag unverändert",
+                proposal["name"],
+                exc,
+            )
+            return proposal
+        if not items:
+            logger.warning("Agent-Proposer[refine:%s]: leere Antwort — Vorschlag unverändert", proposal["name"])
+            return proposal
+        revised = _validate(items[0], taken)
+        if revised is None:
+            logger.warning(
+                "Agent-Proposer[refine:%s]: Überarbeitung ungültig — Vorschlag unverändert", proposal["name"]
+            )
+            return proposal
+        logger.info("Agent-Proposer[refine:%s]: Vorschlag überarbeitet", proposal["name"])
+        # Name bleibt bei der Preregistrierung identisch, auch wenn der
+        # LLM in der Antwort einen anderen Namen liefert.
+        return {"name": proposal["name"], "claim": revised["claim"], "code": revised["code"]}
+
+    with ThreadPoolExecutor(max_workers=max(1, len(pool))) as executor:
+        futures = [executor.submit(refine_one, proposal) for proposal in pool]
+        return [future.result() for future in futures]
+
+
 def propose(
     client: LLMClient,
     digest: str,
@@ -206,48 +409,26 @@ def propose(
     max_candidates: int = 3,
     personas: tuple[tuple[str, str], ...] = PERSONAS,
 ) -> list[dict[str, str]]:
-    """Führt das Persona-Panel aus und liefert validierte Vorschläge.
+    """Führt die dreirundige Persona-Diskussion aus.
 
-    Jede Persona erhält einen eigenen LLM-Aufruf; die Vorschläge werden
-    gemergt, nach Namen dedupliziert und auf ``max_candidates`` gekappt.
-    Fehlerszenarien sind pro Persona **nicht fatal** (Warning-Log,
-    übrige Personas laufen weiter); bei Totalausfall: leere Liste.
+    Runde 1 (parallele Persona-Vorschläge) → Cap auf ``max_candidates``
+    → Runde 2 (Skeptiker-Kritik, advisory) → Runde 3 (Revision pro
+    Vorschlag). Fehlerszenarien sind auf jeder Ebene **nicht fatal**:
+    ausgefallene Aufrufe fallen auf die vorherige Stufe zurück
+    (Kritik fehlgeschlagen → Originalvorschläge; Revision ungültig →
+    Originalvorschlag; Totalausfall → leere Liste).
     """
     client.timeout = PROPOSER_TIMEOUT
     taken = frozenset(taken_names)
-    # ponytail: sequentielle Persona-Aufrufe (4 x ~20-60 s im Daily-Lauf);
-    # bei Engpass im Zeitbudget auf ThreadPoolExecutor umstellen.
-    per_persona = max(1, max_candidates // max(1, len(personas)))
-    proposals: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for persona in personas:
-        persona_id = persona[0]
-        try:
-            raw = client.complete(
-                build_messages(digest, taken_names, per_persona, role=persona_id),
-                temperature=0.3,
-            )
-        except LLMError as exc:
-            logger.warning("Agent-Proposer[%s] fehlgeschlagen (%s: %s)", persona_id, exc.code, exc)
-            continue
-        except Exception as exc:
-            logger.warning(
-                "Agent-Proposer[%s] unerwarteter Fehler (%s: %s)", persona_id, type(exc).__name__, exc
-            )
-            continue
-        try:
-            items = parse_agent_proposals(raw)
-        except (ValueError, json.JSONDecodeError) as exc:
-            logger.warning("Agent-Proposer[%s]-Antwort nicht parsbar: %s", persona_id, exc)
-            continue
-        accepted = 0
-        for item in items[:per_persona]:
-            proposal = _validate(item, taken)
-            if proposal is not None and proposal["name"] not in seen:
-                seen.add(proposal["name"])
-                proposals.append(proposal)
-                accepted += 1
-        logger.info("Agent-Proposer[%s]: %d Vorschläge, %d neu/valide", persona_id, len(items), accepted)
-        if len(proposals) >= max_candidates:
-            break
-    return proposals[:max_candidates]
+    per_persona = max(1, -(-max_candidates // max(1, len(personas))))
+
+    pool = _round_proposals(client, digest, taken_names, taken, per_persona, personas)[:max_candidates]
+    if not pool:
+        return []
+
+    critiques = _round_critique(client, digest, pool)
+    if not critiques:
+        logger.info("Agent-Proposer: ohne Skeptiker-Kritik — Vorschläge unverändert weitergereicht")
+        return pool
+
+    return _round_refine(client, pool, critiques, taken)

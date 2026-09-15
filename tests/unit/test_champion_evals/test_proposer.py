@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 from apps.champion_evals.proposer import PERSONAS, build_messages, parse_agent_proposals, propose
@@ -27,7 +28,7 @@ VALID_PROPOSAL = {
 
 
 class FakeClient:
-    """LLM-Client-Doppel.
+    """LLM-Client-Doppel (thread-safe für die parallelen Panel-Aufrufe).
 
     ``answer`` ist entweder ein einzelner Wert (jeder Aufruf liefert ihn)
     oder eine Liste (Aufruf i liefert ``answer[i]``; ab Ende der Liste
@@ -40,15 +41,17 @@ class FakeClient:
         self.timeout = 60.0
         self.messages: list[dict[str, str]] | None = None
         self.calls: list[list[dict[str, str]]] = []
+        self._lock = threading.Lock()
 
     def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.0) -> str:
-        self.messages = messages
-        self.calls.append(messages)
-        if isinstance(self.answer, list):
-            idx = min(len(self.calls) - 1, len(self.answer) - 1)
-            current: str | Exception = self.answer[idx]
-        else:
-            current = self.answer if self.answer is not None else ""
+        with self._lock:
+            idx = len(self.calls)
+            self.calls.append(messages)
+            self.messages = messages
+            if isinstance(self.answer, list):
+                current: str | Exception = self.answer[min(idx, len(self.answer) - 1)]
+            else:
+                current = self.answer if self.answer is not None else ""
         if isinstance(current, Exception):
             raise current
         return current
@@ -153,7 +156,8 @@ class TestPersonaPanel:
         client = FakeClient(answers)
         proposals = propose(client, "Digest", (), max_candidates=3)
         assert [p["name"] for p in proposals] == ["volume_drift"]
-        assert len(client.calls) == len(PERSONAS)
+        # 6 Persona-Aufrufe + 1 Skeptiker-Aufruf (Kritik leer → fail-soft)
+        assert len(client.calls) == len(PERSONAS) + 1
 
     def test_persona_system_prompts_are_distinct(self) -> None:
         client = FakeClient(["[]"] * len(PERSONAS))
@@ -174,3 +178,56 @@ class TestPersonaPanel:
         client = FakeClient(["[]"] * len(PERSONAS))
         propose(client, "Digest", (), max_candidates=8)
         assert "Maximale Anzahl Vorschläge: 2" in client.calls[0][1]["content"]
+
+
+REVISED_CODE = VALID_PROPOSAL["code"] + "    # revidiert: robustere Schwellen (Skeptiker-Kritik)\n"
+SKEPTIC_CRITIQUE = _answer(
+    [{"name": "volume_drift", "critique": "Schwelle 1.2 ist auf den letzten Spike gefittet; Overfitting-Risiko, robuste Schätzung nötig."}]
+)
+
+
+def _round1_answers() -> list[str]:
+    """Sechs Persona-Antworten, von denen genau eine einen Vorschlag liefert."""
+    return ["[]"] * (len(PERSONAS) - 1) + [_answer([VALID_PROPOSAL])]
+
+
+class TestCritiqueRound:
+    def test_critique_triggers_refine(self) -> None:
+        answers = [*_round1_answers(), SKEPTIC_CRITIQUE, _answer([dict(VALID_PROPOSAL, code=REVISED_CODE)])]
+        client = FakeClient(answers)
+        proposals = propose(client, "Digest", (), max_candidates=3)
+        assert [p["name"] for p in proposals] == ["volume_drift"]
+        assert proposals[0]["code"] == REVISED_CODE
+        assert len(client.calls) == len(PERSONAS) + 2
+
+    def test_skeptic_failure_keeps_original(self) -> None:
+        answers = [*_round1_answers(), "keine JSON-Antwort"]
+        client = FakeClient(answers)
+        proposals = propose(client, "Digest", (), max_candidates=3)
+        assert proposals[0]["code"] == VALID_PROPOSAL["code"]
+        assert len(client.calls) == len(PERSONAS) + 1
+
+    def test_refine_failure_keeps_original(self) -> None:
+        answers = [*_round1_answers(), SKEPTIC_CRITIQUE, LLMError("timeout", "Gateway-Timeout")]
+        client = FakeClient(answers)
+        proposals = propose(client, "Digest", (), max_candidates=3)
+        assert proposals[0]["code"] == VALID_PROPOSAL["code"]
+        assert len(client.calls) == len(PERSONAS) + 2
+
+    def test_refine_keeps_original_name(self) -> None:
+        renamed = dict(VALID_PROPOSAL, name="other_name", code=REVISED_CODE)
+        answers = [*_round1_answers(), SKEPTIC_CRITIQUE, _answer([renamed])]
+        client = FakeClient(answers)
+        proposals = propose(client, "Digest", (), max_candidates=3)
+        assert proposals[0]["name"] == "volume_drift"
+        assert proposals[0]["code"] == REVISED_CODE
+
+    def test_critique_for_foreign_name_skips_refine(self) -> None:
+        foreign = _answer(
+            [{"name": "anderer_agent", "critique": "Dieser Vorschlag ist redundant und sollte entfernt werden."}]
+        )
+        answers = [*_round1_answers(), foreign]
+        client = FakeClient(answers)
+        proposals = propose(client, "Digest", (), max_candidates=3)
+        assert proposals[0]["code"] == VALID_PROPOSAL["code"]
+        assert len(client.calls) == len(PERSONAS) + 1

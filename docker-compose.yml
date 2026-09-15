@@ -593,7 +593,7 @@ services:
       - --refresh-data
       - --evolve
       - --evolve-agents
-      - "3"
+      - "8"
       - --output
       - /app/backtest_reports/champion_evals.json
       - --loop
