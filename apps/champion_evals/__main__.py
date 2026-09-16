@@ -31,7 +31,10 @@ Bestand wird jeden Lauf re-geprüft; zugelassene Agenten landen als
 SHADOW-Mitglieder in ``evolved_agents.json`` (``--agents-output``,
 Default: neben ``--output``), aus dem der Orchestrator das Ensemble
 hot-reloadet. Ohne LLM-Konfiguration läuft der Schritt trotzdem
-(Re-Prüfung des Bestands, keine neuen Kandidaten).
+(Re-Prüfung des Bestands, keine neuen Kandidaten). ``--evolve-agents-
+instruments`` bewertet Stufe 2 auf einer eigenen (breiteren) Ticker-
+Liste — robustere Zulassungs-Gates, ohne die Champion-Parameter-
+Evolution (``--evolve`` = ``--instrument``) zu verändern.
 
 Beispiele (Docker-Compose-Profil on-demand):
     docker compose --profile on-demand run --rm backtest python -m apps.champion_evals \
@@ -121,6 +124,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stufe 2: max. N neue Agenten-Logiken vom LLM vorschlagen lassen (0 = aus; Bestand wird trotzdem re-geprüft)",
     )
     parser.add_argument(
+        "--evolve-agents-instruments",
+        default=None,
+        help=(
+            "Komma-Liste der Instrumente für die Stufe-2-OOS-Prüfung "
+            "(Default: identisch mit --instrument). Breitere Ticker-Liste = robustere Zulassungs-Gates; "
+            "betroffen ist nur Stufe 2, die Champion-Parameter-Evolution (--evolve) nutzt --instrument."
+        ),
+    )
+    parser.add_argument(
         "--llm-model",
         default=None,
         help="LLM-Modell für --evolve-agents (Default: SMITH_LLM_MODEL / Env-Default)",
@@ -176,6 +188,39 @@ def _window(args: argparse.Namespace) -> tuple[str | None, str | None]:
     return args.start, args.end
 
 
+def _parse_instruments(raw: str) -> tuple[str, ...]:
+    """Komma-Liste → Tuple; Leerstände und Doppelpunkte werden aussortiert."""
+    return tuple(dict.fromkeys(item.strip() for item in raw.split(",") if item.strip()))
+
+
+def _load_series(
+    engine: ClickHouseEngine,
+    instruments: tuple[str, ...],
+    venue: str,
+    start: str | None,
+    end: str | None,
+    args: argparse.Namespace,
+) -> list[tuple[str, list[Candle]]]:
+    """Lädt ``candles_history`` pro Instrument; zu wenige Kerzen → übersprungen (nicht der Lauf)."""
+    from apps.backtest.ch_feed import ClickHouseDataFeed
+
+    series: list[tuple[str, list[Candle]]] = []
+    for instrument in instruments:
+        feed = ClickHouseDataFeed(engine, instrument, venue=venue, start=start, end=end, resample=args.resample)
+        candles = feed.get_candles()
+        if len(candles) < args.min_candles + args.horizon_bars:
+            logger.error(
+                "Instrument %s übersprungen: nur %d Kerzen (min-candles=%d + horizon-bars=%d)",
+                instrument,
+                len(candles),
+                args.min_candles,
+                args.horizon_bars,
+            )
+            continue
+        series.append((instrument, list(candles)))
+    return series
+
+
 def _refresh_history(
     engine: ClickHouseEngine, instruments: tuple[str, ...], start: str, end: str
 ) -> None:
@@ -204,9 +249,10 @@ def _refresh_history(
 
 def _run_once(args: argparse.Namespace) -> int:
     """Ein kompletter Lauf: Kerzen laden, dann Eval- oder Evolutions-Schritt."""
-    from apps.backtest.ch_feed import ClickHouseDataFeed
-
-    instruments = tuple(item.strip() for item in args.instrument.split(",") if item.strip())
+    instruments = _parse_instruments(args.instrument)
+    agents_instruments = (
+        _parse_instruments(args.evolve_agents_instruments) if args.evolve_agents_instruments else instruments
+    )
     venue = args.venue or os.environ.get("CANDLE_VENUE", "BINANCE_FUTURES")
     engine = _ch_engine(args)
     start, end = _window(args)
@@ -220,31 +266,28 @@ def _run_once(args: argparse.Namespace) -> int:
         if start is None or end is None:
             logger.error("--refresh-data benötigt ein Fenster (--days oder --start/--end)")
             return 1
-        _refresh_history(engine, instruments, start, end)
+        # Union beider Listen: auch die Stufe-2-Instrumente brauchen Lücken-Nachladung.
+        _refresh_history(engine, tuple(dict.fromkeys(instruments + agents_instruments)), start, end)
 
     # Alle Kerzen erst laden (Eval und Evolve teilen sich die Daten); ein
     # Instrument mit zu wenigen Kerzen wird übersprungen, nicht der Lauf.
-    series: list[tuple[str, list[Candle]]] = []
-    for instrument in instruments:
-        feed = ClickHouseDataFeed(engine, instrument, venue=venue, start=start, end=end, resample=args.resample)
-        candles = feed.get_candles()
-        if len(candles) < args.min_candles + args.horizon_bars:
-            logger.error(
-                "Instrument %s übersprungen: nur %d Kerzen (min-candles=%d + horizon-bars=%d)",
-                instrument,
-                len(candles),
-                args.min_candles,
-                args.horizon_bars,
-            )
-            continue
-        series.append((instrument, list(candles)))
+    series = _load_series(engine, instruments, venue, start, end, args)
     if not series:
         logger.error("Keine Kerzen geladen (zu wenige Kerzen oder Fenster zu klein)")
         return 1
 
     result = _run_evolve(args, series) if args.evolve else _run_eval(args, series)
     if args.evolve_agents:
-        result = max(result, _run_agent_evolve(args, series))
+        agents_series = series
+        if agents_instruments != instruments:
+            agents_series = _load_series(engine, agents_instruments, venue, start, end, args)
+            if not agents_series:
+                logger.error(
+                    "Keine Kerzen für --evolve-agents-instruments=%s (Stufe 2 bleibt ohne Lauf)",
+                    args.evolve_agents_instruments,
+                )
+                return max(result, 1)
+        result = max(result, _run_agent_evolve(args, agents_series))
     return result
 
 

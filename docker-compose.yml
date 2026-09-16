@@ -602,6 +602,10 @@ services:
       - --evolve
       - --evolve-agents
       - "8"
+      # Stufe 2 (Logik-Evolution) prüft Kandidaten auf 6 Tikern = robustere
+      # Zulassungs-Gates; Stufe 1 (Champion-Parameter, LIVE) bleibt BTC+ETH.
+      - --evolve-agents-instruments
+      - BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,ADA/USDT
       - --output
       - /app/backtest_reports/champion_evals.json
       - --loop
