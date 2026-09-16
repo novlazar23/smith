@@ -212,21 +212,73 @@ def build_messages(
     ]
 
 
+def _balanced(text: str, start: int, open_ch: str, close_ch: str) -> str | None:
+    """Balanciertes Bracket-Matching von ``text[start]`` (Öffner) aus,
+    Strings und Escapes ausgenommen."""
+    depth = 0
+    in_str = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
 def parse_agent_proposals(raw: str) -> list[dict[str, Any]]:
-    """Extrahiert das JSON-Array aus der LLM-Antwort (robust gegen Fences)."""
+    """Extrahiert das JSON-Array (oder ein einzelnes JSON-Objekt) aus der
+    LLM-Antwort (robust gegen Fences und Prosa).
+
+    Balanciertes Bracket-Matching von Kandidatenpositionen statt
+    erstes/letztes Bracket: Prosa mit Klammern vor oder nach dem JSON
+    bricht die Extraktion nicht mehr (Produktionsfehler der
+    Refine-Runde: ``[siehe …]``-Prosa, ``rfind(']')``). Das Modell
+    liefert die Antwort teils als einzelnes Objekt statt Array
+    (beobachtet in der Refine-Runde) — wird akzeptiert und in eine
+    Liste verpackt.
+    """
     text = raw.strip()
     if text.startswith("```"):
         text = text.strip("`")
         if text.lower().startswith("json"):
             text = text[4:]
-    start = text.find("[")
-    end = text.rfind("]")
-    if start < 0 or end <= start:
-        raise ValueError("kein JSON-Array in der Antwort gefunden")
-    data = json.loads(text[start : end + 1])
-    if not isinstance(data, list):
-        raise ValueError("Antwort ist kein JSON-Array")
-    return [item for item in data if isinstance(item, dict)]
+    for open_ch, close_ch, first in (("[", "]", '{"'), ("{", "}", '"')):
+        pos = 0
+        while True:
+            start = text.find(open_ch, pos)
+            if start < 0:
+                break
+            pos = start + 1
+            j = start + 1
+            while j < len(text) and text[j].isspace():
+                j += 1
+            if j >= len(text) or text[j] not in first:
+                continue
+            candidate = _balanced(text, start, open_ch, close_ch)
+            if candidate is None:
+                break
+            try:
+                data = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, list):
+                return [item for item in data if isinstance(item, dict)]
+            if isinstance(data, dict):
+                return [data]
+    raise ValueError("kein JSON-Array/-Objekt in der Antwort gefunden")
 
 
 def _validate(item: dict[str, Any], taken_names: frozenset[str]) -> dict[str, str] | None:
@@ -380,10 +432,12 @@ def _round_refine(
         try:
             items = parse_agent_proposals(raw)
         except (ValueError, json.JSONDecodeError) as exc:
+            # Extrakt der Rohantwort (diagnostisch: Trunkation vs. Fehlbildung vs. Prosa)
             logger.warning(
-                "Agent-Proposer[refine:%s]-Antwort nicht parsbar: %s — Vorschlag unverändert",
+                "Agent-Proposer[refine:%s]-Antwort nicht parsbar: %s (Extrakt: %.300r) — Vorschlag unverändert",
                 proposal["name"],
                 exc,
+                raw,
             )
             return proposal
         if not items:

@@ -73,6 +73,14 @@ class TestParseAgentProposals:
         raw = "Hier sind die Vorschläge: " + _answer([VALID_PROPOSAL]) + " — Ende."
         assert parse_agent_proposals(raw) == [VALID_PROPOSAL]
 
+    def test_bare_object_accepted(self) -> None:
+        # Modell-Verhalten aus der Refine-Runde: einzelnes Objekt statt Array
+        assert parse_agent_proposals(json.dumps(VALID_PROPOSAL)) == [VALID_PROPOSAL]
+
+    def test_bare_object_with_prose(self) -> None:
+        raw = "Hier ist die Überarbeitung: " + json.dumps(VALID_PROPOSAL, indent=2) + " — Ende."
+        assert parse_agent_proposals(raw) == [VALID_PROPOSAL]
+
     def test_no_array_raises(self) -> None:
         with pytest.raises(ValueError):
             parse_agent_proposals("keine JSON-Antwort")
