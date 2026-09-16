@@ -41,6 +41,14 @@ class FeatureFlags:
         self._environment: str = os.environ.get(
             "APP_ENV", os.environ.get("ENV", "development")
         )
+        # Persistenter Live-Schalter (überlebt Container-Neustarts). Wirkt
+        # nur in production — Doppelgate: is_enabled() erzwingt in
+        # development/staging weiterhin False.
+        if (
+            self._environment == "production"
+            and os.environ.get("LIVE_TRADING_ENABLED", "").strip().lower() == "true"
+        ):
+            self._flags["live_trading_enabled"] = True
 
     def is_enabled(self, flag: str, environment: str | None = None) -> bool:
         """Prüft, ob ein Feature-Flag aktiviert ist.

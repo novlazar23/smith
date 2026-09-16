@@ -183,6 +183,22 @@ services:
       # --evolve-agents geschrieben). Pro Dashboard-Anfrage gelesen;
       # Datei fehlt/defekt = leere Liste (fail-soft).
       EVOLVED_AGENTS_PATH: "/app/backtest_reports/evolved_agents.json"
+      # ── Live-Modus (Default: AUS) ─────────────────────────────────────────
+      # APP_ENV=production hebt den Feature-Flag-Safety-Lock auf
+      # (development/staging erzwingen live_trading_enabled=False).
+      # Ohne Credentials (leere Secret-Dateien) bleibt das Order-Gateway
+      # fail-closed; ohne LIVE_TRADING_ENABLED bleibt das Flag aus.
+      # Orders gibt es NUR manuell via REST /v1/live/orders — es existiert
+      # kein autonomer Live-Order-Loop.
+      APP_ENV: production
+      LIVE_VENUES: binance
+      # IP-Whitelist für /v1/live/* (strict-by-default: leere Liste blockiert
+      # ALLE Live-Endpunkte). Host-Traffic über den gemappten Port kommt als
+      # Compose-Bridge-Gateway an (172.26.0.1 — bei Netz-Recreation kann sich
+      # die Subnet-Adresse ändern; dann blockiert die Whitelist wieder,
+      # fail-safe).
+      LIVE_IP_WHITELIST: "127.0.0.1/32,::1/128,172.26.0.1/32"
+      # LIVE_TRADING_ENABLED: "true"  # persistenter Schalter (nur production)
     ports:
       - "8080:8000"
     healthcheck:
@@ -198,6 +214,8 @@ services:
       - api_secret_key
       - postgres_password
       - clickhouse_password
+      - live_binance_api_key
+      - live_binance_api_secret
       - minio_password
     depends_on:
       postgres:
@@ -682,3 +700,9 @@ secrets:
     file: ./configs/secrets/api_secret_key.txt
   llm_api_key:
     file: ./configs/secrets/llm_api_key.txt
+  # Live-Execution-Credentials (leer = fail-closed, Gateway ohne Venue-Keys).
+  # Echte Keys nur lokal eintragen (Verzeichnis ist gitignored).
+  live_binance_api_key:
+    file: ./configs/secrets/live_binance_api_key.txt
+  live_binance_api_secret:
+    file: ./configs/secrets/live_binance_api_secret.txt

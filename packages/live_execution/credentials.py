@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from packages.live_execution.gateway import GatewayExecutionError
@@ -17,6 +18,7 @@ from packages.security.hardening.encryption import KeyRing
 
 __all__ = [
     "MASTER_KEY_ENV",
+    "SECRET_DIR",
     "VENUES_ENV",
     "build_ccxt_config_from_env",
     "load_key_ring_from_env",
@@ -24,6 +26,9 @@ __all__ = [
 
 MASTER_KEY_ENV = "LIVE_MASTER_KEY_B64"
 VENUES_ENV = "LIVE_VENUES"
+# Docker-Secrets (configs/secrets/live_{venue}_api_{key,secret}.txt) werden
+# als Dateien unter /run/secrets gemountet; leer/fehlend = kein Credential.
+SECRET_DIR = "/run/secrets"
 
 
 def _split_venues(raw: str) -> list[str]:
@@ -32,6 +37,14 @@ def _split_venues(raw: str) -> list[str]:
 
 def _env_value(env: Mapping[str, str], key: str) -> str:
     return str(env.get(key, "")).strip()
+
+
+def _secret_file_value(name: str) -> str:
+    """Liest ein Docker-Secret unter ``SECRET_DIR``; fehlend/leer = ""."""
+    try:
+        return (Path(SECRET_DIR) / name).read_text().strip()
+    except OSError:
+        return ""
 
 
 def load_key_ring_from_env(env: Mapping[str, str] | None = None) -> KeyRing | None:
@@ -69,8 +82,12 @@ def build_ccxt_config_from_env(
 
         key_token = _env_value(source, f"LIVE_{suffix}_API_KEY_TOKEN")
         secret_token = _env_value(source, f"LIVE_{suffix}_API_SECRET_TOKEN")
-        api_key = _env_value(source, f"LIVE_{suffix}_API_KEY")
-        api_secret = _env_value(source, f"LIVE_{suffix}_API_SECRET")
+        api_key = _env_value(source, f"LIVE_{suffix}_API_KEY") or _secret_file_value(
+            f"live_{venue}_api_key"
+        )
+        api_secret = _env_value(source, f"LIVE_{suffix}_API_SECRET") or _secret_file_value(
+            f"live_{venue}_api_secret"
+        )
 
         if key_token or secret_token:
             if key_ring is None:

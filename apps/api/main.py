@@ -51,8 +51,9 @@ from packages.security.hardening.ip_whitelist import (
 
 # Live-Router — optional, behind feature flag
 try:
-    from apps.api.routers import live_health, live_orders, live_signal
+    from apps.api.routers import live_flags, live_health, live_orders, live_signal
 except ImportError:
+    live_flags = None  # type: ignore[assignment]
     live_health = None  # type: ignore[assignment]
     live_orders = None  # type: ignore[assignment]
     live_signal = None  # type: ignore[assignment]
@@ -234,6 +235,9 @@ def create_app() -> FastAPI:  # type: ignore[return-value, valid-type]
         app.mount("/static", StaticFiles(directory=_DASHBOARD_DIR), name="static")  # type: ignore[call-arg, union-attr, possibly-unbound]
 
     # Live-Router — nur verfügbar wenn die Router importiert werden konnten
+    if live_flags is not None:
+        app.include_router(live_flags.router)
+
     if live_signal is not None:
         app.include_router(live_signal.router)
 

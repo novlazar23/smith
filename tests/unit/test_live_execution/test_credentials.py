@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 
 import pytest
 from packages.live_execution.credentials import (
@@ -74,3 +75,40 @@ def test_encrypted_env_tokens_without_master_key_fail_closed() -> None:
     }
     with pytest.raises(GatewayExecutionError, match="LIVE_MASTER_KEY_B64"):
         build_ccxt_config_from_env(env)
+
+
+def test_secret_file_fallback_populates_missing_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "live_binance_api_key").write_text("file-key\n")
+    (tmp_path / "live_binance_api_secret").write_text("file-secret")
+    monkeypatch.setattr(
+        "packages.live_execution.credentials.SECRET_DIR", str(tmp_path)
+    )
+    venues, config, _ring = build_ccxt_config_from_env({"LIVE_VENUES": "binance"})
+    assert venues == ["binance"]
+    assert config["binance"]["apiKey"] == "file-key"
+    assert config["binance"]["secret"] == "file-secret"
+
+
+def test_env_credentials_take_precedence_over_secret_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "live_binance_api_key").write_text("file-key")
+    monkeypatch.setattr(
+        "packages.live_execution.credentials.SECRET_DIR", str(tmp_path)
+    )
+    _venues, config, _ring = build_ccxt_config_from_env(
+        {"LIVE_BINANCE_API_KEY": "env-key"}
+    )
+    assert config["binance"]["apiKey"] == "env-key"
+
+
+def test_missing_or_empty_secret_files_yield_no_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "packages.live_execution.credentials.SECRET_DIR", str(tmp_path)
+    )
+    _venues, config, _ring = build_ccxt_config_from_env({"LIVE_VENUES": "binance"})
+    assert config == {}

@@ -868,6 +868,37 @@ Ohne LLM-Konfiguration läuft
 der Schritt trotzdem (Bestand wird re-geprüft, nur keine neuen
 Vorschläge) — Fail-Soft wie Stufe 1.
 
+### Live-Modus (echte Orders, Default: AUS)
+
+Echte Order-Ausführung ist bewusst **nicht** autark: Der Orchestrator und
+der Demo-Trader führen **nie** automatisch Orders aus. Echte Orders gibt
+es nur manuell über die REST-API `POST /v1/live/orders` (CCXT-Gateway,
+RBAC, Audit-Trail, Kill-Switch unter `POST /v1/live/kill-switch`).
+
+Vier unabhängige Gates müssen gleichzeitig offen sein, bevor eine Order
+möglich werden kann:
+
+1. **Feature-Flag** `live_trading_enabled` — standardmäßig `False`.
+   `APP_ENV=production` (gesetzt im `api`-Service) hebt den Safety-Lock
+   auf, der in `development`/`staging` das Flag hart auf `False` zwingt.
+   Einschalten: `LIVE_TRADING_ENABLED: "true"` in `docker-compose.yml`
+   (persistiert über Neustarts) oder zur Laufzeit
+   `POST /v1/live/flag {"enabled": true}` mit
+   `X-Security-Role: administrator` (jedes Schalten landet im Audit-Trail).
+2. **Credentials** — `configs/secrets/live_binance_api_key.txt` und
+   `live_binance_api_secret.txt` (gitignored, als Docker-Secrets gemountet).
+   Leere Dateien = Gateway ohne Venue-Keys = **fail-closed**.
+3. **IP-Whitelist** — alle `/v1/live/*`-Endpunkte sind zusätzlich
+   strict-by-default IP-gesperrt (`LIVE_IP_WHITELIST`, aktuell nur
+   Loopback, da die API nur auf localhost gemappt ist); fremde IPs = 403
+   + Audit-Trail.
+4. **Rolle** — die Endpunkte prüfen `X-Security-Role` (z. B.
+   `live_operator` für Ausführung, `administrator`/`risk_manager` für
+   Flag/Kill-Switch); unbekannte Rollen = 403.
+
+Zustandsabfrage jederzeit: `GET /v1/live/flag` (Flag, Umgebung,
+Credential-Status pro Venue).
+
 ### Hinweise
 
 - **Agenten im Realbetrieb**: Der Orchestrator läuft standardmäßig mit
