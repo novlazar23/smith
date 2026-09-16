@@ -325,6 +325,26 @@ function renderNews(news) {
   ).join("");
 }
 
+/* ── Evolved Agents ─────────────────────────────────────────────────────── */
+
+function renderEvolved(agents) {
+  const body = $("#evolved-body");
+  const items = (agents || []).filter((a) => a && typeof a.name === "string");
+  if (items.length === 0) {
+    body.innerHTML = emptyState("Noch keine zugelassenen Agenten");
+    return;
+  }
+  body.innerHTML = items.map((a) =>
+    `<div class="ev-item">` +
+    `<div class="ev-head"><span class="ev-name">${esc(a.name)}</span>` +
+    `<span class="chip d-neutral">SHADOW</span>` +
+    `<span class="ev-ver">v${esc(a.version ?? 1)}</span></div>` +
+    `<div class="ev-claim" title="${esc(a.claim)}">${esc(a.claim || "—")}</div>` +
+    `<div class="ev-meta">OOS ${isNum(a.score) ? a.score.toFixed(4) : "—"} · seit ${dateTimeStr(a.admitted_at)}</div>` +
+    `</div>`
+  ).join("");
+}
+
 /* ── Tabs / Embeds ───────────────────────────────────────────────────────── */
 
 const TAB_DEFAULT = "trading";
@@ -419,6 +439,7 @@ function render(data) {
   renderTrades(Array.isArray(data.recent_trades) ? data.recent_trades : []);
   renderDecisions(Array.isArray(data.recent_decisions) ? data.recent_decisions : []);
   renderNews(Array.isArray(data.recent_news) ? data.recent_news : []);
+  renderEvolved(Array.isArray(data.evolved_agents) ? data.evolved_agents : []);
 }
 
 function setConnected(ok) {

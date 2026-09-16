@@ -179,6 +179,10 @@ services:
       CH_PORT: "8123"
       CH_DB: trading_events
       REDPANDA_SERVERS: redpanda:9092
+      # Evolved Agents (evolved_agents.json, von champion-evals mit
+      # --evolve-agents geschrieben). Pro Dashboard-Anfrage gelesen;
+      # Datei fehlt/defekt = leere Liste (fail-soft).
+      EVOLVED_AGENTS_PATH: "/app/backtest_reports/evolved_agents.json"
     ports:
       - "8080:8000"
     healthcheck:
@@ -186,6 +190,10 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+    volumes:
+      # read-only: die API liest nur das Evolved-Agents-Artefakt; das
+      # Schreiben erfolgt im Service champion-evals.
+      - backtest_reports:/app/backtest_reports:ro
     secrets:
       - api_secret_key
       - postgres_password

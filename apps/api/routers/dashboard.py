@@ -6,6 +6,7 @@ Der Endpunkt ``GET /v1/dashboard`` bündelt in einer einzigen Antwort:
   - Marktdaten des letzten Kerzen-Fensters pro Instrument (ClickHouse)
   - Demo-Konto, offene Positionen und aktuelle Trades (PostgreSQL)
   - Letzte Shadow-Entscheidungen und News-Events (PostgreSQL)
+  - Zugelassene Evolved Agents (evolved_agents.json, Shared-Volume)
 
 Alle Quellen werden defensiv abgefragt: eine ausgefallene Quelle liefert
 leere Listen bzw. ``None`` — der Endpunkt antwortet nie mit HTTP 500.
@@ -14,11 +15,13 @@ leere Listen bzw. ``None`` — der Endpunkt antwortet nie mit HTTP 500.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 from apps.api.endpoints import status_endpoint
@@ -300,6 +303,45 @@ def _fetch_recent_news() -> list[dict[str, Any]]:
     ]
 
 
+def _fetch_evolved_agents() -> list[dict[str, Any]]:
+    """Liest die zugelassenen LLM-Agenten aus ``evolved_agents.json``.
+
+    Pfad via Env ``EVOLVED_AGENTS_PATH`` (Default: Shared-Volume
+    ``backtest_reports``, read-only gemountet). Status ist immer
+    ``SHADOW``: der Orchestrator hängt Evolved Agents nur als
+    Shadow-Mitglieder an das Ensemble an (Promotion zu ACTIVE bleibt
+    manuell). Fehlende Datei ist der Normalzustand vor dem ersten
+    ``--evolve-agents``-Lauf → leere Liste; defekte JSON wirft, was
+    ``_run_source`` wie bei allen anderen Quellen in die leere Liste
+    umsetzt (fail-soft).
+    """
+    raw = os.environ.get("EVOLVED_AGENTS_PATH", "/app/backtest_reports/evolved_agents.json").strip()
+    if not raw:
+        return []
+    file = Path(raw)
+    if not file.is_file():
+        return []
+    data = json.loads(file.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return []
+    agents: list[dict[str, Any]] = []
+    for name, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        agents.append(
+            {
+                "name": str(name),
+                "claim": str(entry.get("claim") or ""),
+                "version": _int(entry.get("version")) or 1,
+                "score": _float(entry.get("score")),
+                "admitted_at": str(entry.get("admitted_at") or "") or None,
+                "status": "SHADOW",
+            }
+        )
+    agents.sort(key=lambda agent: agent["name"])
+    return agents
+
+
 # ---------------------------------------------------------------------------
 # Endpunkt
 # ---------------------------------------------------------------------------
@@ -358,6 +400,7 @@ async def dashboard() -> dict[str, Any]:
         trades,
         decisions,
         news,
+        evolved_agents,
     ) = await asyncio.gather(
         _status_or_fallback(),
         _run_source(_fetch_data_source, "synthetic"),
@@ -366,6 +409,7 @@ async def dashboard() -> dict[str, Any]:
         _run_source(_fetch_recent_trades, []),
         _run_source(_fetch_recent_decisions, []),
         _run_source(_fetch_recent_news, []),
+        _run_source(_fetch_evolved_agents, []),
     )
     status_data = cast("dict[str, Any]", status_data)
     data_source = cast("str", data_source)
@@ -379,4 +423,5 @@ async def dashboard() -> dict[str, Any]:
         "recent_trades": trades,
         "recent_decisions": decisions,
         "recent_news": news,
+        "evolved_agents": evolved_agents,
     }
