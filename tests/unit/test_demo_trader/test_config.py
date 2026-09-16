@@ -10,10 +10,14 @@ from apps.demo_trader.service import (
     DEFAULT_INITIAL_CASH,
     DEFAULT_INTERVAL_SECONDS,
     DEFAULT_MIN_CONFIDENCE,
+    DEFAULT_TRADE_COST_PCT,
     DEFAULT_TRADE_NOTIONAL,
     DemoTraderConfig,
+    build_trader,
     config_from_env,
 )
+
+from .conftest import FakeConnection, FakeDB, StubCandleSource
 
 DEMO_ENV_KEYS = (
     "DEMO_INTERVAL_SECONDS",
@@ -21,6 +25,7 @@ DEMO_ENV_KEYS = (
     "DEMO_INITIAL_CASH",
     "DEMO_TRADE_NOTIONAL",
     "DEMO_MIN_CONFIDENCE",
+    "DEMO_TRADE_COST_PCT",
     "CANDLE_VENUE",
     "DEMO_HEARTBEAT",
 )
@@ -44,8 +49,17 @@ class TestConfigFromEnv:
         assert config.initial_cash == DEFAULT_INITIAL_CASH
         assert config.trade_notional == DEFAULT_TRADE_NOTIONAL
         assert config.min_confidence == DEFAULT_MIN_CONFIDENCE
+        assert config.trade_cost_pct == DEFAULT_TRADE_COST_PCT
         assert config.candle_venue == DEFAULT_CANDLE_VENUE
         assert config.account_id == "demo"
+
+    def test_build_trader_splits_cost_into_slippage_and_commission(
+        self, stub_provider: StubCandleSource, fake_conn: FakeConnection
+    ) -> None:
+        """build_trader teilt trade_cost_pct hälftig auf (Taker-Fee + Slippage)."""
+        trader = build_trader(config=config_from_env(), provider=stub_provider, db=FakeDB(fake_conn))
+        assert trader._executor.default_slippage_pct == pytest.approx(DEFAULT_TRADE_COST_PCT / 2.0)
+        assert trader._executor.default_commission_pct == pytest.approx(DEFAULT_TRADE_COST_PCT / 2.0)
 
     def test_overrides(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """Env-Variablen überschreiben die Defaults."""
@@ -54,6 +68,7 @@ class TestConfigFromEnv:
         monkeypatch.setenv("DEMO_INITIAL_CASH", "50000")
         monkeypatch.setenv("DEMO_TRADE_NOTIONAL", "500")
         monkeypatch.setenv("DEMO_MIN_CONFIDENCE", "0.7")
+        monkeypatch.setenv("DEMO_TRADE_COST_PCT", "0.002")
         monkeypatch.setenv("CANDLE_VENUE", "DUMMY_EXCHANGE")
         monkeypatch.setenv("DEMO_HEARTBEAT", str(tmp_path / "hb"))
 
@@ -64,6 +79,7 @@ class TestConfigFromEnv:
         assert config.initial_cash == 50000.0
         assert config.trade_notional == 500.0
         assert config.min_confidence == 0.7
+        assert config.trade_cost_pct == 0.002
         assert config.candle_venue == "DUMMY_EXCHANGE"
         assert config.heartbeat_path == tmp_path / "hb"
 

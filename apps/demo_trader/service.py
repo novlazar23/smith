@@ -64,6 +64,9 @@ DEFAULT_INSTRUMENTS = "BTC/USDT,ETH/USDT"
 DEFAULT_INITIAL_CASH = 100000.0
 DEFAULT_TRADE_NOTIONAL = 2000.0
 DEFAULT_MIN_CONFIDENCE = 0.3
+# Gesamthandelskosten pro Seite (Slippage + Kommission), hälftig aufgeteilt:
+# Binance-Futures-Taker-Fee 0,05 % + ~0,05 % Slippage auf 5m-Kerzen.
+DEFAULT_TRADE_COST_PCT = 0.001
 DEFAULT_CANDLE_VENUE = "BINANCE_FUTURES"
 DEFAULT_CANDLE_LIMIT = 200
 DEFAULT_MIN_CANDLES = 30
@@ -117,6 +120,7 @@ class DemoTraderConfig:
     initial_cash: float = DEFAULT_INITIAL_CASH
     trade_notional: float = DEFAULT_TRADE_NOTIONAL
     min_confidence: float = DEFAULT_MIN_CONFIDENCE
+    trade_cost_pct: float = DEFAULT_TRADE_COST_PCT
     candle_venue: str = DEFAULT_CANDLE_VENUE
     candle_limit: int = DEFAULT_CANDLE_LIMIT
     min_candles: int = DEFAULT_MIN_CANDLES
@@ -603,7 +607,8 @@ def config_from_env() -> DemoTraderConfig:
     Umgebungsvariablen (Defaults in Klammern):
       DEMO_INTERVAL_SECONDS (300), DEMO_INSTRUMENTS (BTC/USDT,ETH/USDT),
       DEMO_INITIAL_CASH (100000), DEMO_TRADE_NOTIONAL (2000),
-      DEMO_MIN_CONFIDENCE (0.3), CANDLE_VENUE (BINANCE_FUTURES),
+      DEMO_MIN_CONFIDENCE (0.3), DEMO_TRADE_COST_PCT (0.001),
+      CANDLE_VENUE (BINANCE_FUTURES),
       DEMO_HEARTBEAT (/tmp/demo_trader_heartbeat), LOG_LEVEL (INFO).
     """
     raw_instruments = os.environ.get("DEMO_INSTRUMENTS", DEFAULT_INSTRUMENTS)
@@ -626,12 +631,17 @@ def config_from_env() -> DemoTraderConfig:
         min_confidence = float(os.environ.get("DEMO_MIN_CONFIDENCE", str(DEFAULT_MIN_CONFIDENCE)))
     except ValueError:
         min_confidence = DEFAULT_MIN_CONFIDENCE
+    try:
+        trade_cost_pct = float(os.environ.get("DEMO_TRADE_COST_PCT", str(DEFAULT_TRADE_COST_PCT)))
+    except ValueError:
+        trade_cost_pct = DEFAULT_TRADE_COST_PCT
     return DemoTraderConfig(
         interval_seconds=interval,
         instruments=parse_instruments(raw_instruments),
         initial_cash=initial_cash,
         trade_notional=trade_notional,
         min_confidence=min_confidence,
+        trade_cost_pct=trade_cost_pct,
         candle_venue=os.environ.get("CANDLE_VENUE", DEFAULT_CANDLE_VENUE),
         heartbeat_path=Path(os.environ.get("DEMO_HEARTBEAT", str(HEARTBEAT_PATH))),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -677,7 +687,13 @@ def build_trader(
         cfg,
         provider if provider is not None else build_ch_provider(cfg.candle_venue),
         db if db is not None else build_db_engine(),
-        executor if executor is not None else PaperExecutor(initial_cash=cfg.initial_cash),
+        executor
+        if executor is not None
+        else PaperExecutor(
+            initial_cash=cfg.initial_cash,
+            default_slippage_pct=cfg.trade_cost_pct / 2.0,
+            default_commission_pct=cfg.trade_cost_pct / 2.0,
+        ),
     )
 
 
