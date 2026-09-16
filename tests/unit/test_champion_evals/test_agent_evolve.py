@@ -22,13 +22,13 @@ from apps.champion_evals.score import AgentMetrics
 from packages.backtesting.core import Candle
 from packages.schemas.agent_report import AgentStatus
 
-UNIFORM_CODE = """def predict(open, high, low, close, volume):
+UNIFORM_CODE = """def predict(open, high, low, close, volume, timestamps):
     return (1.0, 1.0, 1.0)
 """
 
 GOOD_CODE = """import numpy as np
 
-def predict(open, high, low, close, volume):
+def predict(open, high, low, close, volume, timestamps):
     m = float(close[-1] - close[-6])
     if m > 0:
         return (0.8, 0.1, 0.1)
@@ -37,7 +37,7 @@ def predict(open, high, low, close, volume):
     return (0.34, 0.33, 0.33)
 """
 
-CRASH_CODE = """def predict(open, high, low, close, volume):
+CRASH_CODE = """def predict(open, high, low, close, volume, timestamps):
     raise RuntimeError('defekt')
 """
 

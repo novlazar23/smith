@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from apps.orchestrator_service.service import ClickHouseCandleProvider
 
-NAMES = ["open", "high", "low", "close", "volume"]
+NAMES = ["open", "high", "low", "close", "volume", "open_time_unix"]
 
 
 class FakeCHEngine:
@@ -25,9 +25,9 @@ class FakeCHEngine:
 def _descending_rows() -> list[list[str]]:
     """Drei Kerzen in absteigender open_time-Reihenfolge (neueste zuerst)."""
     return [
-        ["102.9", "104.5", "102.5", "103.0", "1500.0"],
-        ["101.9", "103.5", "101.5", "102.0", "1100.0"],
-        ["100.9", "102.5", "100.5", "101.0", "1000.0"],
+        ["102.9", "104.5", "102.5", "103.0", "1500.0", "1700000120"],
+        ["101.9", "103.5", "101.5", "102.0", "1100.0", "1700000060"],
+        ["100.9", "102.5", "100.5", "101.0", "1000.0", "1700000000"],
     ]
 
 
@@ -47,7 +47,11 @@ class TestClickHouseCandleProvider:
         np.testing.assert_array_equal(window.high, np.array([102.5, 103.5, 104.5]))
         np.testing.assert_array_equal(window.low, np.array([100.5, 101.5, 102.5]))
         np.testing.assert_array_equal(window.volume, np.array([1000.0, 1100.0, 1500.0]))
+        np.testing.assert_array_equal(
+            window.timestamps, np.array([1_700_000_000_000_000_000, 1_700_000_060_000_000_000, 1_700_000_120_000_000_000], dtype=np.int64)
+        )
         assert window.close.dtype == np.float64
+        assert window.timestamps.dtype == np.int64
 
     def test_builds_expected_query(self) -> None:
         """Die Query filtert nach Instrument, sortiert DESC und limitiert."""
@@ -80,8 +84,8 @@ class TestClickHouseCandleProvider:
 
     def test_maps_columns_by_name(self) -> None:
         """Spalten werden per Name gemappt, nicht nach Position."""
-        names = ["volume", "close", "low", "high", "open"]
-        rows = [["1000.0", "101.0", "100.5", "102.5", "100.9"]]
+        names = ["volume", "close", "low", "high", "open", "open_time_unix"]
+        rows = [["1000.0", "101.0", "100.5", "102.5", "100.9", "1700000000"]]
         engine = FakeCHEngine(names, rows)
         provider = ClickHouseCandleProvider(engine)
 

@@ -20,7 +20,7 @@ from packages.schemas.agent_report import AgentStatus
 
 GOOD_CODE = """import numpy as np
 
-def predict(open, high, low, close, volume):
+def predict(open, high, low, close, volume, timestamps):
     m = float(close[-1] - close[-6])
     if m > 0:
         return (0.8, 0.1, 0.1)
@@ -37,16 +37,16 @@ class TestValidateAgentCode:
     @pytest.mark.parametrize(
         "code",
         [
-            "import os\ndef predict(o,h,l,c,v): return (1,0,0)",
-            "from subprocess import run\ndef predict(o,h,l,c,v): return (1,0,0)",
-            "def predict(o,h,l,c,v):\n    open('/etc/passwd')\n    return (1,0,0)",
-            "def predict(o,h,l,c,v):\n    __import__('os')\n    return (1,0,0)",
-            "def predict(o,h,l,c,v):\n    eval('1')\n    return (1,0,0)",
-            "def predict(o,h,l,c,v):\n    exec('x=1')\n    return (1,0,0)",
-            "def predict(o,h,l,c,v):\n    np.fromfile('/etc/passwd')\n    return (1,0,0)",
-            "def predict(o,h,l,c,v):\n    getattr(np, 'load')\n    return (1,0,0)",
-            "x = 1\ndef predict(o,h,l,c,v): return (1,0,0)",
-            "def predict(o,h,l,c,v): return (1,0,0)\ndef predict2(o,h,l,c,v): return (1,0,0)",
+            "import os\ndef predict(o,h,l,c,v,t): return (1,0,0)",
+            "from subprocess import run\ndef predict(o,h,l,c,v,t): return (1,0,0)",
+            "def predict(o,h,l,c,v,t):\n    open('/etc/passwd')\n    return (1,0,0)",
+            "def predict(o,h,l,c,v,t):\n    __import__('os')\n    return (1,0,0)",
+            "def predict(o,h,l,c,v,t):\n    eval('1')\n    return (1,0,0)",
+            "def predict(o,h,l,c,v,t):\n    exec('x=1')\n    return (1,0,0)",
+            "def predict(o,h,l,c,v,t):\n    np.fromfile('/etc/passwd')\n    return (1,0,0)",
+            "def predict(o,h,l,c,v,t):\n    getattr(np, 'load')\n    return (1,0,0)",
+            "x = 1\ndef predict(o,h,l,c,v,t): return (1,0,0)",
+            "def predict(o,h,l,c,v,t): return (1,0,0)\ndef predict2(o,h,l,c,v,t): return (1,0,0)",
             "def predict(o,h,l,c): return (1,0,0)",
             "def predict(o,h,l,c,v,*a): return (1,0,0)",
         ],
@@ -69,19 +69,21 @@ class TestLoadPredictFn:
     def test_returns_callable_predict(self) -> None:
         fn = load_predict_fn(GOOD_CODE, "momentum_test")
         a = np.ones(10)
-        assert fn(a, a, a, a, a) == (0.34, 0.33, 0.33)
+        t = np.arange(10, dtype=np.int64)
+        assert fn(a, a, a, a, a, t) == (0.34, 0.33, 0.33)
 
     def test_runtime_import_blocked(self) -> None:
-        code = "import os\ndef predict(o,h,l,c,v):\n    return (1,0,0)"
+        code = "import os\ndef predict(o,h,l,c,v,t):\n    return (1,0,0)"
         with pytest.raises(ImportError):
             load_predict_fn(code, "t")
 
     def test_unsafe_builtin_unreachable(self) -> None:
-        code = "def predict(o,h,l,c,v):\n    return (input('x'), 0, 0)"
+        code = "def predict(o,h,l,c,v,t):\n    return (input('x'), 0, 0)"
         fn = load_predict_fn(code, "t")
         a = np.ones(5)
+        t = np.arange(5, dtype=np.int64)
         with pytest.raises(NameError):
-            fn(a, a, a, a, a)
+            fn(a, a, a, a, a, t)
 
     def test_missing_predict_raises(self) -> None:
         with pytest.raises(ValueError):
@@ -95,22 +97,22 @@ class TestSmokeTest:
     @pytest.mark.parametrize(
         "code",
         [
-            "def predict(o,h,l,c,v):\n    return (1,0)",
-            "def predict(o,h,l,c,v):\n    return (float('nan'),0,0)",
-            "def predict(o,h,l,c,v):\n    return (-1,-1,-1)",
-            "def predict(o,h,l,c,v):\n    raise RuntimeError('boom')",
+            "def predict(o,h,l,c,v,t):\n    return (1,0)",
+            "def predict(o,h,l,c,v,t):\n    return (float('nan'),0,0)",
+            "def predict(o,h,l,c,v,t):\n    return (-1,-1,-1)",
+            "def predict(o,h,l,c,v,t):\n    raise RuntimeError('boom')",
         ],
     )
     def test_invalid_output_rejected(self, code: str) -> None:
         assert smoke_test_predict(load_predict_fn(code, "t")) is not None
 
     def test_slow_function_rejected(self) -> None:
-        code = "import math\ndef predict(o,h,l,c,v):\n    for _ in range(2_000_000):\n        math.sqrt(2.0)\n    return (1,0,0)"
+        code = "import math\ndef predict(o,h,l,c,v,t):\n    for _ in range(2_000_000):\n        math.sqrt(2.0)\n    return (1,0,0)"
         fn = load_predict_fn(code, "t")
         assert smoke_test_predict(fn, max_ms=DEFAULT_MAX_MS) is not None
 
     def test_short_window_used(self) -> None:
-        code = "def predict(open, high, low, close, volume):\n    if len(close) < 31: return (1,0,0)\n    return (1,0,0)"
+        code = "def predict(open, high, low, close, volume, timestamps):\n    if len(close) < 31: return (1,0,0)\n    return (1,0,0)"
         assert smoke_test_predict(load_predict_fn(code, "t")) is None
 
 
@@ -136,6 +138,7 @@ class TestEvolvedAgent:
         )
         assert agent is not None
         data = {key: np.ones(30) for key in ("open", "high", "low", "close", "volume")}
+        data["timestamps"] = np.arange(30, dtype=np.int64)
         data["close"] = np.linspace(100, 110, 30)
         report = agent.analyze(data)
         assert abs(sum(report.probabilities.values()) - 1.0) < 1e-6
@@ -145,8 +148,24 @@ class TestEvolvedAgent:
         assert report.horizon == "15m"
         assert len(report.evidence) >= 1
 
+    def test_timestamps_arrive_and_are_usable(self) -> None:
+        """Die 6. Position (timestamps) erreicht predict() und ist nutzbar."""
+        code = (
+            "def predict(open, high, low, close, volume, timestamps):\n"
+            "    span = int(timestamps[-1]) - int(timestamps[0])\n"
+            "    return (float(span > 0), 0.5, 0.5)\n"
+        )
+        agent = build_evolved_agent("ts_probe", {"code": code}, AgentStatus.SHADOW)
+        assert agent is not None
+        data = {key: np.ones(30) for key in ("open", "high", "low", "close", "volume")}
+        data["timestamps"] = np.arange(30, dtype=np.int64) * 300_000_000_000
+        assert agent.analyze(data).probabilities["up"] == 0.5  # span > 0 → up dominant
+
+        data["timestamps"] = np.full(30, 1_700_000_000_000_000_000, dtype=np.int64)
+        assert agent.analyze(data).probabilities["up"] == 0.0  # span = 0 → kein up
+
     def test_rejects_invalid_code(self) -> None:
-        assert build_evolved_agent("t", {"code": "def predict(o,h,l,c,v):\n    eval('x')\n    return (1,0,0)"}, AgentStatus.SHADOW) is None
+        assert build_evolved_agent("t", {"code": "def predict(o,h,l,c,v,t):\n    eval('x')\n    return (1,0,0)"}, AgentStatus.SHADOW) is None
 
     def test_rejects_invalid_status(self) -> None:
         assert build_evolved_agent("t", {"code": GOOD_CODE}, "bogus") is None

@@ -113,6 +113,7 @@ def make_ohlcv(n: int, start_price: float = 100.0) -> CandleWindow:
         low=close - 0.5,
         close=close,
         volume=np.full(n, 1000.0),
+        timestamps=np.arange(n, dtype=np.int64) * 300_000_000_000,
     )
 
 

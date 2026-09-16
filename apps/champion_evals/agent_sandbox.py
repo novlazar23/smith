@@ -1,7 +1,9 @@
 """Agent-Sandbox: Jail, Smoke-Test und Adapter für LLM-generierte Agenten-Logik.
 
 Stufe 2 der Agent-Evolution: Der LLM liefert eine einzelne Funktion
-``predict(open, high, low, close, volume) -> (p_up, p_down, p_range)``.
+``predict(open, high, low, close, volume, timestamps) ->
+(p_up, p_down, p_range)``; ``timestamps`` sind Unix-Nanosekunden (UTC,
+int64, pro Kerze), damit Tageszeit-/Zeit-Struktur adressierbar ist.
 Dreischichtige Sicherheit:
 
 1. **Jail** (``validate_agent_code``): statischer AST-Check — nur
@@ -188,13 +190,13 @@ def validate_agent_code(code: str, name: str) -> str | None:
     func = functions[0]
     args = func.args
     if (
-        len(args.args) != 5
+        len(args.args) != 6
         or args.vararg
         or args.kwarg
         or args.posonlyargs
         or args.kwonlyargs
     ):
-        return "predict(open, high, low, close, volume) erwartet exakt 5 Positional-Parameter"
+        return "predict(open, high, low, close, volume, timestamps) erwartet exakt 6 Positional-Parameter"
 
     for node in ast.walk(func):
         if isinstance(node, ast.Call):
@@ -241,8 +243,15 @@ def load_predict_fn(code: str, name: str) -> Callable[..., tuple[float, float, f
 # ─── Smoke-Test (isolierte Ausführung auf synthetischen Fenstern) ────────────
 
 
-def _synthetic_window(n: int, seed: int = 7) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
-    """Deterministische synthetische Kerzen (Random-Walk). Returns (O,H,L,C,V)."""
+#: Start der synthetischen Smoke-Fenster (2024-01-01T00:00:00Z, Unix-Ns).
+_SYNTHETIC_START_NS = 1_704_067_200_000_000_000
+
+
+def _synthetic_window(n: int, seed: int = 7) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], NDArray[np.int64]]:
+    """Deterministische synthetische Kerzen (Random-Walk, 1-min-Abstand).
+
+    Returns (O,H,L,C,V,timestamps) — timestamps als int64-Unix-Nanosekunden.
+    """
     rng = np.random.default_rng(seed)
     price = 100.0
     open_, high, low, close, volume = [], [], [], [], []
@@ -261,6 +270,7 @@ def _synthetic_window(n: int, seed: int = 7) -> tuple[NDArray[np.float64], NDArr
         np.asarray(low, dtype=np.float64),
         np.asarray(close, dtype=np.float64),
         np.asarray(volume, dtype=np.float64),
+        _SYNTHETIC_START_NS + np.arange(n) * 60_000_000_000,
     )
 
 
@@ -353,7 +363,14 @@ class EvolvedAgent(BaseAgent):
 
     def analyze(self, data: dict[str, NDArray[np.float64]]) -> AgentReport:
         probabilities = normalize_raw_probs(
-            self._predict_fn(data["open"], data["high"], data["low"], data["close"], data["volume"])
+            self._predict_fn(
+                data["open"],
+                data["high"],
+                data["low"],
+                data["close"],
+                data["volume"],
+                data["timestamps"],
+            )
         )
         dominant = max(probabilities, key=lambda key: probabilities[key])
         direction = {"up": "positive", "down": "negative"}.get(dominant, "neutral")

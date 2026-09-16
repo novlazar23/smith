@@ -224,6 +224,7 @@ def replay_ensemble(
         CandleWindow,
         build_calibrated_pipeline,
         build_market_data,
+        candle_timestamps_ns,
     )
 
     target = target_config or TargetConfig()
@@ -249,6 +250,7 @@ def replay_ensemble(
                 low=np.array([c.low for c in window], dtype=np.float64),
                 close=np.array([c.close for c in window], dtype=np.float64),
                 volume=np.array([c.volume for c in window], dtype=np.float64),
+                timestamps=candle_timestamps_ns(window),
             )
         )
         result = pipeline.run(
@@ -301,7 +303,11 @@ def replay_instances(
     geliefert"; ``score_window`` entfernt solche Instanzen dann aus dem
     Scoring (fehlerhafte Varianten werden nicht promoviert).
     """
-    from apps.orchestrator_service.service import CandleWindow, build_market_data
+    from apps.orchestrator_service.service import (
+        CandleWindow,
+        build_market_data,
+        candle_timestamps_ns,
+    )
 
     target = target_config or TargetConfig()
     window: deque[Candle] = deque(maxlen=candle_limit)
@@ -318,6 +324,7 @@ def replay_instances(
                 low=np.array([c.low for c in window], dtype=np.float64),
                 close=np.array([c.close for c in window], dtype=np.float64),
                 volume=np.array([c.volume for c in window], dtype=np.float64),
+                timestamps=candle_timestamps_ns(window),
             )
         )
         per_agent: dict[str, dict[str, float]] = {}

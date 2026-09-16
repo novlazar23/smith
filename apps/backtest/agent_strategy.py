@@ -49,6 +49,7 @@ from apps.orchestrator_service.service import (
     ContextualAgent,
     build_calibrated_pipeline,
     build_market_data,
+    candle_timestamps_ns,
 )
 from numpy.typing import NDArray
 from packages.backtesting.strategies import (
@@ -287,6 +288,7 @@ class AgentEnsembleStrategy(BaseStrategy):
             low=np.array([c.low for c in self._window], dtype=np.float64),
             close=np.array([c.close for c in self._window], dtype=np.float64),
             volume=np.array([c.volume for c in self._window], dtype=np.float64),
+            timestamps=candle_timestamps_ns(self._window),
         )
         market_data = build_market_data(window)
         agents = self._ensemble_factory(self.instrument, self.horizon)

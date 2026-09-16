@@ -169,8 +169,10 @@ class DemoCandleProvider:
         """
         escaped = self._escape(instrument)
         venue_escaped = self._escape(self._venue)
+        # ``toUnixTimestamp``: ganze Sekunden (zeitzonenfrei), damit die
+        # predict-Vertrag-Timestamps ohne DateTime-String-Parsing stehen.
         query = (
-            "SELECT open, high, low, close, volume "
+            "SELECT open, high, low, close, volume, toUnixTimestamp(open_time) AS open_time_unix "
             "FROM candles "
             f"WHERE instrument = '{escaped}' AND venue = '{venue_escaped}' "
             f"ORDER BY open_time DESC LIMIT {int(limit)}"
@@ -180,7 +182,7 @@ class DemoCandleProvider:
             return None
         # DESC abgefragt (neueste zuerst) → umdrehen für aufsteigende Zeitfolge
         index = {name: i for i, name in enumerate(names)}
-        order = [index[name] for name in ("open", "high", "low", "close", "volume")]
+        order = [index[name] for name in ("open", "high", "low", "close", "volume", "open_time_unix")]
         reversed_rows = list(reversed(rows))
         return CandleWindow(
             open=np.array([row[order[0]] for row in reversed_rows], dtype=np.float64),
@@ -188,6 +190,7 @@ class DemoCandleProvider:
             low=np.array([row[order[2]] for row in reversed_rows], dtype=np.float64),
             close=np.array([row[order[3]] for row in reversed_rows], dtype=np.float64),
             volume=np.array([row[order[4]] for row in reversed_rows], dtype=np.float64),
+            timestamps=np.array([int(row[order[5]]) * 1_000_000_000 for row in reversed_rows], dtype=np.int64),
         )
 
     @staticmethod

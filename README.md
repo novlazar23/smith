@@ -837,7 +837,7 @@ er entscheidet nichts; (3) jede Persona revidiert ihren Vorschlag
 einmalig nach der Kritik (ungültige Revision → Original bleibt, Name
 bleibt bei der Preregistrierung immer identisch). Jede Logik ist eine
 Funktion
-`predict(open, high, low, close, volume) -> (p_up, p_down, p_range)`. Jede Vorschlags-Logik läuft durch eine dreischichtige
+`predict(open, high, low, close, volume, timestamps) -> (p_up, p_down, p_range)` (`timestamps`: Unix-Nanosekunden UTC pro Kerze, damit Tageszeit-/Zeit-Struktur adressierbar ist). Jede Vorschlags-Logik läuft durch eine dreischichtige
 Sandbox (statischer AST-Jail: nur `numpy`/`math`/`typing`-Imports, nur
 `predict`, keine gefährlichen Aufrufe; isolierte Ausführung mit
 einschränkter Builtin- und Import-Allowlist; Smoke-Test auf

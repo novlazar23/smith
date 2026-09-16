@@ -20,11 +20,11 @@ import signal
 import threading
 import time
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
 from apps.champion_evals.evolve import load_champion_params
@@ -35,6 +35,7 @@ from packages.agents.mean_reversion_agent import MeanReversionAgent
 from packages.agents.trend_agent import TrendAgent
 from packages.agents.volatility_regime_agent import VolatilityRegimeAgent
 from packages.agents.volume_conviction_agent import VolumeConvictionAgent
+from packages.backtesting.core import Candle
 from packages.consensus import WeightConfig
 from packages.governance.feature_flags import feature_flags
 from packages.governance.shadow_integration import (
@@ -120,13 +121,35 @@ class OrchestratorServiceConfig:
 
 @dataclass(frozen=True)
 class CandleWindow:
-    """Ein OHLCV-Kerzenfenster (aufsteigend nach open_time)."""
+    """Ein OHLCV-Kerzenfenster (aufsteigend nach open_time).
+
+    ``timestamps`` sind die Unix-Zeitpunkte (Nanosekunden, UTC) pro
+    Kerze, aligned zu ``open``/…/``volume`` — Teil des predict-Vertrags
+    der Evolved Agents (Stufe 2).
+    """
 
     open: NDArray[np.float64]
     high: NDArray[np.float64]
     low: NDArray[np.float64]
     close: NDArray[np.float64]
     volume: NDArray[np.float64]
+    timestamps: NDArray[np.int64]
+
+
+def _timestamp_ns(moment: datetime) -> int:
+    """Unix-Nanosekunden (UTC, exakt); naive Datetimes gelten als UTC."""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    delta = moment - _UNIX_EPOCH
+    return (delta.days * 86_400 + delta.seconds) * 1_000_000_000 + delta.microseconds * 1_000
+
+
+_UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def candle_timestamps_ns(candles: Sequence[Candle]) -> NDArray[np.int64]:
+    """Kerzen-Timestamps als int64-Unix-Nanosekunden (UTC, aufsteigend)."""
+    return np.asarray([_timestamp_ns(candle.timestamp) for candle in candles], dtype=np.int64)
 
 
 @dataclass(frozen=True)
@@ -188,8 +211,10 @@ class ClickHouseCandleProvider:
         """
         escaped = self._escape(instrument)
         escaped_venue = self._escape(self._venue)
+        # ``toUnixTimestamp`` liefert ganze Sekunden (zeitzonenfrei), damit
+        # die predict-Vertrag-Timestamps ohne DateTime-String-Parsing stehen.
         query = (
-            f"SELECT open, high, low, close, volume "
+            f"SELECT open, high, low, close, volume, toUnixTimestamp(open_time) AS open_time_unix "
             f"FROM candles "
             f"WHERE instrument = '{escaped}' AND venue = '{escaped_venue}' "
             f"ORDER BY open_time DESC "
@@ -200,7 +225,7 @@ class ClickHouseCandleProvider:
             return None
         # DESC abgefragt (neueste zuerst) → umdrehen für aufsteigende Zeitfolge
         index = {name: i for i, name in enumerate(names)}
-        order = [index[name] for name in ("open", "high", "low", "close", "volume")]
+        order = [index[name] for name in ("open", "high", "low", "close", "volume", "open_time_unix")]
         reversed_rows = list(reversed(rows))
         return CandleWindow(
             open=np.array([row[order[0]] for row in reversed_rows], dtype=np.float64),
@@ -208,6 +233,7 @@ class ClickHouseCandleProvider:
             low=np.array([row[order[2]] for row in reversed_rows], dtype=np.float64),
             close=np.array([row[order[3]] for row in reversed_rows], dtype=np.float64),
             volume=np.array([row[order[4]] for row in reversed_rows], dtype=np.float64),
+            timestamps=np.array([int(row[order[5]]) * 1_000_000_000 for row in reversed_rows], dtype=np.int64),
         )
 
     @staticmethod
@@ -342,14 +368,20 @@ def build_ensemble(
     return agents
 
 
-def build_market_data(window: CandleWindow) -> dict[str, NDArray[np.float64]]:
-    """Baut das market_data-Dict aus einem Kerzenfenster."""
+def build_market_data(window: CandleWindow) -> dict[str, NDArray[Any]]:
+    """Baut das market_data-Dict aus einem Kerzenfenster.
+
+    Enthält ``timestamps`` (int64, Unix-Nanosekunden UTC) — 6. Parameter
+    des predict-Vertrags der Evolved Agents; die übrigen Agenten ignorieren
+    den Schlüssel.
+    """
     return {
         "open": window.open,
         "high": window.high,
         "low": window.low,
         "close": window.close,
         "volume": window.volume,
+        "timestamps": window.timestamps,
     }
 
 

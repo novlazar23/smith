@@ -216,7 +216,7 @@ class TestBuildEnsemble:
 
 EVOLVED_CODE = """import numpy as np
 
-def predict(open, high, low, close, volume):
+def predict(open, high, low, close, volume, timestamps):
     m = float(close[-1] - close[-6])
     if m > 0:
         return (0.8, 0.1, 0.1)
@@ -243,6 +243,7 @@ class TestBuildEnsembleEvolvedAgents:
         """Der Evolved Agent liefert einen gültigen Report (Summe 1, Evidenz)."""
         agents = build_ensemble("BTC/USDT", "15m", AgentStatus.ACTIVE, evolved_agents={"momentum_test": EVOLVED_CODE})
         data = {key: np.ones(50) for key in ("open", "high", "low", "close", "volume")}
+        data["timestamps"] = np.arange(50, dtype=np.int64)
         data["close"] = np.linspace(100, 105, 50)
 
         report = agents[4].analyze(data)
@@ -257,7 +258,7 @@ class TestBuildEnsembleEvolvedAgents:
             "BTC/USDT",
             "15m",
             AgentStatus.ACTIVE,
-            evolved_agents={"evil": "def predict(o,h,l,c,v):\n    open('x')\n    return (1,0,0)"},
+            evolved_agents={"evil": "def predict(o,h,l,c,v,t):\n    open('x')\n    return (1,0,0)"},
         )
 
         assert len(agents) == 4

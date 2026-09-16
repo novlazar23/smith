@@ -73,7 +73,7 @@ class TestRunCycle:
 
         call = pipeline.calls[0]
         market_data = call["market_data"]
-        assert set(market_data) == {"open", "high", "low", "close", "volume"}
+        assert set(market_data) == {"open", "high", "low", "close", "volume", "timestamps"}
         agents = call["agents"]
         assert len(agents) == 4
         assert {agent.agent_id for agent in agents} == {

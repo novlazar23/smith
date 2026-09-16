@@ -134,10 +134,13 @@ class TestRunCycle:
         assert len(stub_pipeline.calls) == 1
         call = stub_pipeline.calls[0]
         market_data = call["market_data"]
-        assert set(market_data) == {"open", "high", "low", "close", "volume"}
+        assert set(market_data) == {"open", "high", "low", "close", "volume", "timestamps"}
         for key in market_data:
             assert len(market_data[key]) == 200
-            assert market_data[key].dtype == np.float64
+            if key == "timestamps":
+                assert market_data[key].dtype == np.int64
+            else:
+                assert market_data[key].dtype == np.float64
         agents = call["agents"]
         assert len(agents) == 4
         assert {agent.agent_id for agent in agents} == {

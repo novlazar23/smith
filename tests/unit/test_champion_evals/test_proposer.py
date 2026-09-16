@@ -15,7 +15,7 @@ VALID_PROPOSAL = {
     "code": (
         "import numpy as np\n"
         "\n"
-        "def predict(open, high, low, close, volume):\n"
+        "def predict(open, high, low, close, volume, timestamps):\n"
         "    v = np.asarray(volume, dtype=float)\n"
         "    if len(v) < 10:\n"
         "        return (0.34, 0.33, 0.33)\n"

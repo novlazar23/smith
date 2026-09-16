@@ -138,9 +138,10 @@ _REFINE_SYSTEM = (
     "fehlende Invalidierung), überarbeite den Code einmalig und gezielt; "
     "ist sie unbegründet, liefere den Vorschlag unverändert. Der Name "
     "bleibt in jedem Fall unverändert. Das Code-Format gilt weiterhin "
-    "(def predict(open, high, low, close, volume) -> (p_up, p_down, "
-    "p_range)). Antworte NUR mit einem JSON-Array mit genau einem Element "
-    "({name, claim, code}); kein Markdown, keine Kommentare."
+    "(def predict(open, high, low, close, volume, timestamps) -> "
+    "(p_up, p_down, p_range)). Antworte NUR mit einem JSON-Array mit "
+    "genau einem Element ({name, claim, code}); kein Markdown, keine "
+    "Kommentare."
 )
 
 #: Legacy-Prompt (``build_messages`` ohne ``role``): ein Aufruf, in dem
@@ -165,16 +166,19 @@ _SYSTEM_PROMPT = (
 
 _CODE_FORMAT = (
     "Format für die Agenten-Logik (exakt dieser Vertrag): eine einzige "
-    "Funktion 'def predict(open, high, low, close, volume)' auf "
-    "Modul-Ebene. Erlaubte Imports: 'import numpy as np' und optional "
-    "'import math'. Die fünf Parameter sind float-NDArrays mit den "
+    "Funktion 'def predict(open, high, low, close, volume, timestamps)' "
+    "auf Modul-Ebene. Erlaubte Imports: 'import numpy as np' und optional "
+    "'import math'. Die ersten fünf Parameter sind float-NDArrays mit den "
     "letzten bis zu 200 Fünf-Minuten-Kerzen (aufsteigend, aktuellste Kerze "
-    "zuletzt). Rückgabe: 3er-Tupel (p_up, p_down, p_range) — "
-    "Wahrscheinlichkeiten dafür, dass der Kurs in den nächsten 15 Minuten "
-    "steigt / fällt / seitwärts bleibt (alle ≥ 0, Summe > 0; die "
-    "Normalisierung auf 1.0 erfolgt automatisch). Kein Lookahead: es gibt "
-    "keine Daten ab der aktuellsten Kerze. Keine anderen Imports, keine "
-    "Modulebene-Aussagen, keine Nebenwirkungen."
+    "zuletzt); 'timestamps' ist ein int64-NDArray mit dem Unix-Zeitpunkt "
+    "jeder Kerze in Nanosekunden (UTC) — z. B. Tageszeit über "
+    "'(timestamps // 1_000_000_000) % 86400' (Sekunden im UTC-Tag). "
+    "Rückgabe: 3er-Tupel (p_up, p_down, p_range) — Wahrscheinlichkeiten "
+    "dafür, dass der Kurs in den nächsten 15 Minuten steigt / fällt / "
+    "seitwärts bleibt (alle ≥ 0, Summe > 0; die Normalisierung auf 1.0 "
+    "erfolgt automatisch). Kein Lookahead: es gibt keine Daten ab der "
+    "aktuellsten Kerze. Keine anderen Imports, keine Modulebene-Aussagen, "
+    "keine Nebenwirkungen."
 )
 
 
