@@ -400,7 +400,7 @@ body {
 
 .trade-row {
   display: grid;
-  grid-template-columns: 66px minmax(80px, auto) 64px minmax(70px, 1fr) minmax(70px, 1fr) 70px 58px;
+  grid-template-columns: 58px minmax(64px, auto) 54px minmax(64px, 1fr) minmax(64px, 1fr) 56px 44px;
   gap: 8px;
   align-items: baseline;
   padding: 7px 4px;
@@ -416,7 +416,7 @@ body {
 .tr-instr { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .tr-qty, .tr-price { text-align: right; }
 .tr-comm { text-align: right; color: var(--dim); }
-.tr-status { text-align: right; color: var(--faint); font-size: 11px; }
+.tr-status { text-align: right; color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trade-row .chip { justify-self: start; }
 
 /* ── Entscheidungs-Feed ─────────────────────────────────────────────────── */
