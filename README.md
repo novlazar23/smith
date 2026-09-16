@@ -853,8 +853,18 @@ Zufalls-Basis oder ohne LOO-Beitrag → entfernt); maximal 3 Agenten
 (im Deckelfall der höchste OOS-Score bleibt). Zugelassene Agenten
 landen atomar in `evolved_agents.json` (Code, Claim, Version, Score);
 der Orchestrator hot-reloadet die Datei und hängt die Agenten dem
-Ensemble als `SHADOW`-Mitglieder an (Gewicht 0,5) — die Promotion zu
-`ACTIVE` bleibt ein manueller Schritt. Ohne LLM-Konfiguration läuft
+Ensemble als `SHADOW`-Mitglieder an (Gewicht 0,5). Die Promotion zu
+`ACTIVE` ist ein manueller Schritt mit preregistrierten Kriterien
+(gegen Cherry-Picking): (1) der Agent übersteht mindestens 14 Tage
+durchgehend die täglichen Re-Checks (OOS ≥ Zufalls-Basis + 0,02 und
+LOO-Marginal > 0 — andernfalls wäre er automatisch entfernt), (2) der
+OOS-Score bleibt über den Beobachtungsläufen stabil über der Basis
+(kein einmaliger Spike), (3) manuelle Review von Code, Claim und
+Shadow-Entscheidungen des Agents. Danach ist die Promotion eine
+gezielte Code-Änderung: `apps/orchestrator_service/service.py` hängt
+Evolved Agents in `build_ensemble` heute fest als `AgentStatus.SHADOW`
+an (pro-Agenten-Status im Artefakt erlauben), dann Build + Deploy.
+Ohne LLM-Konfiguration läuft
 der Schritt trotzdem (Bestand wird re-geprüft, nur keine neuen
 Vorschläge) — Fail-Soft wie Stufe 1.
 
