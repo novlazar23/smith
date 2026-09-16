@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -58,6 +59,27 @@ def _m(oos_brier: float, cal_stab: float = 0.5, oos_stab: float = 0.5, marginal:
 class TestBaseline:
     def test_uniform_score_is_one_third(self) -> None:
         assert pytest.approx(1.0 / 3.0) == RANDOM_BASELINE_SCORE
+
+
+class TestPrepareCandidates:
+    def test_rejections_are_recorded_in_summary(self) -> None:
+        from apps.champion_evals.agent_evolve import prepare_candidates
+
+        proposals = [
+            {"name": "good_one", "code": GOOD_CODE, "claim": "c"},
+            {"name": "bad_jail", "code": "import os\ndef predict(o,h,l,c,v,t): return (1,0,0)", "claim": "c"},
+            {"name": "bad_smoke", "code": CRASH_CODE, "claim": "c"},
+        ]
+        summary: list[dict[str, Any]] = []
+        instances, _, _ = prepare_candidates(proposals, summary=summary)
+        assert set(instances) == {"good_one"}
+        by_name = {entry["name"]: entry for entry in summary}
+        assert set(by_name) == {"bad_jail", "bad_smoke"}
+        assert all(
+            entry["admitted"] is False and entry["kind"] == "kandidat" and entry["score"] is None for entry in summary
+        )
+        assert any("Jail" in reason for reason in by_name["bad_jail"]["reasons"])
+        assert any("Smoke-Test" in reason for reason in by_name["bad_smoke"]["reasons"])
 
 
 class TestJudgeCandidate:

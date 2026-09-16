@@ -110,8 +110,13 @@ def prepare_candidates(
     *,
     instrument: str = "",
     horizon: str = "15m",
+    summary: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, BaseAgent], dict[str, str], dict[str, str]]:
     """Jail + Smoke-Test + Adapter für LLM-Vorschläge (fail-closed pro Kandidat).
+
+    ``summary`` (optional) erhält für jeden in dieser Phase verworfenen
+    Kandidaten ein Urteil (``kind="kandidat"``, ``admitted=False``), damit
+    das Letzter-Lauf-Artefakt den vollständigen Weg jedes Vorschlags zeigt.
 
     Returns:
         (instances, code_by_name, claim_by_name) — nur Kandidaten, die
@@ -121,6 +126,10 @@ def prepare_candidates(
 
     from .agent_sandbox import load_predict_fn, validate_agent_code
 
+    def _rejected(name: str, reason: str) -> None:
+        if summary is not None:
+            summary.append({"name": name, "kind": "kandidat", "admitted": False, "score": None, "reasons": [reason]})
+
     instances: dict[str, BaseAgent] = {}
     code_by_name: dict[str, str] = {}
     claim_by_name: dict[str, str] = {}
@@ -129,15 +138,18 @@ def prepare_candidates(
         problem = validate_agent_code(code, name)
         if problem is not None:
             logger.info("Kandidat %s verworfen (Jail): %s", name, problem)
+            _rejected(name, f"Jail: {problem}")
             continue
         try:
             predict_fn = load_predict_fn(code, name)
         except Exception as exc:
             logger.info("Kandidat %s verworfen (Ausführung): %s", name, exc)
+            _rejected(name, f"Ausführung: {exc}")
             continue
         problem = smoke_test_predict(predict_fn)
         if problem is not None:
             logger.info("Kandidat %s verworfen (Smoke-Test): %s", name, problem)
+            _rejected(name, f"Smoke-Test: {problem}")
             continue
         agent = build_evolved_agent(
             name,
@@ -148,6 +160,7 @@ def prepare_candidates(
         )
         if agent is None:
             logger.warning("Kandidat %s verworfen (Adapter fehlgeschlagen)", name)
+            _rejected(name, "Adapter fehlgeschlagen")
             continue
         instances[name] = agent
         code_by_name[name] = code
@@ -413,6 +426,7 @@ def run_agent_evolution(
 
     candidates: dict[str, BaseAgent] = {}
     candidate_meta: dict[str, tuple[str, str]] = {}
+    summary: list[dict[str, Any]] = []
     if args.evolve_agents:
         llm_client = llm_client_factory() if llm_client_factory is not None else _default_llm_client(args.llm_model)
         if llm_client is not None:
@@ -426,11 +440,11 @@ def run_agent_evolution(
                 proposals,
                 instrument=series[0][0] if series else "",
                 horizon=args.horizon,
+                summary=summary,
             )
             candidates = instances
             candidate_meta = {name: (code_by_name[name], claim_by_name[name]) for name in instances}
 
-    summary: list[dict[str, Any]] = []
     artifact = evaluate_evolved_candidates(
         series,
         base_instances,
