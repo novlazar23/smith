@@ -7,6 +7,7 @@ Der Endpunkt ``GET /v1/dashboard`` bündelt in einer einzigen Antwort:
   - Demo-Konto, offene Positionen und aktuelle Trades (PostgreSQL)
   - Letzte Shadow-Entscheidungen und News-Events (PostgreSQL)
   - Zugelassene Evolved Agents (evolved_agents.json, Shared-Volume)
+  - Evolved-Agents-Letzter-Lauf-Urteile (evolved_agents_last_run.json, Shared-Volume)
 
 Alle Quellen werden defensiv abgefragt: eine ausgefallene Quelle liefert
 leere Listen bzw. ``None`` — der Endpunkt antwortet nie mit HTTP 500.
@@ -342,6 +343,40 @@ def _fetch_evolved_agents() -> list[dict[str, Any]]:
     return agents
 
 
+def _fetch_evolved_last_run() -> dict[str, Any]:
+    """Liest die Urteile des letzten ``--evolve-agents``-Laufs.
+
+    Pfad abgeleitet aus ``EVOLVED_AGENTS_PATH`` (gleicher Ordner);
+    fehlende Datei = Normalzustand vor dem ersten Lauf → ``{}``;
+    defekte JSON wirft, was ``_run_source`` wie bei allen anderen
+    Quellen in ``{}`` umsetzt (fail-soft).
+    """
+    raw = os.environ.get("EVOLVED_AGENTS_PATH", "/app/backtest_reports/evolved_agents.json").strip()
+    if not raw:
+        return {}
+    file = Path(raw).with_name("evolved_agents_last_run.json")
+    if not file.is_file():
+        return {}
+    data = json.loads(file.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("candidates"), list):
+        return {}
+    verdicts: list[dict[str, Any]] = []
+    for item in data["candidates"]:
+        if not isinstance(item, dict):
+            continue
+        reasons = item.get("reasons")
+        verdicts.append(
+            {
+                "name": str(item.get("name") or ""),
+                "kind": str(item.get("kind") or "kandidat"),
+                "admitted": bool(item.get("admitted")),
+                "score": _float(item.get("score")),
+                "reasons": [str(r) for r in reasons if isinstance(r, str)] if isinstance(reasons, list) else [],
+            }
+        )
+    return {"run_at": str(data.get("run_at") or "") or None, "verdicts": verdicts}
+
+
 # ---------------------------------------------------------------------------
 # Endpunkt
 # ---------------------------------------------------------------------------
@@ -401,6 +436,7 @@ async def dashboard() -> dict[str, Any]:
         decisions,
         news,
         evolved_agents,
+        evolved_agents_last_run,
     ) = await asyncio.gather(
         _status_or_fallback(),
         _run_source(_fetch_data_source, "synthetic"),
@@ -410,6 +446,7 @@ async def dashboard() -> dict[str, Any]:
         _run_source(_fetch_recent_decisions, []),
         _run_source(_fetch_recent_news, []),
         _run_source(_fetch_evolved_agents, []),
+        _run_source(_fetch_evolved_last_run, {}),
     )
     status_data = cast("dict[str, Any]", status_data)
     data_source = cast("str", data_source)
@@ -424,4 +461,5 @@ async def dashboard() -> dict[str, Any]:
         "recent_decisions": decisions,
         "recent_news": news,
         "evolved_agents": evolved_agents,
+        "evolved_agents_last_run": evolved_agents_last_run,
     }

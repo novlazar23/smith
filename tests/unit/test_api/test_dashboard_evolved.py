@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from apps.api.routers.dashboard import _fetch_evolved_agents
+from apps.api.routers.dashboard import _fetch_evolved_agents, _fetch_evolved_last_run
 
 
 def _write_artifact(tmp_path: Path, content: str) -> Path:
@@ -50,3 +50,39 @@ def test_corrupt_json_raises_for_run_source(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setenv("EVOLVED_AGENTS_PATH", str(_write_artifact(tmp_path, "{kaputt")))
     with pytest.raises(json.JSONDecodeError):
         _fetch_evolved_agents()
+
+
+def test_last_run_parses_valid_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVOLVED_AGENTS_PATH", str(tmp_path / "evolved_agents.json"))
+    last_run = {
+        "run_at": "2026-09-16T07:39:12+00:00",
+        "candidates": [
+            {"name": "wick_x", "kind": "kandidat", "admitted": True, "score": 0.6317, "reasons": []},
+            {
+                "name": "bad_x",
+                "kind": "kandidat",
+                "admitted": False,
+                "score": 0.295,
+                "reasons": ["OOS-Score 0.2950 < Zufalls-Basis 0.3333 + 0.02"],
+            },
+        ],
+    }
+    (tmp_path / "evolved_agents_last_run.json").write_text(json.dumps(last_run), encoding="utf-8")
+    assert _fetch_evolved_last_run() == {
+        "run_at": "2026-09-16T07:39:12+00:00",
+        "verdicts": [
+            {"name": "wick_x", "kind": "kandidat", "admitted": True, "score": 0.6317, "reasons": []},
+            {
+                "name": "bad_x",
+                "kind": "kandidat",
+                "admitted": False,
+                "score": 0.295,
+                "reasons": ["OOS-Score 0.2950 < Zufalls-Basis 0.3333 + 0.02"],
+            },
+        ],
+    }
+
+
+def test_last_run_missing_file_returns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVOLVED_AGENTS_PATH", str(tmp_path / "evolved_agents.json"))
+    assert _fetch_evolved_last_run() == {}

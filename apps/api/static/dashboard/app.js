@@ -327,14 +327,10 @@ function renderNews(news) {
 
 /* ── Evolved Agents ─────────────────────────────────────────────────────── */
 
-function renderEvolved(agents) {
+function renderEvolved(agents, lastRun) {
   const body = $("#evolved-body");
   const items = (agents || []).filter((a) => a && typeof a.name === "string");
-  if (items.length === 0) {
-    body.innerHTML = emptyState("Noch keine zugelassenen Agenten");
-    return;
-  }
-  body.innerHTML = items.map((a) =>
+  let html = items.map((a) =>
     `<div class="ev-item">` +
     `<div class="ev-head"><span class="ev-name">${esc(a.name)}</span>` +
     `<span class="chip d-neutral">SHADOW</span>` +
@@ -343,6 +339,20 @@ function renderEvolved(agents) {
     `<div class="ev-meta">OOS ${isNum(a.score) ? a.score.toFixed(4) : "—"} · seit ${dateTimeStr(a.admitted_at)}</div>` +
     `</div>`
   ).join("");
+  const verdicts = lastRun && Array.isArray(lastRun.verdicts) ? lastRun.verdicts : [];
+  if (verdicts.length > 0) {
+    html +=
+      `<div class="evl-head">Letzter Lauf${lastRun.run_at ? " · " + dateTimeStr(lastRun.run_at) : ""}</div>` +
+      verdicts.map((v) =>
+        `<div class="evl-item">` +
+        `<span class="evl-name" title="${esc(v.name)}">${esc(v.name)}</span>` +
+        `<span class="chip ${v.admitted ? "d-long" : "d-short"}">${v.admitted ? "ZUGELASSEN" : "ABGELEHNT"}</span>` +
+        `<span class="evl-score">OOS ${isNum(v.score) ? v.score.toFixed(4) : "—"}</span>` +
+        `</div>` +
+        ((v.reasons || []).length ? `<div class="evl-reason">${esc(v.reasons.join("; "))}</div>` : "")
+      ).join("");
+  }
+  body.innerHTML = html || emptyState("Noch keine zugelassenen Agenten");
 }
 
 /* ── Tabs / Embeds ───────────────────────────────────────────────────────── */
@@ -439,7 +449,7 @@ function render(data) {
   renderTrades(Array.isArray(data.recent_trades) ? data.recent_trades : []);
   renderDecisions(Array.isArray(data.recent_decisions) ? data.recent_decisions : []);
   renderNews(Array.isArray(data.recent_news) ? data.recent_news : []);
-  renderEvolved(Array.isArray(data.evolved_agents) ? data.evolved_agents : []);
+  renderEvolved(Array.isArray(data.evolved_agents) ? data.evolved_agents : [], data.evolved_agents_last_run);
 }
 
 function setConnected(ok) {

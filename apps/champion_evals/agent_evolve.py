@@ -57,6 +57,8 @@ STABILITY_TOLERANCE = 0.05
 #: Maximal zugelassene Evolved Agents im Ensemble.
 MAX_EVOLVED_AGENTS = 3
 EVOLVED_AGENTS_FILENAME = "evolved_agents.json"
+#: Letzter Lauf: Urteile aller geprüften Agenten (Beobachtung/UI).
+EVOLVED_AGENTS_LAST_RUN_FILENAME = "evolved_agents_last_run.json"
 
 
 @dataclass(frozen=True)
@@ -167,8 +169,13 @@ def evaluate_evolved_candidates(
     target_config: TargetConfig | None = None,
     calibration_ratio: float = 0.5,
     max_agents: int = MAX_EVOLVED_AGENTS,
+    summary: list[dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Eine Replay-Runde (Basis + Bestand + Kandidaten) → neues Artefakt.
+
+    ``summary`` (optional) erhält pro geprüftem Agenten einen
+    Urteils-Eintrag (``name``, ``kind``, ``admitted``, ``score``,
+    ``reasons``) — der Aufrufer persistiert sie als Letzter-Lauf-Artefakt.
 
     Alle Instanzen sehen auf jedem Schritt exakt dasselbe Fenster
     (``replay_instances``); ``score_window`` bewertet nur Agenten, die
@@ -222,6 +229,10 @@ def evaluate_evolved_candidates(
         agent_metrics = metrics.get(name)
         if agent_metrics is None:
             logger.info("Bestand-Agent %s entfernt: hat nicht in jedem Schritt geliefert", name)
+            if summary is not None:
+                summary.append(
+                    {"name": name, "kind": "bestand", "admitted": False, "score": None, "reasons": ["hat nicht in jedem Schritt geliefert"]}
+                )
             continue
         verdict = judge_retention(name, agent_metrics)
         if verdict.admitted:
@@ -229,11 +240,19 @@ def evaluate_evolved_candidates(
             logger.info("Bestand-Agent %s bestätigt (Score %.4f)", name, verdict.score)
         else:
             logger.info("Bestand-Agent %s entfernt: %s", name, "; ".join(verdict.reasons))
+        if summary is not None:
+            summary.append(
+                {"name": name, "kind": "bestand", "admitted": verdict.admitted, "score": verdict.score, "reasons": list(verdict.reasons)}
+            )
 
     for name in candidates:
         agent_metrics = metrics.get(name)
         if agent_metrics is None:
             logger.info("Kandidat %s abgelehnt: hat nicht in jedem Schritt geliefert", name)
+            if summary is not None:
+                summary.append(
+                    {"name": name, "kind": "kandidat", "admitted": False, "score": None, "reasons": ["hat nicht in jedem Schritt geliefert"]}
+                )
             continue
         verdict = judge_candidate(name, agent_metrics)
         if verdict.admitted:
@@ -249,11 +268,25 @@ def evaluate_evolved_candidates(
             )
         else:
             logger.info("Kandidat %s abgelehnt: %s", name, "; ".join(verdict.reasons))
+        if summary is not None:
+            summary.append(
+                {"name": name, "kind": "kandidat", "admitted": verdict.admitted, "score": verdict.score, "reasons": list(verdict.reasons)}
+            )
 
     if len(current) > max_agents:
         ranked = sorted(current.items(), key=lambda item: -item[1][2])
-        for name, _meta in ranked[max_agents:]:
+        for name, meta in ranked[max_agents:]:
             logger.info("Agent %s entfernt: Deckel %d überschritten (niedrigster Score)", name, max_agents)
+            if summary is not None:
+                summary.append(
+                    {
+                        "name": name,
+                        "kind": "bestand" if name in previous else "kandidat",
+                        "admitted": False,
+                        "score": meta[2],
+                        "reasons": ["Deckel überschritten (niedrigster Score)"],
+                    }
+                )
         current = dict(ranked[:max_agents])
 
     return build_agents_artifact(current, previous)
@@ -397,6 +430,7 @@ def run_agent_evolution(
             candidates = instances
             candidate_meta = {name: (code_by_name[name], claim_by_name[name]) for name in instances}
 
+    summary: list[dict[str, Any]] = []
     artifact = evaluate_evolved_candidates(
         series,
         base_instances,
@@ -410,8 +444,13 @@ def run_agent_evolution(
         target_config=target,
         calibration_ratio=args.calibration_ratio,
         max_agents=args.max_evolved,
+        summary=summary,
     )
     path = write_json_atomic(agents_path, artifact)
+    write_json_atomic(
+        agents_path.with_name(EVOLVED_AGENTS_LAST_RUN_FILENAME),
+        {"run_at": datetime.now(UTC).isoformat(timespec="seconds"), "candidates": summary},
+    )
     print(f"Evolved Agents: {len(artifact)} zugelassen ({', '.join(sorted(artifact)) or '—'}) → {path}")
     return 0
 

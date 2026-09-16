@@ -179,6 +179,26 @@ class TestEvaluateIntegration:
         artifact = evaluate_evolved_candidates(series, base, {}, {}, previous=previous)
         assert "defekt" not in artifact
 
+    def test_summary_collects_verdicts(self) -> None:
+        series = [("BTC/USDT", self._candles())]
+        base = self._instances({"base_a": GOOD_CODE, "base_b": UNIFORM_CODE})
+        candidates = self._instances({"uniform_candidate": UNIFORM_CODE})
+        summary: list = []
+        evaluate_evolved_candidates(
+            series,
+            base,
+            candidates,
+            {"uniform_candidate": (UNIFORM_CODE, "uniform claim")},
+            previous={},
+            summary=summary,
+        )
+        by_name = {entry["name"]: entry for entry in summary}
+        rejected = by_name["uniform_candidate"]
+        assert rejected["admitted"] is False
+        assert rejected["kind"] == "kandidat"
+        assert rejected["reasons"]
+        assert rejected["score"] is not None
+
     def test_cap_keeps_highest_score(self) -> None:
         series = [("BTC/USDT", self._candles())]
         base = self._instances({"base_a": GOOD_CODE, "base_b": UNIFORM_CODE})
