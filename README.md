@@ -910,7 +910,10 @@ Credential-Status pro Venue).
 - **Demo-Modus (imaginäres Geld)**: `demo-trader` führt echte
   Konsens-Entscheidungen der Agenten auf Binance-Futures-Kursen als
   Paper-Trades aus (long-only, max. 10 % Position, Slippage/Commission
-  0,1 %). Alles sichtbar im Web-Dashboard unter
+  0,1 %). Exit-Backstops (kalibrierte Backtest-Werte, überschreiben den
+  Trade-Plan): Stop-Loss 8 %, Max-Haltezeit 7 Tage, Flat-Size ohne
+  Pyramiding — via `DEMO_STOP_LOSS_PCT` / `DEMO_MAX_HOLDING_HOURS` /
+  `DEMO_FLAT_SIZE` steuerbar. Alles sichtbar im Web-Dashboard unter
   `http://localhost:8080/` (Konto, Positionen, Trades, Entscheidungen,
   News).
 - **Zentrale Web-UI**: `http://localhost:8080/` bündelt alle

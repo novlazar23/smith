@@ -26,6 +26,9 @@ DEMO_ENV_KEYS = (
     "DEMO_TRADE_NOTIONAL",
     "DEMO_MIN_CONFIDENCE",
     "DEMO_TRADE_COST_PCT",
+    "DEMO_STOP_LOSS_PCT",
+    "DEMO_MAX_HOLDING_HOURS",
+    "DEMO_FLAT_SIZE",
     "CANDLE_VENUE",
     "DEMO_HEARTBEAT",
 )
@@ -50,6 +53,9 @@ class TestConfigFromEnv:
         assert config.trade_notional == DEFAULT_TRADE_NOTIONAL
         assert config.min_confidence == DEFAULT_MIN_CONFIDENCE
         assert config.trade_cost_pct == DEFAULT_TRADE_COST_PCT
+        assert config.stop_loss_pct == 0.08
+        assert config.max_holding_hours == 168.0
+        assert config.flat_size is True
         assert config.candle_venue == DEFAULT_CANDLE_VENUE
         assert config.account_id == "demo"
 
@@ -69,6 +75,9 @@ class TestConfigFromEnv:
         monkeypatch.setenv("DEMO_TRADE_NOTIONAL", "500")
         monkeypatch.setenv("DEMO_MIN_CONFIDENCE", "0.7")
         monkeypatch.setenv("DEMO_TRADE_COST_PCT", "0.002")
+        monkeypatch.setenv("DEMO_STOP_LOSS_PCT", "0.05")
+        monkeypatch.setenv("DEMO_MAX_HOLDING_HOURS", "24")
+        monkeypatch.setenv("DEMO_FLAT_SIZE", "false")
         monkeypatch.setenv("CANDLE_VENUE", "DUMMY_EXCHANGE")
         monkeypatch.setenv("DEMO_HEARTBEAT", str(tmp_path / "hb"))
 
@@ -80,6 +89,9 @@ class TestConfigFromEnv:
         assert config.trade_notional == 500.0
         assert config.min_confidence == 0.7
         assert config.trade_cost_pct == 0.002
+        assert config.stop_loss_pct == 0.05
+        assert config.max_holding_hours == 24.0
+        assert config.flat_size is False
         assert config.candle_venue == "DUMMY_EXCHANGE"
         assert config.heartbeat_path == tmp_path / "hb"
 

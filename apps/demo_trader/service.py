@@ -9,6 +9,14 @@ Konsens-Entscheidungen) und mappt die Entscheidung auf Paper-Trades:
   - ``SHORT_BIAS`` → Glattstellung der offenen Position (``close_position``)
   - ``NO_TRADE`` u. a. → kein Trade
 
+Bevor die Entscheidung auf einen Trade gemappt wird, prüfen
+**deterministische Exit-Backstops** (überschreiben den Trade-Plan):
+Stop-Loss (``DEMO_STOP_LOSS_PCT``, Default 8 %) und Max-Haltezeit
+(``DEMO_MAX_HOLDING_HOURS``, Default 168 h) schließen eine offene
+Position, ohne dass der Agenten-Konsens dazu SHORT voten müsste.
+Flat-Size (``DEMO_FLAT_SIZE``, Default an) unterdrückt Nachkäufe bei
+schon offener Position (kein Pyramiding).
+
 Ausgeführt wird ausschließlich über den getrackten ``PaperExecutor``
 (Slippage, Kommission, 10%-Positions-Limit) — es werden **nie** reale
 Orders platziert. Jeder ausgeführte Trade landet in PostgreSQL
@@ -67,6 +75,11 @@ DEFAULT_MIN_CONFIDENCE = 0.3
 # Gesamthandelskosten pro Seite (Slippage + Kommission), hälftig aufgeteilt:
 # Binance-Futures-Taker-Fee 0,05 % + ~0,05 % Slippage auf 5m-Kerzen.
 DEFAULT_TRADE_COST_PCT = 0.001
+# Exit-Backstops (kalibrierte Backtest-Werte, Lauf 3): Stop-Loss 8 %,
+# Max-Haltezeit 7 Tage, Flat-Size (kein Pyramiding — Positions-Gewichts-
+# Drift auf Volatilen, Lauf 9).
+DEFAULT_STOP_LOSS_PCT = 0.08
+DEFAULT_MAX_HOLDING_HOURS = 168.0
 DEFAULT_CANDLE_VENUE = "BINANCE_FUTURES"
 DEFAULT_CANDLE_LIMIT = 200
 DEFAULT_MIN_CANDLES = 30
@@ -121,6 +134,9 @@ class DemoTraderConfig:
     trade_notional: float = DEFAULT_TRADE_NOTIONAL
     min_confidence: float = DEFAULT_MIN_CONFIDENCE
     trade_cost_pct: float = DEFAULT_TRADE_COST_PCT
+    stop_loss_pct: float = DEFAULT_STOP_LOSS_PCT
+    max_holding_hours: float = DEFAULT_MAX_HOLDING_HOURS
+    flat_size: bool = True
     candle_venue: str = DEFAULT_CANDLE_VENUE
     candle_limit: int = DEFAULT_CANDLE_LIMIT
     min_candles: int = DEFAULT_MIN_CANDLES
@@ -514,6 +530,31 @@ class DemoTrader:
             logger.warning("Heartbeat-Datei nicht schreibbar: %s", exc)
         return executed
 
+    def _check_exit_backstop(self, instrument: str, latest_close: float) -> str | None:
+        """Prüft deterministische Exit-Backstops für eine offene Position.
+
+        Returns:
+            Grund-String, wenn geschlossen werden soll, sonst None.
+        """
+        position = self._account.positions.get(instrument)
+        if position is None or position.quantity <= 0 or position.opened_at is None:
+            return None
+        if (
+            self._config.stop_loss_pct > 0
+            and latest_close <= position.avg_price * (1.0 - self._config.stop_loss_pct)
+        ):
+            return (
+                f"Stop-Loss {self._config.stop_loss_pct:.0%} "
+                f"(avg {position.avg_price:.2f} → {latest_close:.2f})"
+            )
+        age_hours = (datetime.now(UTC) - position.opened_at).total_seconds() / 3600.0
+        if self._config.max_holding_hours > 0 and age_hours >= self._config.max_holding_hours:
+            return (
+                f"Max-Haltezeit {self._config.max_holding_hours:.0f}h "
+                f"(gehalten {age_hours:.0f}h)"
+            )
+        return None
+
     def _run_instrument(self, instrument: str) -> int:
         """Führt Analyse und Paper-Trade für ein einzelnes Instrument aus.
 
@@ -533,6 +574,16 @@ class DemoTrader:
             return 0
 
         latest_close = float(window.close[-1])
+        exit_reason = self._check_exit_backstop(instrument, latest_close)
+        if exit_reason is not None:
+            trade = self._executor.close_position(self._account, instrument)
+            if trade is None:
+                logger.info("%s: Backstop (%s), aber keine offene Position", instrument, exit_reason)
+                return 0
+            with self._db.engine.connect() as conn:
+                persist_demo_trade(conn, trade)
+            logger.info("%s: Exit-Backstop ausgelöst (%s) → Position geschlossen", instrument, exit_reason)
+            return 1
         market_data = build_market_data(window)
         run_id = make_run_id(instrument)
         agents = build_active_ensemble(instrument, self._config.horizon)
@@ -555,7 +606,9 @@ class DemoTrader:
         )
 
         trade: Trade | None = None
-        if plan.action == ACTION_BUY:
+        if plan.action == ACTION_BUY and self._config.flat_size and instrument in self._account.positions:
+            logger.info("%s: LONG_BIAS, aber Position offen (Flat-Size) → kein Nachkauf", instrument)
+        elif plan.action == ACTION_BUY:
             trade = self._executor.submit_order(
                 self._account, instrument, TradeDirection.BUY, plan.quantity, plan.price
             )
@@ -608,7 +661,8 @@ def config_from_env() -> DemoTraderConfig:
       DEMO_INTERVAL_SECONDS (300), DEMO_INSTRUMENTS (BTC/USDT,ETH/USDT),
       DEMO_INITIAL_CASH (100000), DEMO_TRADE_NOTIONAL (2000),
       DEMO_MIN_CONFIDENCE (0.3), DEMO_TRADE_COST_PCT (0.001),
-      CANDLE_VENUE (BINANCE_FUTURES),
+      DEMO_STOP_LOSS_PCT (0.08), DEMO_MAX_HOLDING_HOURS (168),
+      DEMO_FLAT_SIZE (true), CANDLE_VENUE (BINANCE_FUTURES),
       DEMO_HEARTBEAT (/tmp/demo_trader_heartbeat), LOG_LEVEL (INFO).
     """
     raw_instruments = os.environ.get("DEMO_INSTRUMENTS", DEFAULT_INSTRUMENTS)
@@ -635,6 +689,15 @@ def config_from_env() -> DemoTraderConfig:
         trade_cost_pct = float(os.environ.get("DEMO_TRADE_COST_PCT", str(DEFAULT_TRADE_COST_PCT)))
     except ValueError:
         trade_cost_pct = DEFAULT_TRADE_COST_PCT
+    try:
+        stop_loss_pct = float(os.environ.get("DEMO_STOP_LOSS_PCT", str(DEFAULT_STOP_LOSS_PCT)))
+    except ValueError:
+        stop_loss_pct = DEFAULT_STOP_LOSS_PCT
+    try:
+        max_holding_hours = float(os.environ.get("DEMO_MAX_HOLDING_HOURS", str(DEFAULT_MAX_HOLDING_HOURS)))
+    except ValueError:
+        max_holding_hours = DEFAULT_MAX_HOLDING_HOURS
+    flat_size = os.environ.get("DEMO_FLAT_SIZE", "true").strip().lower() not in {"0", "false", "no", "off"}
     return DemoTraderConfig(
         interval_seconds=interval,
         instruments=parse_instruments(raw_instruments),
@@ -642,6 +705,9 @@ def config_from_env() -> DemoTraderConfig:
         trade_notional=trade_notional,
         min_confidence=min_confidence,
         trade_cost_pct=trade_cost_pct,
+        stop_loss_pct=stop_loss_pct,
+        max_holding_hours=max_holding_hours,
+        flat_size=flat_size,
         candle_venue=os.environ.get("CANDLE_VENUE", DEFAULT_CANDLE_VENUE),
         heartbeat_path=Path(os.environ.get("DEMO_HEARTBEAT", str(HEARTBEAT_PATH))),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
