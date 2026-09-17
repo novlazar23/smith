@@ -31,6 +31,7 @@ from apps.champion_evals.evolve import load_champion_params
 from apps.orchestrator_service.champion_feed import REQUALIFICATION_CONFIG, load_status_overrides
 from numpy.typing import NDArray
 from packages.agents.base import AgentConfig, AgentType, BaseAgent, BaseParams
+from packages.agents.chart_pattern_agent import ChartPatternAgent
 from packages.agents.mean_reversion_agent import MeanReversionAgent
 from packages.agents.trend_agent import TrendAgent
 from packages.agents.volatility_regime_agent import VolatilityRegimeAgent
@@ -284,7 +285,7 @@ def build_ensemble(
 ) -> list[ContextualAgent]:
     """Erzeugt frische Agenten für einen Zyklus (kanonisches Ensemble).
 
-    Ensemble (4 komplementäre Marktblickwinkel, alle rein OHLCV-basiert):
+    Ensemble (5 komplementäre Marktblickwinkel, alle rein OHLCV-basiert):
       - ``TrendAgent``: Trendrichtung und -stärke (EMA-Ausrichtung, ROC,
         ATR-normierte Trennung)
       - ``MeanReversionAgent``: Überdehnung und Reversionspotenzial
@@ -293,6 +294,9 @@ def build_ensemble(
         Percentile, Squeeze-Breakouts)
       - ``VolumeConvictionAgent``: Überzeugung hinter der Bewegung
         (Up/Down-Volumen, OBV-Steigung, Partizipation)
+      - ``ChartPatternAgent``: Chartmuster + Fibonacci-Goldene-Zone +
+        vereinfachter Elliott-Impuls (4 Evidenz-Familien, ATR-relative
+        Schwellen, deterministisch, kein Lookahead)
 
     Die vier Agenten sind bewusst unterschiedlich kalibriert: bei einem
     starken, eindeutigen Signal gibt jeder relevante Blickwinkel eine
@@ -325,6 +329,7 @@ def build_ensemble(
         ("mean_reversion", AgentType.INDICATOR, MeanReversionAgent),
         ("volatility_regime", AgentType.REGIME, VolatilityRegimeAgent),
         ("volume_conviction", AgentType.ORDERFLOW, VolumeConvictionAgent),
+        ("chart_pattern", AgentType.PATTERN, ChartPatternAgent),
     ]
     param_classes: Mapping[str, type[BaseParams]] | None = None
     if champion_params:

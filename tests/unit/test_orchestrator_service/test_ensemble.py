@@ -95,16 +95,17 @@ class TestContextualAgent:
 class TestBuildEnsemble:
     """build_ensemble() erzeugt frische, korrekt konfigurierte Shadow-Agenten."""
 
-    def test_returns_four_configured_shadow_agents(self) -> None:
-        """Ensemble besteht aus den vier kanonischen Blickwinkel-Agenten."""
+    def test_returns_five_configured_shadow_agents(self) -> None:
+        """Ensemble besteht aus den fünf kanonischen Blickwinkel-Agenten."""
         agents = build_ensemble("BTC/USDT", "15m")
 
-        assert len(agents) == 4
+        assert len(agents) == 5
         assert {agent.agent_id for agent in agents} == {
             "trend",
             "mean_reversion",
             "volatility_regime",
             "volume_conviction",
+            "chart_pattern",
         }
         inner_agents = [agent._agent for agent in agents]  # type: ignore[attr-defined]
         for inner in inner_agents:
@@ -201,6 +202,7 @@ class TestBuildEnsemble:
             "mean_reversion": AgentType.INDICATOR,
             "volatility_regime": AgentType.REGIME,
             "volume_conviction": AgentType.ORDERFLOW,
+            "chart_pattern": AgentType.PATTERN,
         }
 
     def test_fresh_instances_per_cycle(self) -> None:
@@ -230,10 +232,10 @@ class TestBuildEnsembleEvolvedAgents:
     """evolved_agents hängt LLM-generierte Agenten als SHADOW-Mitglieder an."""
 
     def test_appends_evolved_agent_as_shadow(self) -> None:
-        """Ein gültiger Evolved Agent wird 5. Mitglied mit SHADOW-Status."""
+        """Ein gültiger Evolved Agent wird 6. Mitglied mit SHADOW-Status."""
         agents = build_ensemble("BTC/USDT", "15m", AgentStatus.ACTIVE, evolved_agents={"momentum_test": EVOLVED_CODE})
 
-        assert len(agents) == 5
+        assert len(agents) == 6
         inner = {agent.agent_id: agent._agent for agent in agents}  # type: ignore[attr-defined]
         assert inner["momentum_test"].config.status is AgentStatus.SHADOW
         assert inner["momentum_test"].config.instrument == "BTC/USDT"
@@ -246,7 +248,7 @@ class TestBuildEnsembleEvolvedAgents:
         data["timestamps"] = np.arange(50, dtype=np.int64)
         data["close"] = np.linspace(100, 105, 50)
 
-        report = agents[4].analyze(data)
+        report = agents[5].analyze(data)
 
         assert abs(sum(report.probabilities.values()) - 1.0) < 1e-6
         assert report.status is AgentStatus.SHADOW
@@ -261,5 +263,5 @@ class TestBuildEnsembleEvolvedAgents:
             evolved_agents={"evil": "def predict(o,h,l,c,v,t):\n    open('x')\n    return (1,0,0)"},
         )
 
-        assert len(agents) == 4
+        assert len(agents) == 5
         assert all(agent.agent_id != "evil" for agent in agents)

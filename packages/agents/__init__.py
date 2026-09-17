@@ -3,6 +3,7 @@
 from .anomaly_agent import AnomalyAgent
 from .base import AgentConfig, AgentType, BaseAgent
 from .chart_agent import ChartAgent
+from .chart_pattern_agent import ChartPatternAgent
 from .contrainer.agent import ContrarianAgent
 from .cross_market_agent import CrossMarketAgent
 from .elliott_agent import ElliottAgent
@@ -20,6 +21,7 @@ __all__ = [
     "AnomalyAgent",
     "BaseAgent",
     "ChartAgent",
+    "ChartPatternAgent",
     "ContrarianAgent",
     "CrossMarketAgent",
     "ElliottAgent",
