@@ -349,6 +349,12 @@ def _elliott_signal(
 def _combine(fired: list[tuple[float, float]]) -> tuple[float, float, float]:
     """Gewichteter Mittelwert der feuenden Familien → (p_up, p_down, p_range).
 
+    Prereg A: Die Range-Prior fällt auf 0.30 nur bei einem bestätigten Break
+    (|s| = 1.0) oder ≥ 2 Familien, die in die Nettorichtung zeigen
+    (``has_break or agree >= 2`` mit ``sign != 0``); andernfalls bleibt die
+    Range-Prior unverändert (0.40 + 0.10·(1-cov)) — Single-Weak- und
+    Konflikt-Fenster sind damit byte-identisch zu vorher.
+
     Summe exakt 1.0 (nach Clipping auf [0.02, 0.95] renormiert); ohne
     feuende Familie bleibt die neutrale Verteilung (Range-Prior 0.40).
     """
@@ -356,8 +362,12 @@ def _combine(fired: list[tuple[float, float]]) -> tuple[float, float, float]:
         return (0.35, 0.35, 0.40)
     cov = len(fired) / 4.0
     score = sum(w * s for w, s in fired) / sum(w for w, _ in fired)
+    sign = 1 if score > 0.0 else (-1 if score < 0.0 else 0)
+    agree = sum(1 for _w, s in fired if sign * s > 0)
+    has_break = any(abs(s) >= 1.0 for _w, s in fired)
+    directional = sign != 0 and (has_break or agree >= 2)
     conviction = score * (0.5 + 0.5 * cov)
-    p_range = 0.40 + 0.10 * (1.0 - cov)
+    p_range = 0.30 if directional else 0.40 + 0.10 * (1.0 - cov)
     base = (1.0 - p_range) / 2.0
     p_up = base + conviction * base
     p_down = base - conviction * base

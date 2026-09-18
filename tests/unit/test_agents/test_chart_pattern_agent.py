@@ -11,6 +11,7 @@ from packages.agents import (
     AgentType,
     ChartPatternAgent,
 )
+from packages.agents.chart_pattern_agent import _combine
 from packages.schemas.agent_report import (
     AgentReport,
     AgentStatus,
@@ -293,6 +294,65 @@ class TestChartPatternAgentEdgeCases:
         agent = ChartPatternAgent()
         with pytest.raises(ValueError, match="Missing required OHLCV keys"):
             agent.analyze({})  # type: ignore[arg-type]
+
+
+# ── Prereg A: directionales Vote (Gate in _combine) ───────────────────────
+
+
+class TestCombinePreregA:
+    """Prereg A: Range-Prior 0.30 nur bei bestätigtem Break (|s|=1.0)
+    oder >= 2 Familien in Nettorichtung; sonst byte-identisch zu vorher."""
+
+    def test_no_fired_stays_neutral(self) -> None:
+        assert _combine([]) == (0.35, 0.35, 0.40)
+
+    def test_single_confirmed_break_votet_directional(self) -> None:
+        """Single |s|=1.0 (Nackenbruch) kippt das Argmax auf up/down."""
+        p_up, p_down, p_range = _combine([(0.35, 1.0)])
+        assert p_range == 0.30
+        assert p_up == pytest.approx(0.56875)
+        assert p_down == pytest.approx(0.13125)
+        assert p_up > p_range > p_down
+        p_up_d, p_down_d, p_range_d = _combine([(0.35, -1.0)])
+        assert p_down_d == pytest.approx(0.56875)
+        assert p_down_d > p_range_d > p_up_d
+
+    def test_two_agreeing_families_vote_directional(self) -> None:
+        """Zwei Familien in dieselbe Richtung (ohne Break) -> directional."""
+        p_up, _p_down, p_range = _combine([(0.35, 0.6), (0.25, 0.8)])
+        assert p_range == 0.30
+        assert p_up == pytest.approx(0.529375)
+        assert p_up > p_range
+
+    def test_single_weak_stays_range(self) -> None:
+        """Single-Weak-Fenster: Range-Prior unverändert (0.475), range-dominiert."""
+        p_up, p_down, p_range = _combine([(0.25, 0.7)])
+        assert p_range == pytest.approx(0.475)
+        assert p_up == pytest.approx(0.37734375)
+        assert p_range > p_up > p_down
+
+    def test_conflicting_families_stay_range(self) -> None:
+        """Zwei entgegengesetzte Familien: kein Break, keine Zweier-Einigkeit
+        -> Range-Prior unverändert (0.45) und range-dominiert."""
+        p_up, p_down, p_range = _combine([(0.35, 0.6), (0.25, -0.8)])
+        assert p_range == pytest.approx(0.45)
+        assert p_up == pytest.approx(0.2784375)
+        assert p_down == pytest.approx(0.2715625)
+        assert p_range > max(p_up, p_down)
+        # Gewichteter Konflikt (chart -0.6 dominiert candle 0.7) ebenfalls:
+        p_up2, p_down2, p_range2 = _combine([(0.25, 0.7), (0.35, -0.6)])
+        assert p_range2 == pytest.approx(0.45)
+        assert p_range2 > max(p_up2, p_down2)
+
+    def test_probabilities_sum_to_one_after_gate(self) -> None:
+        for fired in (
+            [(0.35, 1.0)],
+            [(0.35, 0.6), (0.25, 0.8)],
+            [(0.35, 0.6), (0.25, -0.8)],
+            [(0.25, 0.7), (0.35, 0.3), (0.2, 0.35)],
+        ):
+            p_up, p_down, p_range = _combine(fired)
+            assert abs(p_up + p_down + p_range - 1.0) <= 1e-9
 
 
 # ── Ensemble integration tests ───────────────────────────────────────────
