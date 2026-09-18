@@ -815,7 +815,12 @@ aktuelle Champion (Parametersatz des Vorlaufs) gegen `--variants`
 Variante gewinnt nur, wenn sie den Champion im OOS-Score (1 − Brier) um
 mindestens `--promotion-margin` (Default 0,005) schlägt und ihre
 OOS-Hit-Rate nicht mehr als 0,05 unter ihrer eigenen
-Kalibrierungs-Hit-Rate liegt (Overfitting-Guard). Der Gewinner-Parametersatz
+Kalibrierungs-Hit-Rate liegt (Overfitting-Guard). Gegen die
+Datenwiederverwendung im rollierenden OOS-Fenster steigt die
+Promotions-Hurdle im Default mit dem kumulativen Trial-Count (Ledger
+`champion_trials.json` neben `champion_configs.json`, pro Verdopplung
+des Suchraums +0,005); ein explizites `--promotion-margin` setzt einen
+fixen Wert und deaktiviert die Anhebung. Der Gewinner-Parametersatz
 wird atomar in `champion_configs.json` persistiert (Version-
 Increment bei Änderung); dieser wird von Orchestrator (Hot-Reload per
 Mtime-Check) und Demo-Trader eingelesen und für deren Ensembles genutzt —
@@ -844,7 +849,11 @@ einschränkter Builtin- und Import-Allowlist; Smoke-Test auf
 synthetischen Fenstern mit Laufzeit-Limit). Die Zulassung entscheiden
 deterministische, preregistrierte Gates (der LLM kennt sie nicht):
 OOS-Score (1 − Brier) ≥ Zufalls-Basis (uniformer 3-Klassen-Prädiktor
-= 1/3) + Margin 0,02, OOS-Hit-Rate nicht mehr als 0,05 unter der
+= 1/3) + Margin 0,02 (steigt im Default mit dem kumulativen
+Trial-Count aus `evolved_agents_trials.json` neben
+`evolved_agents.json`, pro Verdopplung des Suchraums +0,005; die
+Re-Prüfung des Bestands trägt die Anhebung nicht), OOS-Hit-Rate nicht
+mehr als 0,05 unter der
 Kalibrierungs-Hit-Rate (Overfitting-Guard) und positiver
 LOO-Marginal-Beitrag gegenüber dem 4er-Basis-Ensemble (der Agent muss
 das Ensemble messbar besser machen, nicht nur redundant sein).
@@ -913,7 +922,14 @@ Credential-Status pro Venue).
   0,1 %). Exit-Backstops (kalibrierte Backtest-Werte, überschreiben den
   Trade-Plan): Stop-Loss 8 %, Max-Haltezeit 7 Tage, Flat-Size ohne
   Pyramiding — via `DEMO_STOP_LOSS_PCT` / `DEMO_MAX_HOLDING_HOURS` /
-  `DEMO_FLAT_SIZE` steuerbar. Alles sichtbar im Web-Dashboard unter
+  `DEMO_FLAT_SIZE` steuerbar. Portfolio-Risikoregeln (BUY-Seite, harte
+  Grenzen; SELLs und Glattstellungen bleiben unberührt): Heat-Cap
+  20 % der Equity (`DEMO_MAX_PORTFOLIO_HEAT_PCT`), Drawdown-Breaker
+  15 % vom Equity-Peak mit Re-Arm bei halber Schwelle
+  (`DEMO_MAX_DRAWDOWN_PCT`), Volatility-Scaling gegen den ATR(14)-
+  Median (`DEMO_VOL_SCALE`), Cost-Margin-Gate 3x Round-Trip-Kosten
+  (`DEMO_MIN_MOVE_COST_MULTIPLE`) — `0` bzw. `false` schaltet die
+  Regel aus. Alles sichtbar im Web-Dashboard unter
   `http://localhost:8080/` (Konto, Positionen, Trades, Entscheidungen,
   News).
 - **Zentrale Web-UI**: `http://localhost:8080/` bündelt alle

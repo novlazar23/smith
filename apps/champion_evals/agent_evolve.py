@@ -15,6 +15,13 @@ Preregistrierte, deterministische Regeln (der LLM kennt sie nicht):
 - **Deckel** (``MAX_EVOLVED_AGENTS``): maximal N zugelassene Agenten
   (höchster OOS-Score bleibt) — der gewichtete Konsens verdünnt sich
   mit jedem zusätzlichen Mitglied.
+- **Steigende Hurdle** (``trial_ledger``): Die Zulassungs-Margin wächst
+  mit der kumulativen Anzahl geprüfter Kandidaten (Trial-Count aus
+  ``evolved_agents_trials.json`` neben ``evolved_agents.json``):
+  ``ADMISSION_MARGIN + 0.005 · log2(Trials)`` pro Verdopplung des
+  Suchraums — jeder Kandidat prüft dieselbe rollierende OOS-Datenbasis,
+  falsche Zulassungen häufen sich mit N (Multiple-Testing-Korrektur).
+  Bestand-Agenten (Re-Prüfung) tragen diese Anhebung nicht.
 
 Zugelassene Agenten landen atomar in ``evolved_agents.json``
 (Code, Claim, Version, Score); ``build_ensemble`` hängt sie dem
@@ -41,6 +48,12 @@ from packages.validation.target_variables import TargetConfig
 
 from .agent_sandbox import build_evolved_agent, load_evolved_agents, smoke_test_predict
 from .score import AgentMetrics, EvalSample, replay_instances, score_window
+from .trial_ledger import (
+    TRIALS_FILENAME_EVOLVED,
+    admission_margin,
+    load_trial_count,
+    record_trial_count,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +195,7 @@ def evaluate_evolved_candidates(
     target_config: TargetConfig | None = None,
     calibration_ratio: float = 0.5,
     max_agents: int = MAX_EVOLVED_AGENTS,
+    promotion_margin: float = ADMISSION_MARGIN,
     summary: list[dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Eine Replay-Runde (Basis + Bestand + Kandidaten) → neues Artefakt.
@@ -202,6 +216,9 @@ def evaluate_evolved_candidates(
         candidates: neue LLM-Kandidaten (bereits Jailed/Smoke-getestet).
         candidate_meta: ``name → (code, claim)`` für das Artefakt.
         previous: Bestand-``evolved_agents.json`` (``name → entry``).
+        promotion_margin: Zulassungs-Margin (Default ``ADMISSION_MARGIN``);
+            ``run_agent_evolution`` übergibt die nach Trial-Count
+            angehobene Hurdle (``trial_ledger.admission_margin``).
 
     Returns:
         Der neue ``evolved_agents.json``-Inhalt (ohne Schreib-Zugriff).
@@ -267,20 +284,26 @@ def evaluate_evolved_candidates(
                     {"name": name, "kind": "kandidat", "admitted": False, "score": None, "reasons": ["hat nicht in jedem Schritt geliefert"]}
                 )
             continue
-        verdict = judge_candidate(name, agent_metrics)
+        verdict = judge_candidate(name, agent_metrics, promotion_margin=promotion_margin)
         if verdict.admitted:
             code, claim = candidate_meta[name]
             current[name] = (code, claim, verdict.score)
             logger.info(
-                "Kandidat %s ZUGELASSEN (OOS-Score %.4f, Margin %.4f, Hit %.3f→%.3f)",
+                "Kandidat %s ZUGELASSEN (OOS-Score %.4f, Zulassungs-Margin %.4f, LOO %.4f, Hit %.3f→%.3f)",
                 name,
                 verdict.score,
+                promotion_margin,
                 agent_metrics.oos_marginal,
                 agent_metrics.cal_stability,
                 agent_metrics.oos_stability,
             )
         else:
-            logger.info("Kandidat %s abgelehnt: %s", name, "; ".join(verdict.reasons))
+            logger.info(
+                "Kandidat %s abgelehnt (Zulassungs-Margin %.4f): %s",
+                name,
+                promotion_margin,
+                "; ".join(verdict.reasons),
+            )
         if summary is not None:
             summary.append(
                 {"name": name, "kind": "kandidat", "admitted": verdict.admitted, "score": verdict.score, "reasons": list(verdict.reasons)}
@@ -446,6 +469,12 @@ def run_agent_evolution(
     agents_path = Path(args.agents_output or Path(args.output).with_name(EVOLVED_AGENTS_FILENAME))
     previous = load_evolved_agents(agents_path)
 
+    # Preregistrierte Multi-Testing-Korrektur: Zulassungs-Hurdle steigt
+    # mit dem kumulativen Trial-Count (jeder Kandidat prüft dieselbe
+    # rollierende OOS-Datenbasis) — siehe trial_ledger.
+    trial_path = agents_path.with_name(TRIALS_FILENAME_EVOLVED)
+    trials_before = load_trial_count(trial_path)
+
     base_instances = _base_ensemble(args)
     target = TargetConfig(
         up_threshold=args.up_threshold,
@@ -493,6 +522,9 @@ def run_agent_evolution(
         candidates = instances
         candidate_meta = {name: (code_by_name[name], claim_by_name[name]) for name in instances}
 
+    # Batch = die Kandidaten, die Jail/Smoke überstanden haben und jetzt
+    # die Gate-Prüfung durchlaufen (exakt das Dict an evaluate_evolved_candidates).
+    effective_margin = admission_margin(trials_before + len(candidates), base=ADMISSION_MARGIN)
     artifact = evaluate_evolved_candidates(
         series,
         base_instances,
@@ -506,12 +538,19 @@ def run_agent_evolution(
         target_config=target,
         calibration_ratio=args.calibration_ratio,
         max_agents=args.max_evolved,
+        promotion_margin=effective_margin,
         summary=summary,
     )
     path = write_json_atomic(agents_path, artifact)
+    record_trial_count(trial_path, trials_before + len(candidates))
     write_json_atomic(
         agents_path.with_name(EVOLVED_AGENTS_LAST_RUN_FILENAME),
-        {"run_at": datetime.now(UTC).isoformat(timespec="seconds"), "candidates": summary},
+        {
+            "run_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "trials": trials_before + len(candidates),
+            "effective_margin": effective_margin,
+            "candidates": summary,
+        },
     )
     print(f"Evolved Agents: {len(artifact)} zugelassen ({', '.join(sorted(artifact)) or '—'}) → {path}")
     return 0

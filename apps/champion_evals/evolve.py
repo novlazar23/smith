@@ -7,8 +7,11 @@ Kerzenfenster (``replay_instances`` + ``score_window``). Eine Variante
 gewinnt nur, wenn sie den Champion im OOS-Score (1 - Brier) um mindestens
 ``PROMOTION_MARGIN`` schlägt und ihre OOS-Hit-Rate nicht weiter als
 ``STABILITY_TOLERANCE`` unter ihrer eigenen Kalibrierungs-Hit-Rate liegt
-(kein Overfit auf OOS-Glück). Der Gewinner wird atomar in
-``champion_configs.json`` persistiert; ``champion_evals.json`` bleibt
+(kein Overfit auf OOS-Glück). Der Aufrufer kann die Margin per
+``select(..., promotion_margin=...)`` anheben — ``trial_ledger``: die
+Hurdle steigt mit dem kumulativen Trial-Count gegen die Daten-
+wiederverwendung im rollierenden OOS-Fenster. Der Gewinner wird atomar
+in ``champion_configs.json`` persistiert; ``champion_evals.json`` bleibt
 unverändert.
 """
 

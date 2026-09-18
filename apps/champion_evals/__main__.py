@@ -22,6 +22,11 @@ Kalibrierungs-Hit-Rate; der Gewinner wird atomar in
 ``champion_configs.json`` persistiert (``--configs-output``, Default: neben
 ``--output``). ``champion_evals.json`` bleibt dabei unverändert (Champion-
 block = Kalibrierung, Challenger = OOS, ``--min-samples``-Filter).
+Gegen die Datenwiederverwendung im rollierenden OOS-Fenster steigt die
+Promotions-Hurdle im Default-Modus mit dem kumulativen Trial-Count
+(Ledger ``champion_trials.json`` neben ``champion_configs.json``);
+``--promotion-margin`` setzt einen fixen Wert und deaktiviert die
+Anhebung.
 
 ``--evolve-agents N`` schaltet Stufe 2 an: Der LLM (via
 ``LLMClient.from_env``) schlägt bis zu N neue Agenten-Logiken vor;
@@ -31,10 +36,13 @@ Bestand wird jeden Lauf re-geprüft; zugelassene Agenten landen als
 SHADOW-Mitglieder in ``evolved_agents.json`` (``--agents-output``,
 Default: neben ``--output``), aus dem der Orchestrator das Ensemble
 hot-reloadet. Ohne LLM-Konfiguration läuft der Schritt trotzdem
-(Re-Prüfung des Bestands, keine neuen Kandidaten). ``--evolve-agents-
-instruments`` bewertet Stufe 2 auf einer eigenen (breiteren) Ticker-
-Liste — robustere Zulassungs-Gates, ohne die Champion-Parameter-
-Evolution (``--evolve`` = ``--instrument``) zu verändern.
+(Re-Prüfung des Bestands, keine neuen Kandidaten). Wie bei ``--evolve``
+steigt die Zulassungs-Hurdle im Default mit dem kumulativen Trial-Count
+(Ledger ``evolved_agents_trials.json`` neben ``evolved_agents.json``).
+``--evolve-agents-instruments`` bewertet Stufe 2 auf einer eigenen
+(breiteren) Ticker-Liste — robustere Zulassungs-Gates, ohne die
+Champion-Parameter-Evolution (``--evolve`` = ``--instrument``) zu
+verändern.
 
 Beispiele (Docker-Compose-Profil on-demand):
     docker compose --profile on-demand run --rm backtest python -m apps.champion_evals \
@@ -67,6 +75,7 @@ logger = logging.getLogger(__name__)
 def build_parser() -> argparse.ArgumentParser:
     from apps.champion_evals.agent_evolve import MAX_EVOLVED_AGENTS
     from apps.champion_evals.evolve import PROMOTION_MARGIN
+    from apps.champion_evals.trial_ledger import TRIALS_FILENAME_CHAMPION
 
     parser = argparse.ArgumentParser(description="Pro-Agent OOS-Evaluationsdaten aus ClickHouse-Kerzen erzeugen.")
     parser.add_argument("--instrument", default="BTC/USDT", help="Instrument oder Komma-Liste (z. B. BTC/USDT,ETH/USDT)")
@@ -101,7 +110,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--promotion-margin",
         type=float,
         default=PROMOTION_MARGIN,
-        help="Min. OOS-Score-Vorsprung (1 - Brier) für eine Promotion (nur mit --evolve)",
+        help=(
+            "Min. OOS-Score-Vorsprung (1 - Brier) für eine Promotion (nur mit --evolve). "
+            "Default: die Hurdle steigt mit dem kumulativen Trial-Count (Ledger "
+            f"{TRIALS_FILENAME_CHAMPION}) gegen die Datenwiederverwendung im "
+            "rollierenden OOS-Fenster; ein explizit gesetzter Wert deaktiviert die "
+            "Anhebung und gilt fix (CLI-Override gewinnt)."
+        ),
     )
     parser.add_argument(
         "--seed",
@@ -385,6 +400,7 @@ def _run_evolve(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]
     """
     from apps.champion_evals.agent_params import AGENT_TYPES, build_agent, default_params
     from apps.champion_evals.evolve import (
+        PROMOTION_MARGIN,
         build_configs_artifact,
         generate_variants,
         load_champion_configs,
@@ -398,6 +414,13 @@ def _run_evolve(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]
         score_window,
         write_artifact,
     )
+    from apps.champion_evals.trial_ledger import (
+        TRIALS_FILENAME_CHAMPION,
+        admission_margin,
+        load_trial_count,
+        record_trial_count,
+        stage1_batch_size,
+    )
     from packages.agents.base import BaseAgent
     from packages.validation.target_variables import TargetConfig
 
@@ -405,6 +428,21 @@ def _run_evolve(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]
     seed = _evolve_seed(args)
     config_path = Path(args.configs_output or Path(args.output).with_name("champion_configs.json"))
     previous_configs = load_champion_configs(config_path) or {}
+
+    # Preregistrierte Multi-Testing-Korrektur: Promotions-Hurdle steigt
+    # mit dem kumulativen Trial-Count (Ledger neben champion_configs.json);
+    # explizites --promotion-margin deaktiviert die Anhebung (CLI-Override).
+    trial_path = config_path.with_name(TRIALS_FILENAME_CHAMPION)
+    trials_before = load_trial_count(trial_path)
+    batch = stage1_batch_size(args.variants)
+    if args.promotion_margin != PROMOTION_MARGIN:
+        effective_margin = args.promotion_margin
+        logger.info(
+            "Explizites --promotion-margin=%.4f: Hurdle-Anhebung (Trial-Ledger) deaktiviert",
+            effective_margin,
+        )
+    else:
+        effective_margin = admission_margin(trials_before + batch, base=PROMOTION_MARGIN)
 
     scored: dict[str, AgentMetrics] = {}
     current: dict[str, tuple[dict[str, float | int], float]] = {}
@@ -445,13 +483,16 @@ def _run_evolve(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]
             logger.warning("Agent %s: keine Metriken (Champion lieferte nicht durchgehend) — Champion bleibt", agent_id)
             current[agent_id] = (params_by_id[agent_id], previous_score)
             continue
-        result = select(agent_id, agent_id, metrics, promotion_margin=args.promotion_margin)
+        result = select(agent_id, agent_id, metrics, promotion_margin=effective_margin)
         winner_id = result.selected_id
         current[agent_id] = (params_by_id[winner_id], 1.0 - metrics[winner_id].oos_brier)
         action = "PROMOTED" if result.promoted else "KEPT"
         print(f"{agent_id}: champion={result.champion_score:.4f} best={winner_id}={result.best_score:.4f} → {action}")
         if champion_metrics.oos_samples >= args.min_samples:
             scored[agent_id] = champion_metrics
+
+    record_trial_count(trial_path, trials_before + batch)
+    print(f"Trial-Count: {trials_before} → {trials_before + batch}, effective margin {effective_margin:.4f}")
 
     if not scored:
         logger.error("Kein Agent erfüllt --min-samples=%d (Fenster zu klein?)", args.min_samples)
