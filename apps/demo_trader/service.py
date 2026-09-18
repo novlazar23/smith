@@ -17,6 +17,25 @@ Position, ohne dass der Agenten-Konsens dazu SHORT voten müsste.
 Flat-Size (``DEMO_FLAT_SIZE``, Default an) unterdrückt Nachkäufe bei
 schon offener Position (kein Pyramiding).
 
+Neue Positionen (BUY-Seite) unterliegen zusätzlich vier
+**deterministischen Portfolio-Risikoregeln** als harte Grenzen —
+SELLs, Glattstellungen und Exit-Backstops bleiben davon unberührt:
+
+  - Portfolio-Heat-Cap (``DEMO_MAX_PORTFOLIO_HEAT_PCT``, Default 20 %):
+    BUY wird blockiert, wenn offene Exposure + Order-Nominal die Cap
+    der Equity überschreiten (Exposure = Σ quantity x avg_price,
+    Kostengrundlage).
+  - Drawdown-Circuit-Breaker (``DEMO_MAX_DRAWDOWN_PCT``, Default 15 %):
+    Ab einem Drawdown vom Equity-Peak ≥ Cap werden alle BUYs gestoppt;
+    Re-Arm erst bei halber Schwelle (Hysterese).
+  - Volatility-Scaling (``DEMO_VOL_SCALE``, Default an): die BUY-Menge
+    wird verkleinert, wenn die aktuelle ATR(14) über dem Median der
+    ATR(14)%-Serie des Fensters liegt (Faktor 0,5-1,0, nie vergrößernd).
+  - Cost-Margin-Gate (``DEMO_MIN_MOVE_COST_MULTIPLE``, Default 3,0):
+    BUY wird blockiert, wenn die erwartete Bewegung über dem
+    Entscheidungs-Horizont (ATR(14) x √Horizont-Minuten) kleiner ist
+    als multiple x Round-Trip-Kosten.
+
 Ausgeführt wird ausschließlich über den getrackten ``PaperExecutor``
 (Slippage, Kommission, 10%-Positions-Limit) — es werden **nie** reale
 Orders platziert. Jeder ausgeführte Trade landet in PostgreSQL
@@ -29,6 +48,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
 import signal
 import threading
@@ -80,6 +100,12 @@ DEFAULT_TRADE_COST_PCT = 0.001
 # Drift auf Volatilen, Lauf 9).
 DEFAULT_STOP_LOSS_PCT = 0.08
 DEFAULT_MAX_HOLDING_HOURS = 168.0
+# Portfolio-Risikoregeln (BUY-Seite, harte Grenzen — kein konfigurierbares
+# Alpha): Heat-Cap 20 % der Equity, Drawdown-Breaker 15 % vom Peak,
+# Vol-Scaling an, Cost-Margin 3x Round-Trip-Kosten (0 = jeweils aus).
+DEFAULT_MAX_PORTFOLIO_HEAT_PCT = 0.20
+DEFAULT_MAX_DRAWDOWN_PCT = 0.15
+DEFAULT_MIN_MOVE_COST_MULTIPLE = 3.0
 DEFAULT_CANDLE_VENUE = "BINANCE_FUTURES"
 DEFAULT_CANDLE_LIMIT = 200
 DEFAULT_MIN_CANDLES = 30
@@ -137,6 +163,10 @@ class DemoTraderConfig:
     stop_loss_pct: float = DEFAULT_STOP_LOSS_PCT
     max_holding_hours: float = DEFAULT_MAX_HOLDING_HOURS
     flat_size: bool = True
+    max_portfolio_heat_pct: float = DEFAULT_MAX_PORTFOLIO_HEAT_PCT
+    max_drawdown_pct: float = DEFAULT_MAX_DRAWDOWN_PCT
+    vol_scale: bool = True
+    min_move_cost_multiple: float = DEFAULT_MIN_MOVE_COST_MULTIPLE
     candle_venue: str = DEFAULT_CANDLE_VENUE
     candle_limit: int = DEFAULT_CANDLE_LIMIT
     min_candles: int = DEFAULT_MIN_CANDLES
@@ -456,6 +486,132 @@ def log_cycle_to_mlflow(
         logger.warning("MLflow-Run-Aufzeichnung für %s fehlgeschlagen (nicht fatal): %s", instrument, exc)
 
 
+# ---------------------------------------------------------------------------
+# Portfolio-Risikoregeln (BUY-Seite): reine, unit-testbare Funktionen
+# ---------------------------------------------------------------------------
+
+
+def _atr_pct_series(window: CandleWindow, period: int = 14) -> np.ndarray:
+    """Gleitende ATR(14)%-Serie über das gesamte Kerzenfenster.
+
+    True Range ``TR_i = max(h-l, |h-prev_close|, |l-prev_close|)``; der
+    Wert an Kerze i ist das Mittel der letzten ``period`` True Ranges,
+    normiert auf den Close. Leeres Array, wenn das Fenster zu kurz ist
+    (< period + 1 Kerzen) oder Closes nicht positiv sind.
+    """
+    close = window.close
+    n = len(close)
+    if n < period + 1:
+        return np.empty(0, dtype=np.float64)
+    high = window.high
+    low = window.low
+    true_range = np.maximum(
+        np.maximum(high[1:] - low[1:], np.abs(high[1:] - close[:-1])),
+        np.abs(low[1:] - close[:-1]),
+    )
+    cumulative = np.concatenate(([0.0], np.cumsum(true_range)))
+    atr = (cumulative[period:] - cumulative[:-period]) / period
+    valid = close[period:] > 0
+    return atr[valid] / close[period:][valid]
+
+
+def atr_pct(window: CandleWindow, period: int = 14) -> float:
+    """Aktuelle ATR(14) als Anteil des letzten Closes (typische Kerzen-Bewegung).
+
+    0,0, wenn das Fenster zu kurz ist (< period + 1 Kerzen) oder der
+    letzte Close nicht positiv ist.
+    """
+    if len(window.close) < period + 1 or window.close[-1] <= 0:
+        return 0.0
+    series = _atr_pct_series(window, period)
+    return float(series[-1]) if series.size else 0.0
+
+
+def vol_size_factor(window: CandleWindow, period: int = 14) -> float:
+    """Volatility-Scaling-Faktor für die BUY-Menge (0,5..1,0, nie vergrößernd).
+
+    ``factor = clamp(median_atr_pct / current_atr_pct, 0.5, 1.0)``; der
+    Median ist über die gesamte gleitende ATR(14)%-Serie (CandleWindow)
+    gebildet. Zu kurzes Fenster (< period + 1 Kerzen) oder nicht-positive
+    Werte → 1,0 (fail-open beim Sizing).
+    """
+    series = _atr_pct_series(window, period)
+    if series.size < 1 or window.close[-1] <= 0:
+        return 1.0
+    current = float(series[-1])
+    median = float(np.median(series))
+    if current <= 0.0 or median <= 0.0:
+        return 1.0
+    return min(1.0, max(0.5, median / current))
+
+
+def parse_horizon_minutes(horizon: str) -> int:
+    """Minuten der Config-Horizon-Notation ("15m" → 15).
+
+    Unterstützt wird nur "Nm"; jede andere Notation liefert mit Warning
+    den Fallback-Wert 15.
+    """
+    raw = horizon.strip().lower()
+    if raw.endswith("m") and raw[:-1].isdigit():
+        return int(raw[:-1])
+    logger.warning("Ungültiges Horizon-Format %r → Fallback 15 Min", horizon)
+    return 15
+
+
+def cost_margin_ok(expected_move: float, trade_cost_pct: float, multiple: float) -> bool:
+    """Cost-Margin-Gate: deckt die erwartete Bewegung die Mehrfach-Round-Trip-Kosten?
+
+    ``expected_move`` und ``trade_cost_pct`` sind Anteile (z.B. 0.02 = 2 %);
+    Round-Trip-Kosten = 2 x trade_cost_pct. ``multiple = 0`` → Gate aus.
+    """
+    if multiple <= 0.0:
+        return True
+    return expected_move >= multiple * 2.0 * trade_cost_pct
+
+
+def portfolio_exposure(account: PaperAccount) -> float:
+    """Offene Exposure = Σ quantity x avg_price über alle Positionen.
+
+    ponytail: Kostengrundlagen-Proxy statt mark-to-market; upgrade auf
+    MTM bei >2 Instrumenten oder großen Positionen.
+    """
+    return sum(p.quantity * p.avg_price for p in account.positions.values() if p.quantity > 0)
+
+
+def heat_cap_ok(account: PaperAccount, order_notional: float, max_heat_pct: float) -> bool:
+    """Portfolio-Heat-Cap: Exposure + Order-Nominal ≤ max_heat_pct x Equity.
+
+    ``max_heat_pct = 0`` → Cap aus.
+    """
+    if max_heat_pct <= 0.0:
+        return True
+    return portfolio_exposure(account) + order_notional <= max_heat_pct * account.equity
+
+
+def update_drawdown_guard(
+    equity: float,
+    peak: float,
+    halted: bool,
+    max_dd: float,
+) -> tuple[float, bool]:
+    """Zeichnet den Drawdown-Circuit-Breaker-Status fort (pure Funktion).
+
+    Der Peak wird mit ``max(peak, equity)`` aktualisiert. Trigger:
+    ``equity ≤ peak x (1 - max_dd)``; Re-Arm erst bei
+    ``equity ≥ peak x (1 - 0.5 x max_dd)`` (Hysterese). ``max_dd = 0``
+    → Breaker aus.
+
+    Returns:
+        (neuer Peak, neuer Halt-Status)
+    """
+    new_peak = max(peak, equity)
+    if max_dd <= 0.0:
+        return new_peak, False
+    if halted:
+        return new_peak, equity < new_peak * (1.0 - 0.5 * max_dd)
+    return new_peak, equity <= new_peak * (1.0 - max_dd)
+
+
 class DemoTrader:
     """Führt den Demo-Zyklus (Analyse → Paper-Trade → Persistenz) aus.
 
@@ -489,6 +645,9 @@ class DemoTrader:
         self._executor = executor
         self._pipeline_factory = pipeline_factory or build_calibrated_pipeline
         self._account = executor.create_account(config.account_id)
+        # Drawdown-Circuit-Breaker-Zustand (in-Process, pro Zyklus fortgezogen)
+        self._equity_peak = config.initial_cash
+        self._dd_halted = False
 
     @property
     def config(self) -> DemoTraderConfig:
@@ -516,6 +675,12 @@ class DemoTrader:
             len(self._config.instruments),
             self._config.candle_venue,
             self._config.account_id,
+        )
+        self._equity_peak, self._dd_halted = update_drawdown_guard(
+            self._account.equity,
+            self._equity_peak,
+            self._dd_halted,
+            self._config.max_drawdown_pct,
         )
         executed = 0
         for instrument in self._config.instruments:
@@ -606,12 +771,65 @@ class DemoTrader:
         )
 
         trade: Trade | None = None
-        if plan.action == ACTION_BUY and self._config.flat_size and instrument in self._account.positions:
-            logger.info("%s: LONG_BIAS, aber Position offen (Flat-Size) → kein Nachkauf", instrument)
-        elif plan.action == ACTION_BUY:
-            trade = self._executor.submit_order(
-                self._account, instrument, TradeDirection.BUY, plan.quantity, plan.price
-            )
+        if plan.action == ACTION_BUY:
+            quantity = plan.quantity
+            blocked = False
+            if self._dd_halted:
+                logger.info(
+                    "%s: LONG_BIAS, aber Drawdown-Breaker aktiv "
+                    "(Equity %.2f, Peak %.2f, max DD %.0f%%) → kein Kauf",
+                    instrument,
+                    self._account.equity,
+                    self._equity_peak,
+                    self._config.max_drawdown_pct * 100.0,
+                )
+                blocked = True
+            else:
+                expected_move = atr_pct(window) * math.sqrt(parse_horizon_minutes(self._config.horizon))
+                if self._config.min_move_cost_multiple > 0 and not cost_margin_ok(
+                    expected_move, self._config.trade_cost_pct, self._config.min_move_cost_multiple
+                ):
+                    cost_threshold = (
+                        self._config.min_move_cost_multiple * 2.0 * self._config.trade_cost_pct
+                    )
+                    logger.info(
+                        "%s: LONG_BIAS, aber Cost-Margin-Gate aktiv "
+                        "(erwartete Bewegung %.2f%% < %gxRound-Trip %.2f%%) → kein Kauf",
+                        instrument,
+                        expected_move * 100.0,
+                        self._config.min_move_cost_multiple,
+                        cost_threshold * 100.0,
+                    )
+                    blocked = True
+            if not blocked and self._config.vol_scale:
+                factor = vol_size_factor(window)
+                if factor < 1.0:
+                    quantity = quantity * factor
+                    logger.info(
+                        "%s: Vol-Scaling → BUY-Menge auf Faktor %.2f verkleinert",
+                        instrument,
+                        factor,
+                    )
+            if not blocked:
+                notional = quantity * plan.price
+                if not heat_cap_ok(self._account, notional, self._config.max_portfolio_heat_pct):
+                    logger.info(
+                        "%s: LONG_BIAS, aber Portfolio-Heat-Cap erreicht "
+                        "(Exposure %.2f + Notional %.2f > %.0f%% von Equity %.2f) → kein Kauf",
+                        instrument,
+                        portfolio_exposure(self._account),
+                        notional,
+                        self._config.max_portfolio_heat_pct * 100.0,
+                        self._account.equity,
+                    )
+                elif self._config.flat_size and instrument in self._account.positions:
+                    logger.info(
+                        "%s: LONG_BIAS, aber Position offen (Flat-Size) → kein Nachkauf", instrument
+                    )
+                else:
+                    trade = self._executor.submit_order(
+                        self._account, instrument, TradeDirection.BUY, quantity, plan.price
+                    )
         elif plan.action == ACTION_SELL:
             logger.info("%s: %s", instrument, plan.reason)
             trade = self._executor.close_position(self._account, instrument)
@@ -662,7 +880,9 @@ def config_from_env() -> DemoTraderConfig:
       DEMO_INITIAL_CASH (100000), DEMO_TRADE_NOTIONAL (2000),
       DEMO_MIN_CONFIDENCE (0.3), DEMO_TRADE_COST_PCT (0.001),
       DEMO_STOP_LOSS_PCT (0.08), DEMO_MAX_HOLDING_HOURS (168),
-      DEMO_FLAT_SIZE (true), CANDLE_VENUE (BINANCE_FUTURES),
+      DEMO_FLAT_SIZE (true), DEMO_MAX_PORTFOLIO_HEAT_PCT (0.20),
+      DEMO_MAX_DRAWDOWN_PCT (0.15), DEMO_VOL_SCALE (true),
+      DEMO_MIN_MOVE_COST_MULTIPLE (3.0), CANDLE_VENUE (BINANCE_FUTURES),
       DEMO_HEARTBEAT (/tmp/demo_trader_heartbeat), LOG_LEVEL (INFO).
     """
     raw_instruments = os.environ.get("DEMO_INSTRUMENTS", DEFAULT_INSTRUMENTS)
@@ -698,6 +918,23 @@ def config_from_env() -> DemoTraderConfig:
     except ValueError:
         max_holding_hours = DEFAULT_MAX_HOLDING_HOURS
     flat_size = os.environ.get("DEMO_FLAT_SIZE", "true").strip().lower() not in {"0", "false", "no", "off"}
+    vol_scale = os.environ.get("DEMO_VOL_SCALE", "true").strip().lower() not in {"0", "false", "no", "off"}
+    try:
+        max_portfolio_heat_pct = float(
+            os.environ.get("DEMO_MAX_PORTFOLIO_HEAT_PCT", str(DEFAULT_MAX_PORTFOLIO_HEAT_PCT))
+        )
+    except ValueError:
+        max_portfolio_heat_pct = DEFAULT_MAX_PORTFOLIO_HEAT_PCT
+    try:
+        max_drawdown_pct = float(os.environ.get("DEMO_MAX_DRAWDOWN_PCT", str(DEFAULT_MAX_DRAWDOWN_PCT)))
+    except ValueError:
+        max_drawdown_pct = DEFAULT_MAX_DRAWDOWN_PCT
+    try:
+        min_move_cost_multiple = float(
+            os.environ.get("DEMO_MIN_MOVE_COST_MULTIPLE", str(DEFAULT_MIN_MOVE_COST_MULTIPLE))
+        )
+    except ValueError:
+        min_move_cost_multiple = DEFAULT_MIN_MOVE_COST_MULTIPLE
     return DemoTraderConfig(
         interval_seconds=interval,
         instruments=parse_instruments(raw_instruments),
@@ -708,6 +945,10 @@ def config_from_env() -> DemoTraderConfig:
         stop_loss_pct=stop_loss_pct,
         max_holding_hours=max_holding_hours,
         flat_size=flat_size,
+        max_portfolio_heat_pct=max_portfolio_heat_pct,
+        max_drawdown_pct=max_drawdown_pct,
+        vol_scale=vol_scale,
+        min_move_cost_multiple=min_move_cost_multiple,
         candle_venue=os.environ.get("CANDLE_VENUE", DEFAULT_CANDLE_VENUE),
         heartbeat_path=Path(os.environ.get("DEMO_HEARTBEAT", str(HEARTBEAT_PATH))),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),

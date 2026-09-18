@@ -164,6 +164,7 @@ ignore = [
 "packages/observability/logging_.py" = ["ANN401", "B017", "PT011"]
 "packages/observability/tracing.py" = ["FBT001", "FBT002"]
 "apps/api/middleware.py" = ["ANN001", "ANN202"]
+"apps/demo_trader/service.py" = ["FBT001", "FBT002"]
 "packages/governance/audit/__init__.py" = ["FBT001"]
 "packages/governance/champion_challenger/__init__.py" = ["FBT001", "FBT002"]
 "packages/rollout/**/*.py" = ["FBT001", "FBT002", "SIM102"]

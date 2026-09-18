@@ -105,10 +105,15 @@ class StubPipeline:
 
 
 def make_ohlcv(n: int, start_price: float = 100.0) -> CandleWindow:
-    """Erzeugt ein deterministisches OHLCV-Kerzenfenster mit n Kerzen."""
-    close = np.linspace(start_price, start_price + n, n)
+    """Erzeugt ein deterministisches OHLCV-Kerzenfenster mit n Kerzen.
+
+    Konstanter Close (``start_price``) mit fester Halbbreite ±0,5: Die
+    ATR(14)%-Serie ist dadurch konstant, sodass Vol-Scaling den Faktor
+    1,0 liefert und das ATR-basierte Cost-Margin-Gate durchläuft.
+    """
+    close = np.full(n, start_price)
     return CandleWindow(
-        open=close - 0.1,
+        open=close - 0.5,
         high=close + 0.5,
         low=close - 0.5,
         close=close,

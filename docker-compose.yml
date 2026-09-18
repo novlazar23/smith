@@ -459,6 +459,13 @@ services:
       DEMO_INITIAL_CASH: "100000"
       DEMO_TRADE_NOTIONAL: "2000"
       DEMO_MIN_CONFIDENCE: "0.3"
+      # Portfolio-Risikoregeln (BUY-Seite, harte Grenzen): Heat-Cap,
+      # Drawdown-Breaker (Re-Arm bei halber Schwelle), Vol-Scaling,
+      # Cost-Margin-Gate (0 bzw. "false" = aus)
+      DEMO_MAX_PORTFOLIO_HEAT_PCT: "0.20"
+      DEMO_MAX_DRAWDOWN_PCT: "0.15"
+      DEMO_VOL_SCALE: "true"
+      DEMO_MIN_MOVE_COST_MULTIPLE: "3.0"
       # Live-Kerzen von Binance Futures (market-producer, MARKET_DATA_SOURCE=binance)
       CANDLE_VENUE: "BINANCE_FUTURES"
       # MLflow-Experiment-Tracking pro Zyklus (ML-Tab der zentralen Web-UI)

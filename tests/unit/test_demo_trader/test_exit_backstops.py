@@ -23,11 +23,13 @@ from .conftest import BTC, FakeConnection, StubCandleSource, StubPipeline, make_
 
 
 def _flat_window(price: float, n: int = 50) -> CandleWindow:
+    """Flacher Kurs mit kleiner fester Halbbreite ±0,5 (ATR > 0, damit das
+    ATR-basierte Cost-Margin-Gate durchläuft; Exit-Backstops prüfen Close)."""
     close = np.full(n, price)
     return CandleWindow(
         open=close,
-        high=close,
-        low=close,
+        high=close + 0.5,
+        low=close - 0.5,
         close=close,
         volume=np.full(n, 1000.0),
         timestamps=np.arange(n, dtype=np.int64) * 300_000_000_000,
