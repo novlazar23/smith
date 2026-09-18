@@ -148,6 +148,25 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Zielpfad von evolved_agents.json (Default: neben --output, nur mit --evolve-agents)",
     )
+    parser.add_argument(
+        "--candidate-file",
+        default=None,
+        help=(
+            "Stufe 2: handgeschriebener Kandidat aus einer .py-Datei "
+            "(Sandbox-Vertrag: nur Import + predict). Läuft dieselben "
+            "preregistrierten Zulassungs-Gates durch wie LLM-Vorschläge."
+        ),
+    )
+    parser.add_argument(
+        "--candidate-name",
+        default=None,
+        help="Agent-Name für --candidate-file (Default: Dateiname ohne Endung)",
+    )
+    parser.add_argument(
+        "--candidate-claim",
+        default=None,
+        help="Claim (Behauptung) für --candidate-file (Default: leer)",
+    )
     parser.add_argument("--output", required=True, help="Zielpfad des JSON-Artefakts")
     parser.add_argument("--ch-host", default=None, help="ClickHouse-Host (Env CH_HOST, Default clickhouse)")
     parser.add_argument("--ch-port", type=int, default=None, help="ClickHouse-Port (Env CH_PORT, Default 8123)")
@@ -277,7 +296,7 @@ def _run_once(args: argparse.Namespace) -> int:
         return 1
 
     result = _run_evolve(args, series) if args.evolve else _run_eval(args, series)
-    if args.evolve_agents:
+    if args.evolve_agents or args.candidate_file:
         agents_series = series
         if agents_instruments != instruments:
             agents_series = _load_series(engine, agents_instruments, venue, start, end, args)

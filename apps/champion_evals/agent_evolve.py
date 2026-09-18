@@ -390,22 +390,51 @@ def load_eval_artifact(path: str | Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def load_candidate_file(path: str | Path, name: str, claim: str) -> list[dict[str, str]]:
+    """Lädt einen handgeschriebenen Kandidaten aus einer ``.py``-Datei.
+
+    Die Datei enthält den Kandidaten-Code (derselbe Sandbox-Vertrag wie
+    LLM-Vorschläge: nur Import + ``predict``); Name und Claim kommen von
+    der CLI, weil der Sandbox-Vertrag keine Modul-Konstanten erlaubt.
+    Der Kandidat läuft exakt dieselben Zulassungs-Gates durch wie
+    LLM-Vorschläge (Jail, Smoke-Test, Replay, ``judge_candidate``).
+
+    Raises:
+        ValueError: Datei nicht lesbar oder leer (fail-closed — ein
+            Kandidaten-Lauf ohne Kandidaten wäre stillschweigend ein
+            reiner Bestand-Re-Check).
+    """
+    file = Path(path)
+    try:
+        code = file.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"Kandidaten-Datei nicht lesbar: {file} ({exc})") from exc
+    if not code.strip():
+        raise ValueError(f"Kandidaten-Datei leer: {file}")
+    return [{"name": name, "claim": claim, "code": code}]
+
+
 def run_agent_evolution(
     *,
     args: Namespace,
     series: list[tuple[str, list[Candle]]],
     llm_client_factory: Callable[[], Any] | None = None,
 ) -> int:
-    """Kompletter Stufe-2-Lauf: LLM-Vorschläge → Jail/Smoke → Replay →
+    """Kompletter Stufe-2-Lauf: LLM-Vorschläge und/oder handgeschriebene
+    Kandidaten (``args.candidate_file``) → Jail/Smoke → Replay →
     Zulassung/Re-Prüfung → atomares Artefakt.
 
-    Fail-soft auf allen Ebenen: kein LLM = keine neuen Kandidaten
+    Handgeschriebene Kandidaten laufen exakt dieselben (preregistrierten)
+    Zulassungs-Gates durch wie LLM-Vorschläge — es gibt keinen Sonderweg.
+
+    Fail-soft auf allen Ebenen: kein LLM = keine neuen LLM-Kandidaten
     (Bestand wird trotzdem re-geprüft); fehlende Bestand-Datei = leerer
     Start. Returns 0 bei Durchlauf (auch ohne Zulassungen), 1 nur bei
     Daten-Fehlern (keine Kerzen).
 
     Args:
-        args: CLI-Namespace (evolve_agents, agents_output, output, …).
+        args: CLI-Namespace (evolve_agents, candidate_file, candidate_name,
+            candidate_claim, agents_output, output, …).
         series: (instrument, Kerzen)-Paare (gemeinsam mit Stufe 1 geladen).
         llm_client_factory: Factory für den LLM-Client (Tests);
             Default ``LLMClient.from_env``.
@@ -427,6 +456,16 @@ def run_agent_evolution(
     candidates: dict[str, BaseAgent] = {}
     candidate_meta: dict[str, tuple[str, str]] = {}
     summary: list[dict[str, Any]] = []
+    proposals: list[Mapping[str, str]] = []
+    candidate_file = getattr(args, "candidate_file", None)
+    if candidate_file:
+        proposals.extend(
+            load_candidate_file(
+                candidate_file,
+                name=getattr(args, "candidate_name", None) or Path(candidate_file).stem,
+                claim=getattr(args, "candidate_claim", None) or "",
+            )
+        )
     if args.evolve_agents:
         llm_client = llm_client_factory() if llm_client_factory is not None else _default_llm_client(args.llm_model)
         if llm_client is not None:
@@ -434,16 +473,25 @@ def run_agent_evolution(
             from .proposer import propose
 
             digest = build_digest(load_eval_artifact(args.output), previous)
-            taken = tuple(AGENT_TYPES) + tuple(previous)
-            proposals = propose(llm_client, digest, taken, max_candidates=args.evolve_agents)
-            instances, code_by_name, claim_by_name = prepare_candidates(
-                proposals,
-                instrument=series[0][0] if series else "",
-                horizon=args.horizon,
-                summary=summary,
-            )
-            candidates = instances
-            candidate_meta = {name: (code_by_name[name], claim_by_name[name]) for name in instances}
+            taken = tuple(AGENT_TYPES) + tuple(previous) + tuple(p["name"] for p in proposals)
+            proposals.extend(propose(llm_client, digest, taken, max_candidates=args.evolve_agents))
+    if proposals:
+        seen: set[str] = set()
+        unique: list[Mapping[str, str]] = []
+        for proposal in proposals:
+            if proposal["name"] in seen:
+                logger.warning("Kandidat %r ignoriert: Name bereits in der Kandidatenliste", proposal["name"])
+                continue
+            seen.add(proposal["name"])
+            unique.append(proposal)
+        instances, code_by_name, claim_by_name = prepare_candidates(
+            unique,
+            instrument=series[0][0] if series else "",
+            horizon=args.horizon,
+            summary=summary,
+        )
+        candidates = instances
+        candidate_meta = {name: (code_by_name[name], claim_by_name[name]) for name in instances}
 
     artifact = evaluate_evolved_candidates(
         series,

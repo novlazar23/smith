@@ -1,6 +1,10 @@
 {
     "include": ["packages", "apps"],
-    "exclude": ["**/__pycache__", "**/.mypy_cache"],
+    "exclude": [
+        "**/__pycache__",
+        "**/.mypy_cache",
+        "apps/champion_evals/candidates"
+    ],
     "typeCheckingMode": "basic",
     "reportMissingImports": "none",
     "venvPath": ".",
