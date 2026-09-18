@@ -316,13 +316,13 @@ class TestChartPatternAgentEnsemble:
             "chart_pattern",
         ]
 
-    def test_ensemble_agent_status_inherited(self) -> None:
-        """Der Agent erbt den Ensemble-Status (hier ACTIVE, nicht hartkodiert)."""
+    def test_ensemble_agent_status_pinned_shadow(self) -> None:
+        """chart_pattern bleibt im ACTIVE-Ensemble vorerst fest SHADOW (pin)."""
         from apps.demo_trader.service import build_active_ensemble
 
         agents = build_active_ensemble("BTC/USDT", "1h")
         cp = next(a for a in agents if a.agent_id == "chart_pattern")
-        assert cp._agent.config.status == AgentStatus.ACTIVE
+        assert cp._agent.config.status == AgentStatus.SHADOW
 
     def test_ensemble_agent_produces_valid_report(self) -> None:
         """Der Ensemble-Agent liefert einen gültigen AgentReport."""
@@ -334,4 +334,4 @@ class TestChartPatternAgentEnsemble:
         assert isinstance(report, AgentReport)
         assert abs(sum(report.probabilities.values()) - 1.0) <= 0.001
         assert len(report.evidence) >= 1
-        assert report.status == AgentStatus.ACTIVE
+        assert report.status == AgentStatus.SHADOW

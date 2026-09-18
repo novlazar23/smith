@@ -275,6 +275,13 @@ class ContextualAgent:
         return self._agent.analyze(market_data)
 
 
+#: Agenten, die vorerst fest SHADOW bleiben (Beobachter, Gewicht 0).
+#: chart_pattern verdünnt das aktive 4-Agenten-Ensemble im Backtest auf
+#: 0 Trades (einzelner Vote 1/5 = 0,20 <= CONSENSUS_MIN_THRESHOLD 0,2).
+#: Promotion zu ACTIVE = Id aus diesem Set entfernen.
+_PINNED_SHADOW: frozenset[str] = frozenset({"chart_pattern"})
+
+
 def build_ensemble(
     instrument: str,
     horizon: str,
@@ -314,6 +321,8 @@ def build_ensemble(
             konfigurierten Status (Default ``ACTIVE`` = Realbetrieb).
         status_overrides: Optionale Champion-Challenger-Overrides pro
             ``agent_id``; nicht benannte Agenten behalten ``agent_status``.
+            Pinned Agenten (``_PINNED_SHADOW``) bleiben stattdessen
+            SHADOW, es sei denn, sie werden explizit überschrieben.
         champion_params: Optionale Champion-Parametersätze aus
             ``champion_configs.json`` (``agent_id`` → Parameter-Dict).
             Benannte Agenten mit nicht-leerem Satz erhalten die evolvierten
@@ -341,7 +350,8 @@ def build_ensemble(
         param_classes = PARAM_CLASSES
     agents: list[ContextualAgent] = []
     for agent_id, agent_type, agent_cls in specs:
-        status = status_overrides.get(agent_id, agent_status) if status_overrides else agent_status
+        default_status = AgentStatus.SHADOW if agent_id in _PINNED_SHADOW else agent_status
+        status = status_overrides.get(agent_id, default_status) if status_overrides else default_status
         config = AgentConfig(
             agent_id=agent_id,
             agent_type=agent_type,

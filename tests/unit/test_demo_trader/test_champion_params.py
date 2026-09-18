@@ -31,8 +31,14 @@ def test_injects_champion_params_from_env_file(tmp_path: Path, monkeypatch: pyte
     trend = _trend(agents)
     assert trend._params.ema_fast == 7
     assert trend._params.p_cap == 0.9
-    for agent in agents:
-        assert agent._agent.config.status is AgentStatus.ACTIVE  # type: ignore[attr-defined]
+    # 4 ACTIVE + chart_pattern SHADOW (pinned in build_ensemble).
+    statuses = {
+        agent.agent_id: agent._agent.config.status  # type: ignore[attr-defined]
+        for agent in agents
+    }
+    for agent_id in ("trend", "mean_reversion", "volatility_regime", "volume_conviction"):
+        assert statuses[agent_id] is AgentStatus.ACTIVE
+    assert statuses["chart_pattern"] is AgentStatus.SHADOW
 
 
 def test_missing_file_falls_back_to_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

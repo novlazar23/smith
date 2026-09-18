@@ -114,12 +114,17 @@ class TestBuildEnsemble:
             assert inner.config.horizon == "15m"
 
     def test_build_ensemble_active_status(self) -> None:
-        """Mit agent_status=ACTIVE erhalten alle Agenten den ACTIVE-Status."""
+        """Mit agent_status=ACTIVE: 4 Agenten ACTIVE, chart_pattern SHADOW (pinned)."""
         agents = build_ensemble("BTC/USDT", "15m", AgentStatus.ACTIVE)
 
-        inner_agents = [agent._agent for agent in agents]  # type: ignore[attr-defined]
-        for inner in inner_agents:
-            assert inner.config.status is AgentStatus.ACTIVE
+        assert len(agents) == 5
+        statuses = {
+            agent.agent_id: agent._agent.config.status  # type: ignore[attr-defined]
+            for agent in agents
+        }
+        for agent_id in ("trend", "mean_reversion", "volatility_regime", "volume_conviction"):
+            assert statuses[agent_id] is AgentStatus.ACTIVE
+        assert statuses["chart_pattern"] is AgentStatus.SHADOW
 
     def test_build_ensemble_respects_champion_status_overrides(self) -> None:
         """status_overrides überschreibt den Basis-Status nur für benannte Agenten."""
@@ -139,6 +144,8 @@ class TestBuildEnsemble:
         assert statuses["mean_reversion"] is AgentStatus.ACTIVE
         assert statuses["volatility_regime"] is AgentStatus.ACTIVE
         assert statuses["volume_conviction"] is AgentStatus.ACTIVE
+        # Pinned chart_pattern bleibt SHADOW, ohne eigenen Override.
+        assert statuses["chart_pattern"] is AgentStatus.SHADOW
 
     def test_injects_champion_params_for_named_agent(self) -> None:
         """champion_params injiziert evolvierte Parameter in benannte Agenten."""

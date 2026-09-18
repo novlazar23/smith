@@ -64,7 +64,7 @@ class TestRunCycle:
     def test_pipeline_receives_active_ensemble(
         self, config: DemoTraderConfig, fake_conn: FakeConnection
     ) -> None:
-        """Die Pipeline erhält OHLCV-Daten und ein frisches ACTIVE-Ensemble."""
+        """Die Pipeline erhält OHLCV-Daten und ein frisches ACTIVE-Ensemble (4 ACTIVE + chart_pattern SHADOW)."""
         provider = StubCandleSource({BTC: make_ohlcv(200, start_price=100.0)})
         pipeline = StubPipeline({BTC: make_result()})
         trader = make_trader(config, provider, fake_conn, pipeline)
@@ -83,8 +83,13 @@ class TestRunCycle:
             "volume_conviction",
             "chart_pattern",
         }
-        for agent in agents:
-            assert agent._agent.config.status.value == "active"
+        statuses = {
+            agent.agent_id: agent._agent.config.status.value  # type: ignore[attr-defined]
+            for agent in agents
+        }
+        for agent_id in ("trend", "mean_reversion", "volatility_regime", "volume_conviction"):
+            assert statuses[agent_id] == "active"
+        assert statuses["chart_pattern"] == "shadow"
 
     def test_skips_instrument_without_candles(
         self, config: DemoTraderConfig, fake_conn: FakeConnection, caplog: pytest.LogCaptureFixture
