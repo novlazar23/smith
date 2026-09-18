@@ -11,7 +11,7 @@ from packages.agents import (
     AgentType,
     ChartPatternAgent,
 )
-from packages.agents.chart_pattern_agent import _combine
+from packages.agents.chart_pattern_agent import _atr, _chart_signal, _combine
 from packages.schemas.agent_report import (
     AgentReport,
     AgentStatus,
@@ -395,3 +395,54 @@ class TestChartPatternAgentEnsemble:
         assert abs(sum(report.probabilities.values()) - 1.0) <= 0.001
         assert len(report.evidence) >= 1
         assert report.status == AgentStatus.SHADOW
+
+
+# ── Chart-Doppeltop-Regression (Prereg-B-Zyklus) ──────────────────────────
+
+
+def _double_top_ohlcv() -> dict[str, np.ndarray]:
+    """Synthetischer Doppeltop (n=60): Peaks high=110.0 bei Bar 20 und 30,
+    Tal-Boden low=100.0 bei Bar 25, danach monotoner Abverkauf mit
+    letztem Close 96.0 < Tal 100.0 (Nackenbruch)."""
+    n = 60
+    close = np.empty(n)
+    close[:20] = 99.0 + 0.05 * np.arange(20)  # strikt steigend, keine Extrema
+    close[20] = 109.0  # Peak 1
+    close[21:30] = np.array(
+        [107.5, 106.0, 104.0, 102.0, 100.5, 102.5, 104.5, 106.5, 108.0]
+    )  # V-förmiges Tal, Boden bei Bar 25
+    close[30] = 109.0  # Peak 2
+    close[31:] = 108.0 + (96.0 - 108.0) * (np.arange(1, 30) / 29.0)
+    open_ = np.empty(n)
+    open_[0] = close[0]
+    open_[1:] = close[:-1]
+    high = np.maximum(open_, close) + 0.5
+    high[20] = 110.0
+    high[30] = 110.0
+    low = np.minimum(open_, close) - 0.5
+    volume = np.full(n, 100.0)
+    return {
+        "open": open_,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": volume,
+    }
+
+
+class TestChartSignalDoubleTop:
+    """Regression-Pin: bestätigter Doppeltop-Nackenbruch feuert
+    (-1.0, t2). Hinzugekommen im Prereg-B-Zyklus (Prereg B selbst wurde
+    auf OOS REJECTED — s.
+    backtest_reports/prereg_b_chart_sharpen_report.md); das
+    Confirmed-Break-Verhalten ist prä-/post-B identisch, der Pin gilt in
+    beiden Zuständen."""
+
+    def test_confirmed_double_top_break_fires_at_minus_one(self) -> None:
+        """Nackenbruch unter das Tal → Signal (-1.0, t2) mit t2 = Index
+        des jüngsten Peaks (Bar 30)."""
+        data = _double_top_ohlcv()
+        atr = _atr(data["high"], data["low"], data["close"])
+        sig = _chart_signal(data["high"], data["low"], data["close"], atr)
+        assert sig is not None, "confirmierter Doppeltop-Nackenbruch muss feuern"
+        assert sig == (-1.0, 30)
