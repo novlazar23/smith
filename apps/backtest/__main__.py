@@ -24,11 +24,15 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from packages.backtesting.core import BacktestConfig
+from packages.backtesting.datafeed import MemoryDataFeed
+from packages.backtesting.engine import BacktestEngine
 from packages.backtesting.strategies import BaseStrategy
 from packages.llm.client import LLMClient
 from packages.persistence.clickhouse.engine import (
@@ -39,11 +43,12 @@ from packages.persistence.clickhouse.engine import (
 from packages.strategies import create_strategy, describe, list_strategies
 
 from .agent_strategy import AgentEnsembleStrategy
-from .ch_feed import ClickHouseDataFeed
+from .ch_feed import ClickHouseDataFeed, load_funding_rates
+from .cv import DEFAULT_HOLDING_BARS, equity_returns, run_cpcv, run_dsr, run_pbo
 from .mlflow_report import log_backtest_to_mlflow
 from .prompt_strategy import PromptStrategy
 from .report import render_markdown, resolve_output_dir, write_artifacts
-from .runner import confidence_buckets, extra_metrics, gate_sweep, run_backtest
+from .runner import confidence_buckets, default_config, extra_metrics, gate_sweep, run_backtest
 from .scenarios import parse_scenarios
 
 logger = logging.getLogger(__name__)
@@ -120,6 +125,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--params",
         default=None,
         help="Strategie-Parameter 'k=v,k=v' (nur mit --strategy, z.B. 'fast=8,slow=30')",
+    )
+    parser.add_argument(
+        "--cpcv",
+        action="store_true",
+        help="Überfittungs-Validierungs-Modus (CPCV + PBO + DSR) statt Szenario-Runs; "
+        "braucht --strategy, Artefakte unter {output}/cpcv/",
+    )
+    parser.add_argument(
+        "--cpcv-splits",
+        type=int,
+        default=8,
+        help="CPCV: Anzahl zusammenhängender Blöcke N (Default: 8)",
+    )
+    parser.add_argument(
+        "--cpcv-test-groups",
+        type=int,
+        default=2,
+        help="CPCV: Test-Gruppen pro Fold K (Default: 2)",
+    )
+    parser.add_argument(
+        "--cpcv-zoo",
+        action="store_true",
+        help="PBO über das Strategie-Zoo (Champion + alle Bibliotheks-Strategien) "
+        "statt Single-Config",
+    )
+    parser.add_argument(
+        "--n-trials",
+        type=int,
+        default=None,
+        help="DSR: Anzahl geprüfter Trials (Default: Zoo-Größe, ohne Zoo 40)",
     )
     parser.add_argument(
         "--sweep-library",
@@ -437,6 +472,189 @@ def run_sweep(args: argparse.Namespace, last: tuple[str, Any, AgentEnsembleStrat
     return rows
 
 
+def _utc_bound(value: datetime | date | None) -> datetime | None:
+    """Normalisiert eine Fenstergrenze auf UTC-datetime (Kalendertag → 00:00 UTC)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    return datetime(value.year, value.month, value.day, tzinfo=UTC)
+
+
+def run_cpcv_mode(
+    args: argparse.Namespace,
+    ch_engine: ClickHouseEngine,
+    scenarios: Sequence[tuple[str, datetime | date | None, datetime | date | None]],
+) -> int:
+    """CPCV-Modus: ein Fenster → CPCV-Folds + PBO + DSR → Artefakte unter
+    ``{output}/cpcv/`` (cpcv_folds.json, pbo.json, dsr.json, summary.json).
+
+    Der Champion (``--strategy`` mit ``--params``) wird pro Fold frisch
+    instanziiert; mit ``--cpcv-zoo`` läuft der PBO über Champion + alle
+    Bibliotheks-Strategien (Default-Parameter), sonst Single-Config
+    (PBO liefert dann nur den Reason). Funding-Raten werden einmalig
+    fail-soft geladen (Fehler/leer → Config-Default).
+
+    Returns:
+        0 bei Erfolg, 1 wenn das Fenster keine ausreichend Kerzen hat.
+    """
+    if len(scenarios) > 1:
+        logger.warning(
+            "CPCV läuft nur auf einem Fenster — nutze das erste von %d Szenarien (%s)",
+            len(scenarios),
+            scenarios[0][0],
+        )
+    label, start, end = scenarios[0]
+    loaded = load_feed(args, ch_engine, label, start, end)
+    if loaded is None:
+        logger.error("CPCV abgebrochen — keine ausreichend Kerzen im Fenster (%s → %s)", start, end)
+        return 1
+    _feed, candles = loaded
+
+    funding_rates: dict[datetime, float] | None
+    try:
+        funding_rates = load_funding_rates(
+            ch_engine, args.instrument, args.venue, _utc_bound(start), _utc_bound(end)
+        )
+    except Exception:
+        funding_rates = {}
+    if not funding_rates:
+        logger.warning("Funding-Raten nicht ladbar — Config-Default genutzt")
+        funding_rates = None
+
+    config = backtest_config(args)
+    bar_seconds = 300 if args.resample == "5m" else 60
+    logger.info(
+        "CPCV gestartet: %s, %d Kerzen, N=%d, K=%d, Purge/Embargo=%s Bars, Bar=%ds",
+        args.strategy,
+        len(candles),
+        args.cpcv_splits,
+        args.cpcv_test_groups,
+        config.max_holding_bars or DEFAULT_HOLDING_BARS,
+        bar_seconds,
+    )
+
+    def champion_factory() -> BaseStrategy:
+        return create_strategy(
+            args.strategy,
+            args.instrument,
+            parse_params(args.params) if args.params else None,
+            initial_capital=args.initial_capital,
+            trade_notional=args.trade_notional,
+        )
+
+    zoo: list[tuple[str, Callable[[], BaseStrategy]]] = [(args.strategy, champion_factory)]
+    if args.cpcv_zoo:
+        for name in list_strategies():
+            if name == args.strategy:
+                continue
+            zoo.append(
+                (
+                    name,
+                    lambda name=name: create_strategy(
+                        name,
+                        args.instrument,
+                        initial_capital=args.initial_capital,
+                        trade_notional=args.trade_notional,
+                    ),
+                )
+            )
+
+    cpcv = run_cpcv(
+        candles,
+        champion_factory,
+        config,
+        funding_rates,
+        n_splits=args.cpcv_splits,
+        n_test_groups=args.cpcv_test_groups,
+        bar_seconds=bar_seconds,
+    )
+    pbo = run_pbo(candles, zoo, config, funding_rates)
+
+    champion_strategy = champion_factory()
+    champion_result = BacktestEngine(default_config(champion_strategy, config)).run(
+        MemoryDataFeed(list(candles)),
+        champion_strategy,
+        warmup_bars=champion_strategy.candle_limit,
+        funding_rates=funding_rates,
+    )
+    champion_returns = np.array(
+        [ret for _ts, ret in equity_returns(champion_result)], dtype=float
+    )
+
+    n_trials = args.n_trials or (len(zoo) if args.cpcv_zoo else 40)
+    if args.cpcv_zoo:
+        trial_sharpes = [float(entry["sharpe"]) for entry in pbo["per_config"].values()]
+    else:
+        trial_sharpes = [
+            float(entry["oos_sharpe"]) for entry in cpcv["folds"] if entry["oos_sharpe"] is not None
+        ]
+    dsr = run_dsr(champion_returns, n_trials, trial_sharpes)
+
+    cpcv_dir = Path(args.output) / "cpcv"
+    cpcv_dir.mkdir(parents=True, exist_ok=True)
+
+    def _write_cpcv_artifact(name: str, payload: dict[str, Any]) -> Path:
+        path = cpcv_dir / name
+        path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        return path
+
+    _write_cpcv_artifact("cpcv_folds.json", cpcv)
+    _write_cpcv_artifact("pbo.json", pbo)
+    _write_cpcv_artifact("dsr.json", dsr)
+    summary: dict[str, Any] = {
+        "config": {
+            "instrument": args.instrument,
+            "venue": args.venue,
+            "scenario": label,
+            "timeframe": "5m" if args.resample == "5m" else "1m",
+            "strategy_name": args.strategy,
+            "strategy_params": parse_params(args.params) if args.params else None,
+            "stop_loss_pct": args.stop_loss,
+            "max_holding_bars": config.max_holding_bars,
+            "allow_pyramiding": not args.no_pyramiding,
+            "funding_rate": args.funding_rate if args.funding_rate is not None else config.funding_rate,
+            "trade_notional": args.trade_notional,
+            "initial_capital": args.initial_capital,
+            "cpcv": {
+                "n_splits": args.cpcv_splits,
+                "n_test_groups": args.cpcv_test_groups,
+                "bar_seconds": bar_seconds,
+                "purge_horizon_bars": config.max_holding_bars or DEFAULT_HOLDING_BARS,
+            },
+            "zoo": [name for name, _ in zoo] if args.cpcv_zoo else None,
+        },
+        "n_trials": n_trials,
+        "data": {
+            "n_candles": len(candles),
+            "start": candles[0].timestamp.isoformat(),
+            "end": candles[-1].timestamp.isoformat(),
+        },
+        "n_folds": cpcv["n_folds"],
+        "expected_folds": cpcv["expected_folds"],
+        "n_skipped_folds": len(cpcv["skipped"]),
+        "pbo": pbo.get("pbo"),
+        "dsr": dsr.get("dsr"),
+        "champion": {
+            "sharpe_ratio": champion_result.metrics.get("sharpe_ratio"),
+            "total_return_pct": champion_result.metrics.get("total_return_pct"),
+            "total_trades": champion_result.metrics.get("total_trades"),
+            "final_equity": champion_result.metadata.get("final_equity"),
+        },
+        "artifacts": ["cpcv_folds.json", "pbo.json", "dsr.json", "summary.json"],
+    }
+    _write_cpcv_artifact("summary.json", summary)
+    logger.info(
+        "CPCV fertig: %d/%d Folds, PBO=%s, DSR=%s → %s",
+        cpcv["n_folds"],
+        cpcv["expected_folds"],
+        pbo.get("pbo"),
+        dsr.get("dsr"),
+        cpcv_dir,
+    )
+    return 0
+
+
 def list_strategy_report() -> None:
     """Gibt die Bibliotheks-Strategien mit Parametern als Markdown-Tabelle aus."""
     rows = ["| Strategie | Warmup | Parameter (Default) | Beschreibung |", "|---|---:|---|---|"]
@@ -465,6 +683,25 @@ def validate_strategy_args(parser: argparse.ArgumentParser, args: argparse.Names
         parser.error("--params erfordert --strategy (oder --sweep-library)")
 
 
+def validate_cpcv_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Prüft den --cpcv-Modus (exklusiv mit dem regulären Szenario-Run-Pfad)."""
+    if not args.cpcv:
+        return
+    if not args.strategy:
+        parser.error("--cpcv benötigt --strategy (Champion-Strategie aus der Bibliothek)")
+    if args.prompt_strategy:
+        parser.error("--cpcv ist nur mit --strategy kombinierbar, nicht mit --prompt-strategy")
+    if args.sweep_library:
+        parser.error("--cpcv und --sweep-library sind inkompatibel")
+    if args.sweep_gates:
+        parser.error("--cpcv und --sweep-gates sind inkompatibel")
+    if args.entry_gate is not None or args.entry_required_agents:
+        parser.error(
+            "--cpcv ist nur mit Bibliotheks-Strategien kombinierbar "
+            "(--entry-gate/--entry-required-agents gelten nur fürs Agenten-Ensemble)"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI-Hauptfunktion. Returns: 0 (Erfolg), 2 (ungültige Argumente)."""
     parser = build_parser()
@@ -477,6 +714,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         validate_strategy_args(parser, args)
+        validate_cpcv_args(parser, args)
         if args.params:
             parse_params(args.params)  # frühes Fehlermelden vor dem DB-Setup
     except ValueError as exc:
@@ -494,6 +732,8 @@ def main(argv: list[str] | None = None) -> int:
     # Einmalig auflösen: root-eigener Bind-Mount (Docker) → Temp-Fallback,
     # damit ein lauffähiger Backtest nicht am Artefakt-Schreiben scheitert.
     args.output = str(resolve_output_dir(Path(args.output)))
+    if args.cpcv:
+        return run_cpcv_mode(args, ch_engine, scenarios)
     runs: list[tuple[str, Any, dict[str, Any]]] = []
     last: tuple[str, Any, AgentEnsembleStrategy, dict[str, Any]] | None = None
     for label, start, end in scenarios:

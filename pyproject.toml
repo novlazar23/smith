@@ -33,7 +33,9 @@ dependencies = [
     # LLM & agents
     "litellm>=1.50.0",
     # Data & time-series
-    "pandas>=2.2.0",
+    # <3: pandas 3.x bricht die Typ-Stubs (float(row[col]) in datafeed.py);
+    # purgedcv 0.1.6 benötigt nur pandas>=2.0.
+    "pandas>=2.2.0,<3",
     "numpy>=2.1.0",
     "scipy>=1.14.0",
     "scikit-learn>=1.5.0",
@@ -77,6 +79,7 @@ dependencies = [
     "orjson>=3.10.0",
     # CCXT
     "ccxt>=4.4.0",
+    "purgedcv==0.1.6",
 ]
 
 [project.optional-dependencies]

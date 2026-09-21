@@ -805,6 +805,72 @@ Mean-Reversion-Sleeve ohne deployment-reifen Alpha-Edge; die
 Empfehlung lautet, D als Risikoreduktions-Position (kleine
 Allokation) zu betrachten, nicht als Renditequelle.**
 
+**Überfittungs-Validierung (CPCV + DSR/PBO):** Gegen die
+Data-Snooping-Risiken der Kalibrierungsläufe (Grid-Sweeps, Varianten-
+Vergleiche, Auswahl nach in-sample-Performance) prüft der Modus
+`--cpcv` einen Champion-Kandidaten (`--strategy` mit `--params`) auf
+einem zusammenhängenden Kerzenfenster (`--from`/`--to`, sonst das
+erste Szenario) mit drei komplementären Overfitting-Maßen:
+
+- **CPCV** (Combinatorial Purged Cross-Validation, AIFML Kap. 12.4):
+  Das Fenster wird in `--cpcv-splits` (Default 8) zusammenhängende
+  Blöcke geteilt; jede Kombination von `--cpcv-test-groups`
+  (Default 2) Blöcken ist ein Fold (C(N,K) Folds, disjunkte
+  Slices). Purge-Horizont = Embargo = maximale Haltedauer
+  (`--max-holding-bars`, Default 2016 Bars = 7 Tage bei 5m):
+  Trainings-Bars, deren Positionshorizont einen Test-Block
+  berühren würde, werden entfernt. Pro Fold laufen IS-Run
+  (Train-Slice) und OOS-Run (Test-Slice) mit frischen
+  Strategie-Instanzen; je Fold IS/OOS-Sharpe (per-Bar), Return,
+  Trades, Final-Equity und die genauen Indizes; zu kurze Slices
+  werden übersprungen und protokolliert.
+- **PBO** (Probability of Backtest Overfitting, Bailey et al. 2017,
+  J. Comput. Finance): Anteil der CSCV-Kombinationen (S = 16 Splits,
+  C(S,S/2) Kombinationen), in der die in-samplebeste Strategie
+  out-of-sample unter dem Median rankt. `--cpcv-zoo` rechnet dafür
+  Champion + alle Bibliotheks-Strategien (Default-Parameter) über
+  das volle Fenster; ohne Zoo liefert PBO nur den Reason
+  „need >=2 configs".
+- **DSR** (Deflated Sharpe Ratio, Bailey & López de Prado 2014,
+  AIFML Kap. 11): PSR der Per-Bar-Returns des Champions gegen den
+  Benchmark SR*_n = sqrt(V[SR]) · [(1−γ)·Φ⁻¹(1−1/N) +
+  γ·Φ⁻¹(1−1/(N·e))] mit γ = Euler-Mascheroni-Konstante und N =
+  `--n-trials` (Default: Zoo-Größe, ohne Zoo 40). V[SR] ist die
+  Varianz der Trial-Sharpes (Zoo-Sharpes mit `--cpcv-zoo`, sonst
+  die OOS-Sharpes der CPCV-Folds); der PSR-Nenner nutzt
+  Sample-Skewness und -Kurtosis (nicht Exzess-Kurtosis). Alle
+  berichteten Sharpes sind per-Bar (mean/std, ddof=1), nicht
+  annualisiert.
+
+Splits & Statistik: purgedcv 0.1.6 (eslazarev, MIT) — keine
+Reimplementierung der Formeln. Beispiel (Champion D mit Zoo):
+
+```bash
+docker compose --profile on-demand run --rm backtest \
+  python -m apps.backtest --cpcv \
+  --strategy rsi_mean_reversion --params period=30,buy_below=20,sell_above=80 \
+  --no-pyramiding --resample 5m --cpcv-zoo \
+  --from 2021-05-01 --to 2026-09-02
+```
+
+Artefakte unter `backtest_reports/cpcv/` (Default `--output
+./backtest_reports`): `cpcv_folds.json` (Folds, IS/OOS-Metriken,
+Train-/Test-Indizes, übersprungene Folds), `pbo.json` (PBO,
+Kombinationszahl, IS/OOS-Rang-Slope, Per-Bar-Sharpe pro
+Zoo-Mitglied), `dsr.json` (DSR, sr_hat, n_trials, var_sharpe) und
+`summary.json` (Konfigurations-Echo, Champion-Metriken, Fenster-
+Abdeckung, die drei Kennzahlen). Funding-Raten werden wie beim
+regulären Backtest fail-soft aus ClickHouse geladen.
+
+Interpretation (Heuristik, keine harte Schwelle): **DSR > 0,95** =
+der beobachtete Sharpe übersteht die Deflation um die Anzahl der
+geprüften Trials; **PBO < 0,5** = Backtest-Overfitting dominiert
+die beobachtete Performance nicht. `--n-trials` soll die Anzahl
+aller durchlaufenen Kalibrierungs-Runs/Kandidatenvarianten
+reflektieren (siehe die 12 dokumentierten Läufe oben) — je mehr
+Varianten geprüft wurden, desto höher die Hurdle, die ein
+Kandidat überstehen muss.
+
 Beide Services liegen hinter dem Compose-Profil `on-demand` — sie starten
 nie mit `docker compose up`, nur explizit via `docker compose run`.
 
