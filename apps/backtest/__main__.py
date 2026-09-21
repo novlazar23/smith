@@ -98,6 +98,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Höhere Konfidenz-Schwelle nur für BUY (SELL nutzt --gate; Default: aus)",
     )
     parser.add_argument(
+        "--funding-rate",
+        type=float,
+        default=None,
+        help="Funding pro 8h-Settlement, signed (positiv = Long zahlt); "
+        "Default: Config-Wert 0.0001, 0.0 = Funding aus",
+    )
+    parser.add_argument(
         "--entry-required-agents",
         default="",
         help="Kommagetrennte Agent-IDs, die für einen BUY alle selbst LONG votieren müssen "
@@ -246,13 +253,16 @@ def make_strategy(args: argparse.Namespace, strategy_name: str | None = None) ->
 
 def backtest_config(args: argparse.Namespace) -> BacktestConfig:
     """BacktestConfig für den Run (Symbol/Timeframe; Defaults aus runner)."""
-    return BacktestConfig(
+    config = BacktestConfig(
         symbol=args.instrument,
         timeframe="5m" if args.resample == "5m" else "1m",
         stop_loss_pct=args.stop_loss,
         max_holding_bars=args.max_holding_bars,
         allow_pyramiding=not args.no_pyramiding,
     )
+    if args.funding_rate is not None:
+        config.funding_rate = args.funding_rate
+    return config
 
 
 def load_feed(
@@ -360,6 +370,7 @@ def run_on_feed(
         "stop_loss_pct": args.stop_loss,
         "max_holding_bars": args.max_holding_bars,
         "allow_pyramiding": not args.no_pyramiding,
+        "funding_rate": args.funding_rate if args.funding_rate is not None else 0.0001,
         "trade_notional": args.trade_notional,
         "initial_capital": args.initial_capital,
         "resample": args.resample or "none",

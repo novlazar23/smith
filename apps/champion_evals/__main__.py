@@ -258,14 +258,18 @@ def _load_series(
 def _refresh_history(
     engine: ClickHouseEngine, instruments: tuple[str, ...], start: str, end: str
 ) -> None:
-    """Lädt ``candles_history`` für das Fenster idempotent nach (nur Lücken).
+    """Lädt ``candles_history`` für das Fenster idempotent nach (nur Lücken)
+    und — Fail-Soft — die Funding-Rate-Historie (Vollfenster, Dedup über
+    ReplacingMergeTree).
 
     Ohne diesen Schritt wächst bei einem rollierenden Fenster die Lücke am
     Fensterende täglich (Backfill-Endstand bleibt stehen) und der OOS-Teil
-    bewertet ständige veraltete Daten.
+    bewertet ständige veraltete Daten. Ein Funding-Refresh-Fehler wird nur
+    geloggt (Warning) — die schon geschriebenen Kerzen und der Evals-Lauf
+    bleiben unberührt.
 
     Raises:
-        RuntimeError: Wenn das Backfill für ein Instrument fehlschlägt.
+        RuntimeError: Wenn das Kerzen-Backfill für ein Instrument fehlschlägt.
     """
     from apps.backfill import storage
     from apps.backfill.client import KlineClient
@@ -279,6 +283,18 @@ def _refresh_history(
         result = BackfillService(config, client, engine).run()
     if result.failures:
         raise RuntimeError(f"Backfill unvollständig: {[name for name, _ in result.failures]}")
+
+    # Funding-Refresh (Fail-Soft): klein (3 Sätze/Tag/Symbol) → Vollfenster-
+    # Load statt Lücken-Plan. Darf den Evals-Lauf bei einem Fehler nicht
+    # verwerfen — die Kerzen sind zu diesem Zeitpunkt bereits geschrieben.
+    try:
+        from apps.backfill.funding import FundingRateClient, ensure_funding_table, refresh_funding
+
+        ensure_funding_table(engine)
+        with FundingRateClient() as client:
+            refresh_funding(engine, client, instruments, window_start, window_end)
+    except Exception:
+        logger.warning("Funding-Refresh fehlgeschlagen (Kerzen-Backfill bleibt unverändert)", exc_info=True)
 
 
 def _run_once(args: argparse.Namespace) -> int:

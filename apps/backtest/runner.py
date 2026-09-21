@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from packages.backtesting.core import BacktestConfig
@@ -56,6 +57,7 @@ from .agent_strategy import (
     derive_action,
     entry_allowed,
 )
+from .ch_feed import ClickHouseDataFeed, load_funding_rates
 
 if TYPE_CHECKING:
     from packages.backtesting.core import BacktestResult, Candle
@@ -100,6 +102,22 @@ def default_config(
     )
 
 
+def _funding_rates_for_feed(feed: DataFeed) -> dict[datetime, float] | None:
+    """Lädt Funding-Raten für ``ClickHouseDataFeed`` (sonst None → Config-Baseline).
+
+    Jeglicher Fehler (fehlende Tabelle, Query-Fehler) degradiert zu None —
+    der Backtest läuft dann mit ``BacktestConfig.funding_rate`` weiter.
+    """
+    if not isinstance(feed, ClickHouseDataFeed):
+        return None
+    try:
+        return load_funding_rates(
+            feed._engine, feed._instrument, feed._venue, feed._start, feed._end
+        )
+    except Exception:
+        return None
+
+
 def run_backtest(
     feed: DataFeed,
     strategy_factory: Callable[[], BaseStrategy],
@@ -121,7 +139,12 @@ def run_backtest(
     strategy = strategy_factory()
     engine = BacktestEngine(default_config(strategy, config))
     logger.info("Backtest '%s' gestartet (%s)", label, feed.symbol)
-    result = engine.run(feed, strategy, warmup_bars=strategy.candle_limit)
+    result = engine.run(
+        feed,
+        strategy,
+        warmup_bars=strategy.candle_limit,
+        funding_rates=_funding_rates_for_feed(feed),
+    )
     result.metadata["strategy"] = strategy
     return result
 
@@ -408,9 +431,10 @@ def gate_sweep(
     base = warm_strategy if warm_strategy is not None else strategy_factory()
     if not isinstance(base, AgentEnsembleStrategy):
         raise TypeError("gate_sweep benötigt ein AgentEnsembleStrategy (consensus_cache)")
+    funding_rates = _funding_rates_for_feed(feed)
     if warm_strategy is None:
         engine = BacktestEngine(default_config(base, config))
-        engine.run(feed, base, warmup_bars=base.candle_limit)
+        engine.run(feed, base, warmup_bars=base.candle_limit, funding_rates=funding_rates)
     cached_confidences = [confidence for _, confidence, _ in base.consensus_cache.values()]
     fraction = base.trade_notional / base.initial_capital
     rows: list[dict[str, Any]] = []
@@ -426,7 +450,9 @@ def gate_sweep(
             name=f"replay-gate-{gate}",
         )
         engine = BacktestEngine(default_config(base, config))
-        result = engine.run(feed, replay, warmup_bars=base.candle_limit)
+        result = engine.run(
+            feed, replay, warmup_bars=base.candle_limit, funding_rates=funding_rates
+        )
         rows.append(
             _sweep_row(gate, result, replay, cached_confidences, base.candle_limit, fraction)
         )

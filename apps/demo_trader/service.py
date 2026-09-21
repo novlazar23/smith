@@ -41,6 +41,18 @@ Ausgeführt wird ausschließlich über den getrackten ``PaperExecutor``
 Orders platziert. Jeder ausgeführte Trade landet in PostgreSQL
 (``demo_trades``); nach jedem Zyklus wird der Account-Snapshot nach
 ``demo_account`` upgepusht.
+
+Offene Long-Positionen zahlen (bzw. bei negativer Rate erhalten) alle
+8 Stunden Funding, abgerechnet über die ClickHouse-Tabelle
+``funding_rates`` (Venue = ``CANDLE_VENUE``): in jedem Zyklus werden
+für jede offene Position die überquerten 00:00/08:00/16:00-UTC-
+Grenzwerte nachgeholt (Catch-Up), pro Grenzwert wird
+``Menge x Marktpreis x Rate`` dem Cash belastet und eine ``FUNDING``-
+Audit-Zeile in ``demo_trades`` geschrieben. Es gibt bewusst **keine**
+neue ``demo_account``-Spalte — die kumulierte Funding-Zahlung ist die
+Summe der FUNDING-Zeilen in ``demo_trades``. Fehlt die Rate (oder die
+Tabelle/der ClickHouse-Server), entfällt das Settlement (Fail-Soft,
+Warning-/Debug-Log); nicht gefundene Rates werden nicht nachgeholt.
 """
 
 from __future__ import annotations
@@ -56,9 +68,9 @@ import time
 import types
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import numpy as np
 from apps.champion_evals.evolve import load_champion_params
@@ -74,7 +86,7 @@ from apps.orchestrator_service.service import (
 from packages.consensus import ConsensusDecision
 from packages.observability.mlflow_client import MLflowClient
 from packages.orchestrator.pipeline import OrchestratorPipeline
-from packages.paper import PaperAccount, PaperExecutor, Trade, TradeDirection
+from packages.paper import OrderType, PaperAccount, PaperExecutor, Trade, TradeDirection
 from packages.persistence.clickhouse.engine import (
     ClickHouseConfig,
     ClickHouseEngine,
@@ -194,6 +206,14 @@ class CandleSource(Protocol):
         ...
 
 
+class FundingRateSource(Protocol):
+    """Schnittstelle zur Abfrage abgerechneter Funding-Rates (8h-Settlements)."""
+
+    def settled_rate(self, instrument: str, venue: str, funding_time: datetime) -> float | None:
+        """Liefert die Funding-Rate zum exakten Grenzwert oder None (fehlend)."""
+        ...
+
+
 class DemoCandleProvider:
     """Liest OHLCV-Kerzen eines bestimmten Venues aus ``candles``.
 
@@ -247,6 +267,52 @@ class DemoCandleProvider:
     def _escape(value: str) -> str:
         """Escapt einen String für ein ClickHouse-String-Literal."""
         return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+class ClickHouseFundingRateSource:
+    """Liest abgerechnete Funding-Rates aus ``<db>.funding_rates``.
+
+    Die Tabelle (``instrument, venue, funding_time, funding_rate, ...``)
+    wird von der Backfill-App angelegt — der Demo-Trader liest nur und
+    führt **keine** DDL aus. Fehlt die Tabelle, ist ClickHouse down oder
+    die Rate zum exakten 8h-Grenzwert nicht vorhanden, liefert
+    ``settled_rate`` None (Debug-Log, nie fatal): der Demo-Trader läuft
+    dann schlicht ohne dieses Settlement weiter.
+
+    Bemerkung: Funding wird dem ``cash`` des Paper-Accounts belastet
+    (das einzige Feld, das in die Equity einfließt) und als
+    ``FUNDING``-Zeile in ``demo_trades`` auditier; es gibt bewusst keine
+    neue ``demo_account``-Spalte (Summe der FUNDING-Zeilen = kumulierte
+    Funding-Zahlung).
+    """
+
+    def __init__(self, engine: ClickHouseEngine) -> None:
+        """Initialisiert die Funding-Quelle mit einer ClickHouse-Engine."""
+        self._engine = engine
+
+    def settled_rate(self, instrument: str, venue: str, funding_time: datetime) -> float | None:
+        """Liefert die Funding-Rate zum exakten Grenzwert oder None (Fail-Soft)."""
+        try:
+            query = (
+                f"SELECT funding_rate FROM {self._engine.config.database}.funding_rates "
+                f"WHERE instrument = '{DemoCandleProvider._escape(instrument)}' "
+                f"AND venue = '{DemoCandleProvider._escape(venue)}' "
+                f"AND funding_time = '{funding_time.strftime('%Y-%m-%d %H:%M:%S')}' "
+                "LIMIT 1"
+            )
+            names, rows = self._engine.query(query)
+            if not rows:
+                return None
+            index = names.index("funding_rate")
+            return float(rows[0][index])
+        except Exception as exc:
+            logger.debug("Funding-Rate nicht abrufbar (%s @ %s): %s", instrument, funding_time, exc)
+            return None
+
+
+def _floor_8h(moment: datetime) -> datetime:
+    """Rundet eine UTC-Zeit auf den letzten 8h-Funding-Grenzwert (00:00/08:00/16:00)."""
+    return moment.replace(hour=moment.hour - moment.hour % 8, minute=0, second=0, microsecond=0)
 
 
 def build_active_ensemble(instrument: str, horizon: str) -> list[ContextualAgent]:
@@ -377,7 +443,8 @@ def persist_demo_trade(conn: Connection, trade: Trade) -> None:
         {
             "trade_id": trade.trade_id,
             "instrument": trade.instrument,
-            "direction": trade.direction.value,
+            # str() statt .value: deckt Plain-String-Directions ("FUNDING") ab
+            "direction": str(trade.direction),
             "quantity": trade.quantity,
             "price": trade.price,
             "filled_price": trade.filled_price,
@@ -627,6 +694,8 @@ class DemoTrader:
         db: SQLAlchemyEngine,
         executor: PaperExecutor,
         pipeline_factory: Callable[[], OrchestratorPipeline] | None = None,
+        funding_source: FundingRateSource | None = None,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         """Initialisiert den Demo-Trader.
 
@@ -638,6 +707,10 @@ class DemoTrader:
             pipeline_factory: Factory für die Pipeline (Testbarkeit).
                 Default: Pipeline mit der kalibrierten Ensemble-WeightConfig
                 (``build_weight_config``).
+            funding_source: Funding-Rate-Quelle für 8h-Settlements
+                (None → Demo-Trader läuft ohne Funding-Abrechnung).
+            now: Uhr für die Funding-Catch-Up-Logik (Testbarkeit).
+                Default: aktuelle UTC-Zeit.
         """
         self._config = config
         self._provider = provider
@@ -648,6 +721,11 @@ class DemoTrader:
         # Drawdown-Circuit-Breaker-Zustand (in-Process, pro Zyklus fortgezogen)
         self._equity_peak = config.initial_cash
         self._dd_halted = False
+        # Funding-Settlements (in-Process-Catch-Up-Zustand pro Instrument)
+        self._funding_source = funding_source
+        self._now = now if now is not None else lambda: datetime.now(UTC)
+        self._last_funding: dict[str, datetime] = {}
+        self._total_funding = 0.0
 
     @property
     def config(self) -> DemoTraderConfig:
@@ -720,6 +798,63 @@ class DemoTrader:
             )
         return None
 
+    def _settle_funding(self, instrument: str, latest_close: float) -> None:
+        """Holt überfällige 8h-Funding-Settlements einer offenen Position nach.
+
+        Startpunkt ist der letzte 8h-Grenzwert vor ``opened_at`` (bzw. vor
+        dem ersten Zyklus mit offener Position); danach wird pro überquertem
+        Grenzwert (00:00/08:00/16:00 UTC) die Rate gelesen und
+        ``amount = quantity x latest_close x rate`` dem Cash belastet
+        (positive Rate → Long zahlt, negative → Long erhält). Jede
+        gebuchte Settlement erhält eine ``FUNDING``-Audit-Zeile in
+        ``demo_trades`` (Persistenzfehler nur warning, nie fatal). Eine
+        fehlende Rate wird nicht nachgeholt (Warning, Grenzwert wird
+        übersprungen); ohne offene Position wird der Eintrag gelöscht.
+        """
+        position = self._account.positions.get(instrument)
+        if position is None:
+            self._last_funding.pop(instrument, None)
+            return
+        if self._funding_source is None:
+            return
+        now = self._now()
+        last = self._last_funding.get(instrument)
+        if last is None:
+            last = _floor_8h(position.opened_at or now)
+        venue = self._config.candle_venue
+        while (next_ts := last + timedelta(hours=8)) <= now:
+            rate = self._funding_source.settled_rate(instrument, venue, next_ts)
+            if rate is not None:
+                amount = position.quantity * latest_close * rate
+                self._account.cash -= amount
+                self._total_funding += amount
+                trade = Trade(
+                    trade_id=f"demo-funding-{next_ts:%Y%m%dT%H%M%SZ}-{instrument}",
+                    instrument=instrument,
+                    direction=cast("TradeDirection", "FUNDING"),
+                    order_type=OrderType.MARKET,
+                    quantity=position.quantity,
+                    price=rate,
+                    slippage=0.0,
+                    commission=0.0,
+                    filled_price=latest_close,
+                    filled_quantity=position.quantity,
+                    status="filled",
+                )
+                try:
+                    with self._db.engine.connect() as conn:
+                        persist_demo_trade(conn, trade)
+                except Exception as exc:
+                    logger.warning("FUNDING-Audit-Zeile für %s nicht persistierbar: %s", instrument, exc)
+            else:
+                logger.warning(
+                    "Funding-Settlement %s %s nicht gebucht (keine Rate in funding_rates)",
+                    instrument,
+                    next_ts,
+                )
+            last = next_ts
+        self._last_funding[instrument] = last
+
     def _run_instrument(self, instrument: str) -> int:
         """Führt Analyse und Paper-Trade für ein einzelnes Instrument aus.
 
@@ -739,6 +874,7 @@ class DemoTrader:
             return 0
 
         latest_close = float(window.close[-1])
+        self._settle_funding(instrument, latest_close)
         exit_reason = self._check_exit_backstop(instrument, latest_close)
         if exit_reason is not None:
             trade = self._executor.close_position(self._account, instrument)
@@ -968,9 +1104,9 @@ def build_db_engine() -> SQLAlchemyEngine:
     )
 
 
-def build_ch_provider(venue: str) -> DemoCandleProvider:
-    """Erzeugt den ClickHouse-Kerzen-Provider aus CH_*-Umgebungsvariablen."""
-    engine = create_ch_engine(
+def build_ch_engine() -> ClickHouseEngine:
+    """Erzeugt die ClickHouse-Engine aus CH_*-Umgebungsvariablen."""
+    return create_ch_engine(
         ClickHouseConfig(
             host=os.environ.get("CH_HOST", "clickhouse"),
             port=int(os.environ.get("CH_PORT", "8123")),
@@ -979,7 +1115,11 @@ def build_ch_provider(venue: str) -> DemoCandleProvider:
             password=os.environ.get("CH_PASSWORD", ""),
         )
     )
-    return DemoCandleProvider(engine, venue)
+
+
+def build_ch_provider(venue: str) -> DemoCandleProvider:
+    """Erzeugt den ClickHouse-Kerzen-Provider aus CH_*-Umgebungsvariablen."""
+    return DemoCandleProvider(build_ch_engine(), venue)
 
 
 def build_trader(
@@ -988,11 +1128,29 @@ def build_trader(
     db: SQLAlchemyEngine | None = None,
     executor: PaperExecutor | None = None,
 ) -> DemoTrader:
-    """Setzt den Demo-Trader aus Env-Defaults und injizierten Abhängigkeiten zusammen."""
+    """Setzt den Demo-Trader aus Env-Defaults und injizierten Abhängigkeiten zusammen.
+
+    Ohne injizierten Candle-Provider bedienen sich Kerzen- und
+    Funding-Quelle derselben ClickHouse-Engine. Die Funding-Quelle ist
+    Fail-Soft: schlägt ihre Initialisierung fehl, läuft der Trader ohne
+    Funding-Settlement weiter (Warning, nie fatal). Ein externer
+    Provider hat keine ClickHouse-Engine → kein Funding.
+    """
     cfg = config if config is not None else config_from_env()
+    funding_source: FundingRateSource | None = None
+    if provider is not None:
+        candle_provider: CandleSource = provider
+    else:
+        engine = build_ch_engine()
+        candle_provider = DemoCandleProvider(engine, cfg.candle_venue)
+        try:
+            funding_source = ClickHouseFundingRateSource(engine)
+        except Exception as exc:
+            logger.warning("Funding-Quelle nicht initialisierbar → ohne Funding: %s", exc)
+            funding_source = None
     return DemoTrader(
         cfg,
-        provider if provider is not None else build_ch_provider(cfg.candle_venue),
+        candle_provider,
         db if db is not None else build_db_engine(),
         executor
         if executor is not None
@@ -1001,6 +1159,7 @@ def build_trader(
             default_slippage_pct=cfg.trade_cost_pct / 2.0,
             default_commission_pct=cfg.trade_cost_pct / 2.0,
         ),
+        funding_source=funding_source,
     )
 
 

@@ -100,6 +100,7 @@ class TestBacktestConfig:
         assert cfg.slippage_bps == 5.0
         assert cfg.max_position_size == 0.25
         assert cfg.warmup_bars == 50
+        assert cfg.funding_rate == 0.0001
 
     def test_custom_config(self) -> None:
         cfg = BacktestConfig(

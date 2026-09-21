@@ -6,11 +6,13 @@ es gibt keine Netzwerk- oder Datenbank-Zugriffe.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pytest
-from apps.demo_trader.service import DemoTrader, DemoTraderConfig
+from apps.demo_trader.service import DemoTrader, DemoTraderConfig, FundingRateSource
 from apps.orchestrator_service.service import CandleWindow
 from packages.consensus import ConsensusDecision, ConsensusResult
 from packages.orchestrator.pipeline import OrchestratorPipelineResult
@@ -162,6 +164,24 @@ def make_trader(
         db=FakeDB(conn),
         executor=executor if executor is not None else PaperExecutor(initial_cash=config.initial_cash),
         pipeline_factory=lambda: pipeline,
+    )
+
+
+def make_funding_trader(
+    config: DemoTraderConfig,
+    conn: FakeConnection,
+    funding_source: FundingRateSource | None,
+    now: Callable[[], datetime],
+) -> DemoTrader:
+    """Baut einen DemoTrader mit injizierter Funding-Quelle und Uhr (Funding-Tests)."""
+    return DemoTrader(
+        config=config,
+        provider=StubCandleSource({BTC: make_ohlcv(100, start_price=100.0)}),
+        db=FakeDB(conn),
+        executor=PaperExecutor(initial_cash=config.initial_cash),
+        pipeline_factory=lambda: StubPipeline({BTC: make_result()}),
+        funding_source=funding_source,
+        now=now,
     )
 
 

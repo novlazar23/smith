@@ -6,6 +6,7 @@ through PaperExecutor, tracks equity curve, and computes metrics.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -53,12 +54,15 @@ class BacktestEngine:
         self._round_trips: list[dict[str, Any]] = []
         self._cycle_start: dict[str, tuple[int, datetime]] = {}
         self._candles_processed: int = 0
+        self._total_funding: float = 0.0
 
     def run(
         self,
         data_feed: DataFeed,
         strategy: Any,
         warmup_bars: int | None = None,
+        *,
+        funding_rates: Mapping[datetime, float] | None = None,
         **kwargs: Any,
     ) -> BacktestResult:
         """Run backtest over the given data feed and strategy.
@@ -67,6 +71,9 @@ class BacktestEngine:
             data_feed: DataFeed providing historical candles.
             strategy: Strategy with on_bar(candle) -> signal method.
             warmup_bars: Bars to skip for warmup (uses config if None).
+            funding_rates: Optionale Funding-Raten pro Settlement (aware-UTC-
+                Timestamp → Rate); überschreibt ``config.funding_rate``
+                pro Settlement. None = durchgehend Config-Default.
             **kwargs: Extra data for indicators (e.g., benchmark_returns).
 
         Returns:
@@ -85,6 +92,7 @@ class BacktestEngine:
         self._account = self.executor.create_account("backtest")
         self._round_trips = []
         self._cycle_start = {}
+        self._total_funding = 0.0
 
         # Warmup phase — process candles but don't trade
         for i in range(min(warmup, len(candles))):
@@ -102,6 +110,7 @@ class BacktestEngine:
                 self._execute_signal(signal, candle, i)
 
             self._apply_risk_exits(candle, i)
+            self._apply_funding(candle, funding_rates)
 
             # Record equity at end of bar (positions marked at the bar close)
             equity = self._marked_equity(candle)
@@ -183,6 +192,7 @@ class BacktestEngine:
                 "candles_processed": self._candles_processed,
                 "total_trades": len(trade_data),
                 "final_equity": self._marked_equity(candles[-1]),
+                "total_funding": self._total_funding,
                 "initial_capital": self.config.initial_capital,
                 "round_trips": [dict(rt) for rt in self._round_trips],
                 "open_positions": [
@@ -248,6 +258,37 @@ class BacktestEngine:
             cycle = self._cycle_start.get(self.config.symbol)
             if cycle is not None and bar_index - cycle[0] >= max_bars:
                 self._close_position_at_market(candle, bar_index, f"max_holding_{max_bars}")
+
+    def _apply_funding(
+        self, candle: Candle, funding_rates: Mapping[datetime, float] | None
+    ) -> None:
+        """8h-Funding-Abrechnung auf der offenen Long-Position (Perpetuals).
+
+        Nur auf Settlement-Bars (00:00/08:00/16:00 UTC; naive Timestamps
+        gelten als UTC) wird ``quantity × close × rate`` vom Cash abgezogen:
+        positiv = Long zahlt (Cash sinkt), negativ = Long wird gutgeschrieben.
+        ``funding_rates`` (aware-UTC-Keys) überschreibt ``config.funding_rate``
+        pro Settlement; rate 0.0 = keine Abrechnung.
+        """
+        if self._account is None:
+            return
+        ts = candle.timestamp
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        if not (ts.hour % 8 == 0 and ts.minute == 0 and ts.second == 0):
+            return
+        pos = self._account.positions.get(self.config.symbol)
+        if pos is None or pos.quantity <= 0:
+            return
+        if funding_rates is not None:
+            rate = funding_rates.get(ts, self.config.funding_rate)
+        else:
+            rate = self.config.funding_rate
+        if rate == 0.0:
+            return
+        amount = pos.quantity * candle.close * rate
+        self._account.cash -= amount
+        self._total_funding += amount
 
     def _close_position_at_market(
         self, candle: Candle, bar_index: int, reason: str

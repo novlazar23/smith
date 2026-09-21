@@ -4,6 +4,7 @@ Aufruf:
 
     python -m apps.backfill --months 12 --instruments BTC/USDT,ETH/USDT
     python -m apps.backfill --start 2025-01-01 --end 2025-12-31 --dry-run
+    python -m apps.backfill funding --start 2019-01-01 --end 2025-12-31
 
 Der Backfill lädt historische 1m-Kerzen von der Binance-Futures-REST-API
 und schreibt sie idempotent in die ClickHouse-Tabelle ``candles_history``
@@ -13,6 +14,11 @@ Die Tabelle wird bei Bedarf automatisch angelegt (gleiche Spalten wie
 sonst von der 1-Jahre-TTL der Live-Tabelle entfernt würden).
 Bereits vorhandene Zeiträume werden übersprungen — ein zweiter Lauf lädt
 nur die fehlenden Lücken (Deduplication über ReplacingMergeTree).
+
+Das Subkommando ``funding`` lädt die Funding-Rate-Historie
+(``GET /fundingRate``) in die eigene Tabelle ``funding_rates`` — ein
+Vollfenster-Load pro Lauf (3 Sätze/Tag/Symbol, Dedup via
+ReplacingMergeTree), ohne Gap-Planner.
 
 ClickHouse-Zugang über die Umgebungsvariablen ``CH_HOST``/``CH_PORT``/
 ``CH_DB``/``CH_PASSWORD`` (Compose-Defaults: ``clickhouse``/``8123``/
@@ -30,6 +36,12 @@ from datetime import UTC, date, datetime
 
 from apps.backfill import storage
 from apps.backfill.client import KlineClient
+from apps.backfill.funding import (
+    FundingRateClient,
+    count_funding_rates,
+    ensure_funding_table,
+    refresh_funding,
+)
 from apps.backfill.service import (
     BackfillConfig,
     BackfillService,
@@ -43,6 +55,10 @@ from packages.ingestion.adapter.binance import BINANCE_FUTURES_VENUE
 from packages.persistence.clickhouse.engine import ClickHouseConfig, create_ch_engine
 
 logger = logging.getLogger(__name__)
+
+KLINE_DEFAULT_INSTRUMENTS = "BTC/USDT,ETH/USDT"
+FUNDING_DEFAULT_INSTRUMENTS = "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,ADA/USDT"
+FUNDING_DEFAULT_START = "2019-01-01"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,10 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
         "command",
         nargs="?",
         default=None,
-        choices=(None, "check-coverage"),
+        choices=(None, "check-coverage", "funding"),
         help=(
-            "Subkommando (Default: Backfill). 'check-coverage' prüft "
-            "read-only die Datenabdeckung (ohne Downloads)."
+            "Subkommando (Default: Kline-Backfill). 'check-coverage' prüft "
+            "read-only die Datenabdeckung (ohne Downloads); 'funding' lädt "
+            "die Funding-Rate-Historie in funding_rates."
         ),
     )
     parser.add_argument(
@@ -72,8 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--instruments",
-        default="BTC/USDT,ETH/USDT",
-        help="Komma-getrennte Instrumente (Default: BTC/USDT,ETH/USDT)",
+        default=None,
+        help=(
+            "Komma-getrennte Instrumente (Default: BTC/USDT,ETH/USDT; bei "
+            "'funding': BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,ADA/USDT)"
+        ),
     )
     parser.add_argument(
         "--start",
@@ -153,6 +173,35 @@ def check_coverage(
     return 1 if total_missing else 0
 
 
+def _run_funding(
+    engine: storage.CandleEngine,
+    instruments: Sequence[str],
+    start: datetime,
+    end: datetime,
+) -> int:
+    """Funding-Subkommando: Tabelle anlegen, Vollfenster laden, Summary ausgeben.
+
+    Exit-Code: 0 = Erfolg, 1 = Lauffehler (Tabellen-Anlage, Download/Insert).
+    """
+    try:
+        ensure_funding_table(engine)
+    except Exception as exc:
+        logger.error("funding_rates nicht anlegbar: %s", exc)
+        return 1
+    try:
+        with FundingRateClient() as client:
+            total = refresh_funding(engine, client, instruments, start, end)
+    except Exception as exc:
+        logger.exception("Funding-Backfill fehlgeschlagen: %s", exc)
+        return 1
+    venue = BINANCE_FUTURES_VENUE
+    print(f"Funding-Backfill {venue}: {start.strftime(_REPORT_FMT)} → {end.strftime(_REPORT_FMT)}")
+    for instrument in instruments:
+        print(f"  {instrument:<12} {count_funding_rates(engine, instrument, venue):>12,} Sätze")
+    print(f"  {'Gesamt':<12} {total:>12,} Sätze insertiert")
+    return 0
+
+
 def _parse_day(value: str, *, at_day_end: bool = False) -> datetime:
     """Parst ein YYYY-MM-DD-Datum als UTC-Datetime mit Tagsgrenzen.
 
@@ -198,7 +247,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     if start is not None and end is not None and start >= end:
         logger.error("--start muss vor --end liegen")
         return 2
-    instruments = parse_instruments(args.instruments)
+    funding_window: tuple[datetime, datetime] | None = None
+    if args.command == "funding":
+        funding_window = (
+            start if start is not None else _parse_day(FUNDING_DEFAULT_START),
+            end if end is not None else datetime.now(UTC),
+        )
+        if funding_window[0] >= funding_window[1]:
+            logger.error("--start muss vor --end liegen")
+            return 2
+    default_instruments = (
+        FUNDING_DEFAULT_INSTRUMENTS if args.command == "funding" else KLINE_DEFAULT_INSTRUMENTS
+    )
+    instruments = parse_instruments(
+        args.instruments if args.instruments is not None else default_instruments
+    )
     if not instruments:
         logger.error("Keine Instrumente angegeben (--instruments leer)")
         return 2
@@ -230,6 +293,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             exc,
         )
         return 1
+
+    if args.command == "funding" and funding_window is not None:
+        return _run_funding(engine, instruments, funding_window[0], funding_window[1])
+
     try:
         storage.ensure_table(engine)
     except Exception as exc:

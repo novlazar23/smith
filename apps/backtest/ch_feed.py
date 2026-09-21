@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 REQUIRED_COLUMNS: tuple[str, ...] = ("open_time", "open", "high", "low", "close", "volume")
 TABLE_NAME = "candles_history"
+FUNDING_TABLE = "funding_rates"
 
 
 class QueryEngine(Protocol):
@@ -82,6 +83,50 @@ def _parse_timestamp(value: str) -> datetime:
     if moment.tzinfo is None:
         return moment.replace(tzinfo=UTC)
     return moment.astimezone(UTC)
+
+
+def load_funding_rates(
+    engine: QueryEngine,
+    instrument: str,
+    venue: str,
+    start: datetime | None,
+    end: datetime | None,
+) -> dict[datetime, float]:
+    """Lädt Funding-Raten aus ``funding_rates`` (Keys = aware-UTC-Settlements).
+
+    Fehlende Tabelle oder Query-Fehler liefern ``{}`` (kein Raise) — der
+    Backtest fällt dann auf ``BacktestConfig.funding_rate`` zurück.
+    """
+    conditions = [
+        f"instrument = '{_escape(instrument)}'",
+        f"venue = '{_escape(venue)}'",
+    ]
+    if start is not None and end is not None:
+        conditions.append(
+            f"funding_time BETWEEN '{_format_bound(start)}' AND '{_format_bound(end)}'"
+        )
+    elif start is not None:
+        conditions.append(f"funding_time >= '{_format_bound(start)}'")
+    elif end is not None:
+        conditions.append(f"funding_time <= '{_format_bound(end)}'")
+    sql = (
+        "SELECT funding_time, funding_rate "
+        f"FROM {FUNDING_TABLE} "
+        f"WHERE {' AND '.join(conditions)} "
+        "ORDER BY funding_time"
+    )
+    try:
+        names, rows = engine.query(sql)
+    except Exception:
+        logger.info("Funding-Raten nicht ladbar (%s/%s) — Config-Default genutzt", instrument, venue)
+        return {}
+    index = {name: i for i, name in enumerate(names)}
+    if "funding_time" not in index or "funding_rate" not in index:
+        return {}
+    return {
+        _parse_timestamp(row[index["funding_time"]]): float(row[index["funding_rate"]])
+        for row in rows
+    }
 
 
 def resample_to_5m(candles: list[Candle]) -> list[Candle]:

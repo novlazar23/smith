@@ -155,6 +155,9 @@ class BacktestConfig(BaseModel):
     slippage_rate: float = Field(default=0.0005, ge=0, le=0.1)
     commission_fixed: float = Field(default=0.0, ge=0)
     slippage_bps: float = Field(default=5.0, ge=0, le=1000)
+    # Funding pro 8h-Settlement, signed; positiv = Long zahlt
+    # (Basis-Baseline 0.01%/8h). 0.0 = Funding aus.
+    funding_rate: float = Field(default=0.0001, ge=-0.5, le=0.5)
     max_position_size: float = Field(default=0.25, gt=0, le=1)
     max_total_exposure: float = Field(default=1.0, gt=0, le=1)
     initial_cash_ratio: float = Field(default=0.1, gt=0, le=1)

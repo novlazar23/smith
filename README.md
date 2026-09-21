@@ -71,6 +71,17 @@ Konfidenz-Gate), nur rückwärts auf Kerzen-Historik.
      python -m apps.backfill --months 12
    ```
 
+    Das Subkommando `funding` lädt die Funding-Rate-Historie
+    (Binance-Futures `GET /fundingRate`, 3 Sätze/Tag/Symbol) idempotent in
+    `trading_events.funding_rates` — Default: 6 Assets (BTC/ETH/SOL/BNB/
+    XRP/ADA) seit 2019-01-01 (Vollfenster-Load, Dedup über
+    ReplacingMergeTree):
+
+    ```bash
+    docker compose --profile on-demand run --rm backfill \
+      python -m apps.backfill funding
+    ```
+
 2. **`backtest`** führt die Produktions-Entscheidungslogik auf den
    historischen Kerzen aus — pro Marktregime ein Szenario (`crash-2021-05`,
    `pump-2021-11`, `crash-2022-06`, `range-2022-03`, `full` = gesamte
@@ -86,7 +97,14 @@ Konfidenz-Gate), nur rückwärts auf Kerzen-Historik.
      --gate 0.3 --sweep-gates 0.2,0.3,0.4,0.5,0.6,0.7
    ```
 
-   Der Gate-Sweep rechnet die gecachten Konsens-Entscheidungen des letzten
+    Die Engine bucht Perpetual-Funding bei den 8h-Settlements
+    (00:00/08:00/16:00 UTC) auf offenen Long-Positionen: `--funding-rate`
+    (signed pro 8h; positiv = Long zahlt; Default 0.0001 ≈ 0,01 %/8h;
+    0.0 = aus). Bei ClickHouse-Feeds werden echte Rates aus
+    `funding_rates` automatisch geladen und überschreiben den Default pro
+    Settlement (fehlende Tabelle/Raten → Config-Default).
+
+    Der Gate-Sweep rechnet die gecachten Konsens-Entscheidungen des letzten
    Szenarios pro Gate nach (keine Agenten-Rekomputation) und liefert die
    Kalibrierungstabelle (Return, Sharpe, Max-Drawdown, Win-Rate pro
    Gate) — die Evidenz-Basis dafür, ob das Konfidenz-Gate (Default 0,3)
@@ -795,8 +813,13 @@ on-demand) führt `apps.champion_evals` täglich über BTC+ETH auf einem
 rollierenden 180-Tage-Fenster (5m) aus und schreibt das
 `champion_evals.json`-Artefakt in das Shared-Volume `backtest_reports`.
 Mit `--refresh-data` lädt er vor jedem Lauf `candles_history` idempotent
-nach (Binance-Futures-1m, nur Lücken), damit das Fensterende aktuell ist.
-Der Orchestrator lädt die daraus abgeleiteten Champion/Challenger-
+ nach (Binance-Futures-1m, nur Lücken), damit das Fensterende aktuell ist;
+ daneben lädt er Fail-Soft die Funding-Rate-Historie in `funding_rates`
+ nach (Fehler nur Warning, kein Abbruch). Das OOS-Scoring (Brier/Hit-Rate)
+ bewertet die Prädiktionsqualität der Agenten und ist von Funding
+ unberührt — Funding wirkt nur in den P&L-Pfaden (Backtest-Engine,
+ Demo-Trader). Der Orchestrator lädt die daraus abgeleiteten
+ Champion/Challenger-
 Status-Overrides beim Start und — dank Mtime-Check — bei jedem
 Artefakt-Update im laufenden Zyklus neu (kein Neustart nötig). Manueller
 Einzellauf (z. B. anderes Fenster):
@@ -945,9 +968,15 @@ Credential-Status pro Venue).
   (`DEMO_MAX_DRAWDOWN_PCT`), Volatility-Scaling gegen den ATR(14)-
   Median (`DEMO_VOL_SCALE`), Cost-Margin-Gate 3x Round-Trip-Kosten
   (`DEMO_MIN_MOVE_COST_MULTIPLE`) — `0` bzw. `false` schaltet die
-  Regel aus. Alles sichtbar im Web-Dashboard unter
-  `http://localhost:8080/` (Konto, Positionen, Trades, Entscheidungen,
-  News).
+   Regel aus. Offene Long-Positionen zahlen (bzw. bei negativer Rate
+   erhalten) alle 8 Stunden Funding aus `trading_events.funding_rates`
+   (Catch-Up über übersprungene 00:00/08:00/16:00-UTC-Grenzwerte,
+   Fail-Soft bei fehlender Rate/Tabelle); jedes Settlement wird als
+   `FUNDING`-Zeile in `demo_trades` auditiert, die kumulierte
+   Funding-Zahlung ist deren Summe (keine extra `demo_account`-Spalte).
+   Alles sichtbar im Web-Dashboard unter
+   `http://localhost:8080/` (Konto, Positionen, Trades, Entscheidungen,
+   News).
 - **Zentrale Web-UI**: `http://localhost:8080/` bündelt alle
   Oberflächen als Tabs — Trading (eigenes Dashboard), Monitoring
   (Grafana), Metriken (Prometheus), Alerts (Alertmanager), ML (MLflow)

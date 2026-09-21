@@ -102,6 +102,12 @@ class TestCostConfigRespected:
         result = default_config(strategy, None)
         assert result.commission_rate == 0.001
         assert result.slippage_bps == 5.0
+        assert result.funding_rate == 0.0001
+
+    def test_default_config_inherits_funding_rate(self) -> None:
+        strategy = _strategy_for(make_pipeline_result("LONG_BIAS", 0.9))
+        result = default_config(strategy, BacktestConfig(symbol=BTC, funding_rate=0.0))
+        assert result.funding_rate == 0.0
 
     def test_higher_costs_reduce_equity(self) -> None:
         # Derselbe Uptrend-Run mit 2x Kosten muss messbar weniger Equity
