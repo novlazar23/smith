@@ -47,7 +47,14 @@ from packages.backtesting.core import Candle
 from packages.validation.target_variables import TargetConfig
 
 from .agent_sandbox import build_evolved_agent, load_evolved_agents, smoke_test_predict
-from .score import AgentMetrics, EvalSample, replay_instances, score_window
+from .score import (
+    AgentMetrics,
+    EvalSample,
+    oos_score_vs_random_base,
+    replay_instances,
+    score_window,
+)
+from .sequential_test import daily_lag, holm_reject, one_sided_z_pvalue
 from .trial_ledger import (
     TRIALS_FILENAME_EVOLVED,
     admission_margin,
@@ -251,6 +258,36 @@ def evaluate_evolved_candidates(
         )
     metrics = score_window(samples, calibration_ratio=calibration_ratio) if samples else {}
 
+    # Shadow-Sequenztest (Stufe 2): einseitiger z-Test (Score - Zufalls-
+    # Basis) pro Kandidat + Holm über den Batch — protokolliert parallel
+    # zu den Zulassungs-Gates, entscheidet NICHT (s. sequential_test).
+    # Fail-soft wie die restlichen Schattenpfade.
+    shadow_p: dict[str, float] = {}
+    nw_lag: int | None = None
+    try:
+        for name in candidates:
+            delta_series = oos_score_vs_random_base(samples, name, calibration_ratio=calibration_ratio)
+            if not delta_series:
+                continue
+            if nw_lag is None:
+                nw_lag = daily_lag([ts for ts, _ in delta_series])
+            shadow_p[name] = one_sided_z_pvalue(
+                [d for _, d in delta_series], min_effect=ADMISSION_MARGIN, nw_lag=nw_lag
+            )
+    except Exception:
+        logger.warning("Shadow-Sequenztest (Stufe 2) fehlgeschlagen (Zulassung bleibt unberührt)", exc_info=True)
+        shadow_p = {}
+    shadow_rejected_names = (
+        {name for i, name in enumerate(shadow_p) if i in holm_reject(list(shadow_p.values()))} if shadow_p else set()
+    )
+    if shadow_p:
+        logger.info(
+            "Shadow-Sequenztest (Stufe 2): %d/%d Kandidaten über Holm alpha=0.05 (NW-Lag=%s)",
+            len(shadow_rejected_names),
+            len(shadow_p),
+            nw_lag,
+        )
+
     current: dict[str, tuple[str, str, float]] = {}  # name → (code, claim, score)
 
     for name in previous:
@@ -281,7 +318,15 @@ def evaluate_evolved_candidates(
             logger.info("Kandidat %s abgelehnt: hat nicht in jedem Schritt geliefert", name)
             if summary is not None:
                 summary.append(
-                    {"name": name, "kind": "kandidat", "admitted": False, "score": None, "reasons": ["hat nicht in jedem Schritt geliefert"]}
+                    {
+                        "name": name,
+                        "kind": "kandidat",
+                        "admitted": False,
+                        "score": None,
+                        "reasons": ["hat nicht in jedem Schritt geliefert"],
+                        "shadow_p": shadow_p.get(name),
+                        "shadow_holm_rejected": name in shadow_rejected_names,
+                    }
                 )
             continue
         verdict = judge_candidate(name, agent_metrics, promotion_margin=promotion_margin)
@@ -306,7 +351,15 @@ def evaluate_evolved_candidates(
             )
         if summary is not None:
             summary.append(
-                {"name": name, "kind": "kandidat", "admitted": verdict.admitted, "score": verdict.score, "reasons": list(verdict.reasons)}
+                {
+                    "name": name,
+                    "kind": "kandidat",
+                    "admitted": verdict.admitted,
+                    "score": verdict.score,
+                    "reasons": list(verdict.reasons),
+                    "shadow_p": shadow_p.get(name),
+                    "shadow_holm_rejected": name in shadow_rejected_names,
+                }
             )
 
     if len(current) > max_agents:

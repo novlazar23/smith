@@ -877,6 +877,22 @@ Ohne LLM-Konfiguration läuft
 der Schritt trotzdem (Bestand wird re-geprüft, nur keine neuen
 Vorschläge) — Fail-Soft wie Stufe 1.
 
+**Shadow-Sequenztest (beide Evolutions-Stufen):** Parallel zur
+Trial-Ledger-Hurdle führt jeder Evolutionslauf einen Shadow-Statistik-Test,
+der **nicht** die Selektion/Zulassung entscheidet (die Hurdle bleibt
+maßgeblich), sondern pro Lauf eine JSONL-Zeile mit den rohen
+Signifikanz-Signalen protokolliert — die Evidenz, ob die Hurdle über- oder
+unterkorrigiert. Stufe 1 (`--evolve`): gepaarter einseitiger z-Test pro
+Variante (Kandidat − Champion auf denselben OOS-Samples,
+Newey-West-korrigiert, H₀ Δ ≤ 0,005), Benjamini–Hochberg über den
+Tages-Batch (q = 0,05) → `champion_shadow.jsonl` neben
+`champion_configs.json`. Stufe 2 (`--evolve-agents`): einseitiger
+one-sample-z-Test pro Kandidat (H₀ μ ≤ 0,02 vs. Zufalls-Basis 1/3,
+Newey-West-korrigiert), Holm über die Kandidaten (α = 0,05) → Felder
+`shadow_p`/`shadow_holm_rejected` in `evolved_agents_last_run.json`. Beide
+Stufen Fail-Soft: ein Test- oder Schreibfehler ändert nichts an
+Selektion/Zulassung.
+
 ### Live-Modus (echte Orders, Default: AUS)
 
 Echte Order-Ausführung ist bewusst **nicht** autark: Der Orchestrator und

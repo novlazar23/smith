@@ -231,3 +231,38 @@ class TestEvaluateIntegration:
             series, base, candidates, meta, previous={}, max_agents=3
         )
         assert len(artifact) <= 3
+
+    def test_summary_has_shadow_fields(self) -> None:
+        series = [("BTC/USDT", self._candles())]
+        base = self._instances({"base_a": GOOD_CODE, "base_b": UNIFORM_CODE})
+        candidates = self._instances({"uniform_candidate": UNIFORM_CODE})
+        summary: list = []
+        evaluate_evolved_candidates(
+            series,
+            base,
+            candidates,
+            {"uniform_candidate": (UNIFORM_CODE, "uniform claim")},
+            previous={},
+            summary=summary,
+        )
+        by_name = {entry["name"]: entry for entry in summary}
+        uniform = by_name["uniform_candidate"]
+        assert uniform["shadow_p"] == 1.0
+        assert uniform["shadow_holm_rejected"] is False
+
+    def test_shadow_p_non_degenerate_path(self) -> None:
+        series = [("BTC/USDT", self._candles())]
+        base = self._instances({"base_a": GOOD_CODE, "base_b": UNIFORM_CODE})
+        candidates = self._instances({"good_candidate": GOOD_CODE})
+        summary: list = []
+        evaluate_evolved_candidates(
+            series,
+            base,
+            candidates,
+            {"good_candidate": (GOOD_CODE, "good claim")},
+            previous={},
+            summary=summary,
+        )
+        entry = next(e for e in summary if e["name"] == "good_candidate")
+        assert 0.0 <= entry["shadow_p"] <= 1.0
+        assert isinstance(entry["shadow_holm_rejected"], bool)

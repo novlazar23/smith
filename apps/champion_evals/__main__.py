@@ -398,6 +398,8 @@ def _run_evolve(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]
     ``--min-samples``-Filter) plus ``champion_configs.json`` (Parametersatz
     des Gewinners, atomar, versioned) — die Persistenz der Selektion.
     """
+    from typing import Any
+
     from apps.champion_evals.agent_params import AGENT_TYPES, build_agent, default_params
     from apps.champion_evals.evolve import (
         PROMOTION_MARGIN,
@@ -410,9 +412,17 @@ def _run_evolve(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]
     from apps.champion_evals.score import (
         AgentMetrics,
         EvalSample,
+        oos_score_deltas,
         replay_instances,
         score_window,
         write_artifact,
+    )
+    from apps.champion_evals.sequential_test import (
+        SHADOW_LOG_FILENAME,
+        append_jsonl,
+        bh_reject,
+        daily_lag,
+        one_sided_z_pvalue,
     )
     from apps.champion_evals.trial_ledger import (
         TRIALS_FILENAME_CHAMPION,
@@ -446,6 +456,11 @@ def _run_evolve(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]
 
     scored: dict[str, AgentMetrics] = {}
     current: dict[str, tuple[dict[str, float | int], float]] = {}
+    # Shadow-Sequenztest (Stufe 1): protokolliert parallel zur Trial-
+    # Ledger-Hurdle, entscheidet NICHT (s. sequential_test). Fail-soft.
+    shadow_families: list[dict[str, Any]] = []
+    shadow_flat: list[tuple[dict[str, Any], float]] = []
+    nw_lag: int | None = None
     for agent_id in AGENT_TYPES:
         champion_params = default_params(agent_id)
         previous = previous_configs.get(agent_id)
@@ -475,6 +490,31 @@ def _run_evolve(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]
                 )
             )
         metrics = score_window(family_samples, calibration_ratio=args.calibration_ratio)
+        family_shadow: dict[str, Any] = {"family": agent_id, "variants": []}
+        shadow_families.append(family_shadow)
+        try:
+            variant_series = {
+                vid: oos_score_deltas(family_samples, vid, agent_id, calibration_ratio=args.calibration_ratio)
+                for vid in metrics
+                if vid != agent_id
+            }
+            if nw_lag is None:
+                for delta_series in variant_series.values():
+                    if delta_series:
+                        nw_lag = daily_lag([ts for ts, _ in delta_series])
+                        break
+            for vid in sorted(variant_series):
+                diffs = [d for _, d in variant_series[vid]]
+                family_entry: dict[str, Any] = {
+                    "variant": vid,
+                    "n": len(diffs),
+                    "mean_diff": sum(diffs) / len(diffs) if diffs else None,
+                    "p": one_sided_z_pvalue(diffs, min_effect=PROMOTION_MARGIN, nw_lag=nw_lag or 0),
+                }
+                family_shadow["variants"].append(family_entry)
+                shadow_flat.append((family_entry, family_entry["p"]))
+        except Exception:
+            logger.warning("Shadow-Sequenztest Familie %s fehlgeschlagen (Selektion bleibt unberührt)", agent_id, exc_info=True)
         champion_metrics = metrics.get(agent_id)
         if champion_metrics is None:
             # Fail-Closed: Champion lieferte nicht in jedem Schritt (z. B.
@@ -493,6 +533,37 @@ def _run_evolve(args: argparse.Namespace, series: list[tuple[str, list[Candle]]]
 
     record_trial_count(trial_path, trials_before + batch)
     print(f"Trial-Count: {trials_before} → {trials_before + batch}, effective margin {effective_margin:.4f}")
+
+    # BH über den kompletten Tages-Batch (alle Familien x Varianten) +
+    # JSONL-Zeile — Fail-soft, wie der Familien-Block oben.
+    try:
+        n_shadow_rejected = 0
+        if shadow_flat:
+            rejected = bh_reject([p for _, p in shadow_flat])
+            for idx, (entry, _p) in enumerate(shadow_flat):
+                entry["bh_rejected"] = idx in rejected
+            n_shadow_rejected = len(rejected)
+        append_jsonl(
+            config_path.with_name(SHADOW_LOG_FILENAME),
+            {
+                "run_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                "test": "gepaarter_z_nw_bh",
+                "min_effect": PROMOTION_MARGIN,
+                "q": 0.05,
+                "nw_lag": nw_lag,
+                "n_candidates": len(shadow_flat),
+                "n_bh_rejected": n_shadow_rejected,
+                "families": shadow_families,
+            },
+        )
+        logger.info(
+            "Shadow-Sequenztest (Stufe 1): %d/%d Varianten über BH q=0.05 (NW-Lag=%s)",
+            n_shadow_rejected,
+            len(shadow_flat),
+            nw_lag,
+        )
+    except Exception:
+        logger.warning("Shadow-Log-Write fehlgeschlagen (Selektion bleibt unberührt)", exc_info=True)
 
     if not scored:
         logger.error("Kein Agent erfüllt --min-samples=%d (Fenster zu klein?)", args.min_samples)

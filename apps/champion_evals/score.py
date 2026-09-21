@@ -97,6 +97,64 @@ def _score(brier: float) -> float:
     return 1.0 - brier
 
 
+def _brier_single(pred: Mapping[str, float], actual: str) -> float:
+    """3-Klassen-Brier einer einzelnen Prädiktion (tiefer = besser)."""
+    return sum((float(pred.get(cls, 0.0)) - (1.0 if actual == cls else 0.0)) ** 2 for cls in _CLASSES)
+
+
+def _oos_samples(samples: Sequence[EvalSample], calibration_ratio: float = 0.5) -> list[EvalSample]:
+    """Das OOS-Fenster — exakt derselbe temporale Split wie ``score_window``."""
+    usable = sorted((s for s in samples if s.per_agent_probs), key=lambda s: s.as_of)
+    if len(usable) < 2:
+        return []
+    split = max(1, min(len(usable) - 1, int(len(usable) * calibration_ratio)))
+    return list(usable[split:])
+
+
+def oos_score_deltas(
+    samples: Sequence[EvalSample],
+    candidate: str,
+    champion: str,
+    *,
+    calibration_ratio: float = 0.5,
+) -> list[tuple[datetime, float]]:
+    """Pro-OOS-Sample-Score-Differenz (Kandidat - Champion) auf denselben Samples.
+
+    Score = 1 - Brier -> Differenz = Brier_Champion - Brier_Kandidat
+    (positiv = Kandidat besser). Nur Samples, in denen BEIDE liefern —
+    der gepaarte Test (``sequential_test``) braucht identische Stichproben.
+    """
+    deltas: list[tuple[datetime, float]] = []
+    for s in _oos_samples(samples, calibration_ratio):
+        cand = s.per_agent_probs.get(candidate)
+        champ = s.per_agent_probs.get(champion)
+        if cand is None or champ is None:
+            continue
+        deltas.append((s.as_of, _brier_single(champ, s.actual) - _brier_single(cand, s.actual)))
+    return deltas
+
+
+def oos_score_vs_random_base(
+    samples: Sequence[EvalSample],
+    agent: str,
+    *,
+    calibration_ratio: float = 0.5,
+) -> list[tuple[datetime, float]]:
+    """Pro-OOS-Sample-Differenz (Score_Agent - Zufalls-Basis) für einen Agenten.
+
+    Der uniforme 3-Klassen-Prädiktor hat Brier = 2/3 exakt (unabhängig
+    vom Outcome) -> Differenz = 2/3 - Brier_Agent (positiv = besser als
+    Zufall). Für die Stufe-2-Zulassungs-Shadow-Prüfung (``sequential_test``).
+    """
+    deltas: list[tuple[datetime, float]] = []
+    for s in _oos_samples(samples, calibration_ratio):
+        pred = s.per_agent_probs.get(agent)
+        if pred is None:
+            continue
+        deltas.append((s.as_of, 2.0 / 3.0 - _brier_single(pred, s.actual)))
+    return deltas
+
+
 def score_window(samples: Sequence[EvalSample], calibration_ratio: float = 0.5) -> dict[str, AgentMetrics]:
     """SPLITTET die Zeitachse temporal und bewertet pro Agent.
 
