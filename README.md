@@ -821,9 +821,11 @@ erste Szenario) mit drei komplementären Overfitting-Maßen:
   Trainings-Bars, deren Positionshorizont einen Test-Block
   berühren würde, werden entfernt. Pro Fold laufen IS-Run
   (Train-Slice) und OOS-Run (Test-Slice) mit frischen
-  Strategie-Instanzen; je Fold IS/OOS-Sharpe (per-Bar), Return,
-  Trades, Final-Equity und die genauen Indizes; zu kurze Slices
-  werden übersprungen und protokolliert.
+   Strategie-Instanzen; je Fold IS/OOS-Sharpe (per-Bar), Return,
+   Trades, Final-Equity und die genauen Indizes (verlustfrei
+   komprimiert als ``[start, stop)``-Intervalle, da CPCV-Folds
+   Unionen zusammenhängender Blöcke sind); zu kurze Slices werden
+   übersprungen und protokolliert.
 - **PBO** (Probability of Backtest Overfitting, Bailey et al. 2017,
   J. Comput. Finance): Anteil der CSCV-Kombinationen (S = 16 Splits,
   C(S,S/2) Kombinationen), in der die in-samplebeste Strategie

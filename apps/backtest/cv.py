@@ -81,6 +81,24 @@ def equity_returns(result: BacktestResult) -> list[tuple[datetime, float]]:
     return returns
 
 
+def _compress_indices(indices: Sequence[int] | np.ndarray) -> list[list[int]]:
+    """Komprimiert Indizes in eine Liste von ``[start, stop)``-Intervallen.
+
+    CPCV-Folds sind Unionen zusammenhängender Blöcke (bis zu ``n_splits``
+    Blöcke, am Rand ggf. durch Purge/Embargo gekürzt). Die
+    Intervall-Darstellung ist verlustfrei und um Größenordnungen kleiner
+    als die Roh-Indexliste — ein Fold mit ~550k Bars wird zu wenigen
+    Intervallen statt zu einer 550k-Eintrag-JSON-Liste.
+    """
+    out: list[list[int]] = []
+    for i in sorted(int(x) for x in indices):
+        if out and i == out[-1][1]:
+            out[-1][1] = i + 1
+        else:
+            out.append([i, i + 1])
+    return out
+
+
 def _per_bar_sharpe(returns: np.ndarray) -> float:
     """Per-Bar-Sharpe (mean/std, ddof=1), nicht annualisiert; degeneriert → 0.0."""
     if returns.size < 2:
@@ -129,7 +147,8 @@ def run_cpcv(
         Fold-Index, Slice-Größen, IS/OOS-Metriken (``sharpe_ratio``/
         ``total_return_pct``/``total_trades`` aus ``result.metrics``,
         ``final_equity`` aus ``result.metadata``) sowie die
-        Trainings-/Test-Indizes (Positionen in ``candles``).
+        Trainings-/Test-Indizes (Positionen in ``candles``) als
+        verlustfrei komprimierte ``[start, stop)``-Intervalle.
     """
     times = pd.DatetimeIndex([c.timestamp for c in candles])
     hold_bars = (config.max_holding_bars if config is not None else None) or DEFAULT_HOLDING_BARS
@@ -175,8 +194,8 @@ def run_cpcv(
                 "oos_total_return_pct": oos_result.metrics.get("total_return_pct"),
                 "oos_total_trades": oos_result.metrics.get("total_trades"),
                 "oos_final_equity": oos_result.metadata.get("final_equity"),
-                "train_indices": [int(i) for i in train_idx],
-                "test_indices": [int(i) for i in test_idx],
+                "train_indices": _compress_indices(train_idx),
+                "test_indices": _compress_indices(test_idx),
             }
         )
         logger.info(

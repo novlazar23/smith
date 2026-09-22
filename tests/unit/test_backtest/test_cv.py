@@ -12,7 +12,7 @@ from datetime import timedelta
 import numpy as np
 import pytest
 from apps.backtest import __main__ as cli
-from apps.backtest.cv import equity_returns, run_cpcv, run_dsr, run_pbo
+from apps.backtest.cv import _compress_indices, equity_returns, run_cpcv, run_dsr, run_pbo
 from packages.backtesting.core import BacktestConfig, BacktestResult, Candle
 from packages.backtesting.strategies import BaseStrategy, SignalAction, StrategySignal
 from tests.unit.test_backtest.conftest import BTC, make_candles
@@ -71,6 +71,14 @@ def _test_blocks(indices: list[int]) -> list[list[int]]:
     return blocks
 
 
+def _decompress(intervals: list[list[int]]) -> list[int]:
+    """Entpackt ``[start, stop)``-Intervalle zu einer flachen Indexliste."""
+    out: list[int] = []
+    for start, stop in intervals:
+        out.extend(range(start, stop))
+    return out
+
+
 # ── equity_returns ──────────────────────────────────────────────────────────
 
 
@@ -122,6 +130,26 @@ def test_equity_returns_skips_bars_beyond_candles() -> None:
     assert out[2][1] == pytest.approx(10.0 / 120.0)
 
 
+# ── _compress_indices ───────────────────────────────────────────────────────
+
+
+def test_compress_indices_roundtrip_sorted() -> None:
+    idx = list(range(50)) + list(range(100, 150))
+    assert _compress_indices(idx) == [[0, 50], [100, 150]]
+    assert _decompress(_compress_indices(idx)) == idx
+
+
+def test_compress_indices_roundtrip_unsorted() -> None:
+    idx = [3, 0, 1, 9, 7, 2, 8, 4, 5, 6]
+    assert _decompress(_compress_indices(idx)) == sorted(idx)
+    assert _compress_indices(idx) == [[0, 10]]
+
+
+def test_compress_indices_single_and_empty() -> None:
+    assert _compress_indices([7]) == [[7, 8]]
+    assert _compress_indices([]) == []
+
+
 # ── run_cpcv ────────────────────────────────────────────────────────────────
 
 
@@ -138,8 +166,8 @@ def test_run_cpcv_folds_disjoint_and_purged() -> None:
     times = [c.timestamp for c in candles]
     horizon = timedelta(minutes=12)
     for fold in out["folds"]:
-        train = set(fold["train_indices"])
-        test = fold["test_indices"]
+        train = set(_decompress(fold["train_indices"]))
+        test = _decompress(fold["test_indices"])
         assert not train & set(test)
         assert fold["n_train"] == len(train)
         assert fold["n_test"] == len(test)
