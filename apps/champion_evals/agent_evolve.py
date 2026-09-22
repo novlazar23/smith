@@ -63,6 +63,14 @@ from .score import (
     score_window,
 )
 from .sequential_test import daily_lag, holm_reject, one_sided_z_pvalue
+from .shadow_tracker import (
+    PROMOTION_MIN_PASSES,
+    SHADOW_FILENAME,
+    load_shadow_state,
+    promotion_status,
+    update_shadow_state,
+    write_shadow_state,
+)
 from .trial_ledger import (
     TRIALS_FILENAME_EVOLVED,
     admission_margin,
@@ -631,6 +639,29 @@ def run_agent_evolution(
         summary=summary,
     )
     run_at = datetime.now(UTC).isoformat(timespec="seconds")
+    # Shadow-Survival-Tracker: zählt die durchgehenden Re-Checks der
+    # Überlebenden (Promotions-Kriterium 1) + Score-History (Kriterium 2).
+    # Fail-Soft wie das Kandidaten-Archiv — kein Einfluss auf Zulassung.
+    shadow_path = agents_path.with_name(SHADOW_FILENAME)
+    shadow_state: dict[str, dict[str, Any]] = {}
+    try:
+        shadow_state = update_shadow_state(
+            load_shadow_state(shadow_path), artifact, previous, run_at
+        )
+        write_shadow_state(shadow_path, shadow_state)
+        ready = sorted(n for n, s in promotion_status(shadow_state).items() if s["ready"])
+        if ready:
+            logger.info(
+                "Shadow-Promotions-kandidaten (>= %d durchgehende Re-Checks): %s",
+                PROMOTION_MIN_PASSES,
+                ", ".join(ready),
+            )
+    except Exception:
+        logger.warning(
+            "Shadow-Tracker %s fehlgeschlagen — ohne Auswirkung auf Zulassung",
+            SHADOW_FILENAME,
+            exc_info=True,
+        )
     # Kandidaten-Archiv: eine Zeile pro geprüftem Kandidat dieser Runde —
     # nur neue Kandidaten (kind="kandidat"); Bestand-Re-Checks
     # (kind="bestand") sind keine neuen Enden und bleiben im
@@ -675,6 +706,7 @@ def run_agent_evolution(
             "trials": trials_before + len(candidates),
             "effective_margin": effective_margin,
             "candidates": summary,
+            "shadow": promotion_status(shadow_state),
         },
     )
     print(f"Evolved Agents: {len(artifact)} zugelassen ({', '.join(sorted(artifact)) or '—'}) → {path}")

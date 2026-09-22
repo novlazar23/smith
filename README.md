@@ -965,8 +965,23 @@ gezielte Code-Änderung: `apps/orchestrator_service/service.py` hängt
 Evolved Agents in `build_ensemble` heute fest als `AgentStatus.SHADOW`
 an (pro-Agenten-Status im Artefakt erlauben), dann Build + Deploy.
 Ohne LLM-Konfiguration läuft
-der Schritt trotzdem (Bestand wird re-geprüft, nur keine neuen
+der Schritt trotzdem (Bestand wird re-geprüft, nur keine neue
 Vorschläge) — Fail-Soft wie Stufe 1.
+
+**Shadow-Survival-Tracker (Promotions-Kriterien 1+2):** Jeder
+`--evolve-agents`-Lauf aktualisiert das Sidecar
+`evolved_agents_shadow.json` (neben `evolved_agents.json` auf dem
+Shared-Volume): pro zugelassenem Agent `consecutive_passes` (Anzahl
+der durchgehenden täglichen Re-Checks) und die OOS-Score-History der
+letzten 30 Beobachtungsläufe. Neu zugelassene Agenten starten bei 0;
+ein entfernter oder Code-geänderter Agent fällt aus dem Tracker. Ab
+14 durchgehenden Re-Checks (Kriterium 1) meldet der Lauf den Agenten
+als Promotions-Kandidaten im Log und trägt `ready: true` im Feld
+`shadow` von `evolved_agents_last_run.json` ein; die Score-History
+(Spread, Min, Max) ist die Grundlage für den manuellen
+Stabilitäts-Review (Kriterium 2). Der Tracker ist rein protokollierend
+— kein Einfluss auf Zulassung, Selektion oder Promotion (Fail-Soft,
+wie das Kandidaten-Archiv).
 
 **Shadow-Sequenztest (beide Evolutions-Stufen):** Parallel zur
 Trial-Ledger-Hurdle führt jeder Evolutionslauf einen Shadow-Statistik-Test,
