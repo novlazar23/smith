@@ -47,6 +47,14 @@ from packages.backtesting.core import Candle
 from packages.validation.target_variables import TargetConfig
 
 from .agent_sandbox import build_evolved_agent, load_evolved_agents, smoke_test_predict
+from .candidate_archive import (
+    ARCHIVE_FILENAME,
+    code_hash,
+    format_archive_digest,
+    known_code_hashes,
+    recent_rejections,
+    record_candidates,
+)
 from .score import (
     AgentMetrics,
     EvalSample,
@@ -528,6 +536,11 @@ def run_agent_evolution(
     trial_path = agents_path.with_name(TRIALS_FILENAME_EVOLVED)
     trials_before = load_trial_count(trial_path)
 
+    # Kandidaten-Archiv: Code-Hash-Dedup (kein Retesting toter Enden)
+    # + Gate-Reflexion im Persona-Prompt (siehe candidate_archive).
+    archive_path = agents_path.with_name(ARCHIVE_FILENAME)
+    known = known_code_hashes(archive_path)
+
     base_instances = _base_ensemble(args)
     target = TargetConfig(
         up_threshold=args.up_threshold,
@@ -556,7 +569,16 @@ def run_agent_evolution(
 
             digest = build_digest(load_eval_artifact(args.output), previous)
             taken = tuple(AGENT_TYPES) + tuple(previous) + tuple(p["name"] for p in proposals)
-            proposals.extend(propose(llm_client, digest, taken, max_candidates=args.evolve_agents))
+            proposals.extend(
+                propose(
+                    llm_client,
+                    digest,
+                    taken,
+                    max_candidates=args.evolve_agents,
+                    archive_digest=format_archive_digest(recent_rejections(archive_path)),
+                )
+            )
+    proposal_by_name: dict[str, Mapping[str, str]] = {}
     if proposals:
         seen: set[str] = set()
         unique: list[Mapping[str, str]] = []
@@ -566,8 +588,22 @@ def run_agent_evolution(
                 continue
             seen.add(proposal["name"])
             unique.append(proposal)
+        # Archiv-Dedup: identischer Code (LLM oder --candidate-file)
+        # wurde bereits evaluiert — kein zweiter Test desselben Endes.
+        fresh: list[Mapping[str, str]] = []
+        for proposal in unique:
+            hash_ = code_hash(proposal["code"])
+            if hash_ in known:
+                logger.warning(
+                    "Kandidat %s bereits im Archiv (Code-Hash %s) — Retesting übersprungen",
+                    proposal["name"],
+                    hash_[:12],
+                )
+                continue
+            fresh.append(proposal)
+        proposal_by_name = {proposal["name"]: proposal for proposal in fresh}
         instances, code_by_name, claim_by_name = prepare_candidates(
-            unique,
+            fresh,
             instrument=series[0][0] if series else "",
             horizon=args.horizon,
             summary=summary,
@@ -594,12 +630,48 @@ def run_agent_evolution(
         promotion_margin=effective_margin,
         summary=summary,
     )
+    run_at = datetime.now(UTC).isoformat(timespec="seconds")
+    # Kandidaten-Archiv: eine Zeile pro geprüftem Kandidat dieser Runde —
+    # nur neue Kandidaten (kind="kandidat"); Bestand-Re-Checks
+    # (kind="bestand") sind keine neuen Enden und bleiben im
+    # Letzter-Lauf-Artefakt. Fail-soft wie das Stufe-1-Shadow-Log.
+    archive_entries: list[dict[str, Any]] = []
+    for entry in summary:
+        if entry["kind"] != "kandidat":
+            continue
+        proposal = proposal_by_name.get(entry["name"])
+        score = entry.get("score")
+        archive_entries.append(
+            {
+                "run_at": run_at,
+                "name": entry["name"],
+                "persona": proposal.get("persona") if proposal is not None else None,
+                "claim": proposal.get("claim", "") if proposal is not None else "",
+                "code_hash": code_hash(proposal["code"]) if proposal is not None else "",
+                "admitted": entry["admitted"],
+                "score": score,
+                "oos_brier": None if score is None else 1.0 - float(score),
+                "reasons": list(entry["reasons"]),
+                "shadow_p": entry.get("shadow_p"),
+                "shadow_holm_rejected": entry.get("shadow_holm_rejected", False),
+                "effective_margin": effective_margin,
+            }
+        )
+    if archive_entries:
+        try:
+            record_candidates(archive_path, archive_entries)
+        except Exception:
+            logger.warning(
+                "Kandidaten-Archiv %s nicht schreibbar — Einträge dieses Laufs verworfen",
+                archive_path.name,
+                exc_info=True,
+            )
     path = write_json_atomic(agents_path, artifact)
     record_trial_count(trial_path, trials_before + len(candidates))
     write_json_atomic(
         agents_path.with_name(EVOLVED_AGENTS_LAST_RUN_FILENAME),
         {
-            "run_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "run_at": run_at,
             "trials": trials_before + len(candidates),
             "effective_margin": effective_margin,
             "candidates": summary,

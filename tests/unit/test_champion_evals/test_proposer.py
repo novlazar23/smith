@@ -239,3 +239,47 @@ class TestCritiqueRound:
         proposals = propose(client, "Digest", (), max_candidates=3)
         assert proposals[0]["code"] == VALID_PROPOSAL["code"]
         assert len(client.calls) == len(PERSONAS) + 1
+
+
+class TestPersonaAttribution:
+    def test_proposals_carry_persona(self) -> None:
+        client = FakeClient(_round1_answers())
+        proposals = propose(client, "Digest", (), max_candidates=3)
+        assert len(proposals) == 1
+        assert proposals[0]["persona"] == PERSONAS[-1][0]
+
+    def test_persona_survives_refine_round(self) -> None:
+        answers = [*_round1_answers(), SKEPTIC_CRITIQUE, _answer([dict(VALID_PROPOSAL, code=REVISED_CODE)])]
+        client = FakeClient(answers)
+        proposals = propose(client, "Digest", (), max_candidates=3)
+        assert proposals[0]["code"] == REVISED_CODE
+        assert proposals[0]["persona"] == PERSONAS[-1][0]
+
+
+class TestArchiveDigestPrompt:
+    def test_default_prompt_unchanged_without_archive_digest(self) -> None:
+        plain = build_messages("Digest", ("trend",), 3)
+        assert plain == build_messages("Digest", ("trend",), 3, archive_digest="")
+        assert "Archiv" not in plain[1]["content"]
+
+    def test_archive_section_between_sperrliste_and_evidenz(self) -> None:
+        messages = build_messages(
+            "Digest",
+            ("trend",),
+            3,
+            role="trend",
+            archive_digest="- agent_a (trend, 2026-09-21): Score 0.3500, Gate: OOS-Score, Code abcdef123456",
+        )
+        user = messages[1]["content"]
+        assert "Bekannte frühere Kandidaten aus dem Archiv (Gate-Reflexion)" in user
+        assert "abcdef123456" in user
+        assert (
+            user.index("Besetzte Namen")
+            < user.index("Bekannte frühere Kandidaten")
+            < user.index("Evidenz-Digest")
+        )
+
+    def test_propose_forwards_archive_digest_to_round1(self) -> None:
+        client = FakeClient(["[]"] * len(PERSONAS))
+        propose(client, "Digest", (), max_candidates=3, archive_digest="- alt (trend, 2026-09-21): Score n/a")
+        assert all("Gate-Reflexion" in call[1]["content"] for call in client.calls[: len(PERSONAS)])

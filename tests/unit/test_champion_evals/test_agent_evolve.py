@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
 from apps.champion_evals.agent_evolve import (
     ADMISSION_MARGIN,
+    EVOLVED_AGENTS_LAST_RUN_FILENAME,
     RANDOM_BASELINE_SCORE,
     build_agents_artifact,
     build_digest,
@@ -17,8 +20,17 @@ from apps.champion_evals.agent_evolve import (
     judge_candidate,
     judge_retention,
     load_eval_artifact,
+    run_agent_evolution,
 )
 from apps.champion_evals.agent_sandbox import build_evolved_agent
+from apps.champion_evals.candidate_archive import (
+    ARCHIVE_FILENAME,
+    code_hash,
+    known_code_hashes,
+    load_archive,
+    record_candidates,
+)
+from apps.champion_evals.proposer import PERSONAS
 from apps.champion_evals.score import AgentMetrics
 from packages.backtesting.core import Candle
 from packages.schemas.agent_report import AgentStatus
@@ -266,3 +278,153 @@ class TestEvaluateIntegration:
         entry = next(e for e in summary if e["name"] == "good_candidate")
         assert 0.0 <= entry["shadow_p"] <= 1.0
         assert isinstance(entry["shadow_holm_rejected"], bool)
+
+
+# LLM-Vorschlags-Code (≥ 100 Zeichen für die Proposer-Validierung;
+# uniform → deterministisch abgelehnt, Jail-passend).
+UNIFORM_LLM_CODE = """def predict(open, high, low, close, volume, timestamps):
+    # Konstant uniforme Wahrscheinlichkeiten: triviale Logik ohne
+    # Kursrichtung — deterministischer Testkandidat für die Gates.
+    return (1.0, 1.0, 1.0)
+"""
+UNIFORM_LLM_CLAIM = "Konstant uniform ohne Information (Testkandidat)."
+
+
+class _StubLLMClient:
+    """LLM-Client-Doppel: jeder Aufruf liefert dieselbe Antwort."""
+
+    def __init__(self, answer: str) -> None:
+        self.answer = answer
+        self.timeout = 60.0
+
+    def complete(self, messages: list[dict[str, str]], *, temperature: float = 0.0) -> str:
+        return self.answer
+
+
+def _stage2_args(tmp_path: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        output=str(tmp_path / "champion_evals.json"),
+        agents_output=str(tmp_path / "evolved_agents.json"),
+        configs_output=str(tmp_path / "champion_configs.json"),
+        horizon="15m",
+        up_threshold=0.01,
+        down_threshold=-0.01,
+        candle_limit=200,
+        min_candles=30,
+        evaluate_every=5,
+        horizon_bars=3,
+        calibration_ratio=0.5,
+        max_evolved=3,
+        evolve_agents=2,
+        candidate_file=None,
+        candidate_name=None,
+        candidate_claim=None,
+        llm_model=None,
+    )
+
+
+def _llm_answer() -> str:
+    return json.dumps(
+        [{"name": "uniform_candidate", "claim": UNIFORM_LLM_CLAIM, "code": UNIFORM_LLM_CODE}]
+    )
+
+
+class TestRunAgentEvolutionArchive:
+    """Kandidaten-Archiv im kompletten Lauf: Code-Hash-Dedup + Einträge."""
+
+    def test_archived_code_is_not_retested(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        args = _stage2_args(tmp_path)
+        # Archiv enthält denselben Code bereits (unter anderem Namen).
+        record_candidates(
+            tmp_path / ARCHIVE_FILENAME,
+            [
+                {
+                    "run_at": "2026-09-21T04:00:00",
+                    "name": "old_name_same_code",
+                    "persona": "trend",
+                    "claim": UNIFORM_LLM_CLAIM,
+                    "code_hash": code_hash(UNIFORM_LLM_CODE),
+                    "admitted": False,
+                    "score": 1.0 / 3.0,
+                    "oos_brier": 2.0 / 3.0,
+                    "reasons": ["OOS-Score unter der Hurdle"],
+                    "shadow_p": 1.0,
+                    "shadow_holm_rejected": False,
+                    "effective_margin": ADMISSION_MARGIN,
+                }
+            ],
+        )
+        client = _StubLLMClient(_llm_answer())
+        rc = run_agent_evolution(
+            args=args,
+            series=[("BTC/USDT", TestEvaluateIntegration._candles())],
+            llm_client_factory=lambda: client,
+        )
+        assert rc == 0
+        last_run = json.loads((tmp_path / EVOLVED_AGENTS_LAST_RUN_FILENAME).read_text(encoding="utf-8"))
+        assert last_run["candidates"] == []
+        assert [entry["name"] for entry in load_archive(tmp_path / ARCHIVE_FILENAME)] == ["old_name_same_code"]
+        assert any("bereits im Archiv" in record.message for record in caplog.records)
+
+    def test_candidate_file_archived_code_is_not_retested(self, tmp_path: Path) -> None:
+        args = _stage2_args(tmp_path)
+        args.evolve_agents = 0
+        code_file = tmp_path / "uniform_candidate.py"
+        code_file.write_text(UNIFORM_LLM_CODE, encoding="utf-8")
+        args.candidate_file = str(code_file)
+        args.candidate_name = "uniform_candidate"
+        args.candidate_claim = UNIFORM_LLM_CLAIM
+        record_candidates(
+            tmp_path / ARCHIVE_FILENAME,
+            [{"name": "old", "code_hash": code_hash(UNIFORM_LLM_CODE), "admitted": False}],
+        )
+        rc = run_agent_evolution(args=args, series=[("BTC/USDT", TestEvaluateIntegration._candles())])
+        assert rc == 0
+        last_run = json.loads((tmp_path / EVOLVED_AGENTS_LAST_RUN_FILENAME).read_text(encoding="utf-8"))
+        assert last_run["candidates"] == []
+
+    def test_evaluated_candidate_is_archived(self, tmp_path: Path) -> None:
+        args = _stage2_args(tmp_path)
+        client = _StubLLMClient(_llm_answer())
+        rc = run_agent_evolution(
+            args=args,
+            series=[("BTC/USDT", TestEvaluateIntegration._candles())],
+            llm_client_factory=lambda: client,
+        )
+        assert rc == 0
+        entries = load_archive(tmp_path / ARCHIVE_FILENAME)
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["name"] == "uniform_candidate"
+        assert entry["persona"] == PERSONAS[0][0]
+        assert entry["claim"] == UNIFORM_LLM_CLAIM
+        assert entry["code_hash"] == code_hash(UNIFORM_LLM_CODE)
+        assert entry["admitted"] is False
+        assert entry["score"] is not None
+        assert entry["oos_brier"] == pytest.approx(1.0 - entry["score"])
+        assert entry["reasons"]
+        assert entry["shadow_p"] is not None
+        assert isinstance(entry["shadow_holm_rejected"], bool)
+        assert entry["effective_margin"] >= ADMISSION_MARGIN
+        # run_at identisch mit dem Letzter-Lauf-Artefakt; Code im Hash-Satz.
+        last_run = json.loads((tmp_path / EVOLVED_AGENTS_LAST_RUN_FILENAME).read_text(encoding="utf-8"))
+        assert entry["run_at"] == last_run["run_at"]
+        assert code_hash(UNIFORM_LLM_CODE) in known_code_hashes(tmp_path / ARCHIVE_FILENAME)
+
+    def test_candidate_file_archived_with_none_persona(self, tmp_path: Path) -> None:
+        args = _stage2_args(tmp_path)
+        args.evolve_agents = 0
+        code_file = tmp_path / "uniform_candidate.py"
+        code_file.write_text(UNIFORM_LLM_CODE, encoding="utf-8")
+        args.candidate_file = str(code_file)
+        args.candidate_name = "uniform_candidate"
+        args.candidate_claim = UNIFORM_LLM_CLAIM
+        rc = run_agent_evolution(args=args, series=[("BTC/USDT", TestEvaluateIntegration._candles())])
+        assert rc == 0
+        entries = load_archive(tmp_path / ARCHIVE_FILENAME)
+        assert len(entries) == 1
+        assert entries[0]["name"] == "uniform_candidate"
+        assert entries[0]["persona"] is None
+        assert entries[0]["admitted"] is False

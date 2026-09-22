@@ -982,6 +982,21 @@ Newey-West-korrigiert), Holm über die Kandidaten (α = 0,05) → Felder
 Stufen Fail-Soft: ein Test- oder Schreibfehler ändert nichts an
 Selektion/Zulassung.
 
+**Kandidaten-Archiv (Gate-Reflexion, Stufe 2):** Jeder `--evolve-agents`-
+Lauf schreibt pro geprüftem Kandidaten eine JSONL-Zeile nach
+`evolved_agents_archive.jsonl` (neben `evolved_agents.json` auf dem
+Shared-Volume `backtest_reports`, append-only): Name, Persona, Claim,
+Code-Hash (SHA-256), Score/OOS-Brier, Gate-Reasons, Shadow-p und die
+effektive Hurdle-Margin. Zwei Effekte: (1) Kandidaten mit identischem
+Code-Hash (LLM-Vorschlag oder `--candidate-file`) werden nicht erneut
+evaluiert — Schutz vor Retesting toter Enden; (2) die 15 jüngsten
+Ablehnungen stehen den 6 Personas im Proposal-Prompt als Gate-Reflexion
+zur Verfügung (Near-Misses sollen gezielt repariert, nicht neu
+gewürfelt werden). Lesen ist Fail-Soft (korrupte Zeilen werden
+übersprungen). Das Muster spiegelt das graveyard von `apps/evolution`
+(append-only JSONL, Dedup gegen tote Varianten) — eigenständige Datei,
+keine gemeinsame Pipeline.
+
 ### Live-Modus (echte Orders, Default: AUS)
 
 Echte Order-Ausführung ist bewusst **nicht** autark: Der Orchestrator und

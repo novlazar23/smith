@@ -188,17 +188,29 @@ def build_messages(
     max_candidates: int,
     *,
     role: str | None = None,
+    archive_digest: str = "",
 ) -> list[dict[str, str]]:
     """System- und User-Nachricht für den Vorschlags-Aufruf.
 
     Mit ``role`` (einer Persona-ID aus ``PERSONAS``) erhält der Aufruf
     den Persona-Prompt; ohne bleibt der Legacy-Diskussions-Prompt.
+    Nicht-leeres ``archive_digest`` (Gate-Reflexion aus dem
+    Kandidaten-Archiv) ergänzt eine Sektion zwischen Sperrliste und
+    Evidenz-Digest; leer (Default) bleibt der Prompt unverändert.
     """
+    archive_section = (
+        "Bekannte frühere Kandidaten aus dem Archiv (Gate-Reflexion): "
+        "nicht erneut vorschlagen; Near-Misses (Score knapp unter der "
+        f"Hurdle) gezielt reparieren statt neu zu würfeln:\n{archive_digest}\n\n"
+        if archive_digest
+        else ""
+    )
     user = (
         f"Maximale Anzahl Vorschläge: {max_candidates}.\n"
         f"{_CODE_FORMAT}\n\n"
         f"Besetzte Namen (Sperrliste, nicht wiederverwenden): {', '.join(sorted(taken_names)) or 'keine'}\n\n"
-        f"Evidenz-Digest (aktuelle Ensemble-Performance, OOS = Out-of-Sample):\n{digest}\n\n"
+        + archive_section
+        + f"Evidenz-Digest (aktuelle Ensemble-Performance, OOS = Out-of-Sample):\n{digest}\n\n"
         "Liefere jetzt das JSON-Array der Vorschläge."
     )
     if role is None:
@@ -307,13 +319,18 @@ def _round_proposals(
     taken: frozenset[str],
     per_persona: int,
     personas: tuple[tuple[str, str], ...],
+    archive_digest: str = "",
 ) -> list[dict[str, str]]:
-    """Runde 1: Jede Persona schlägt parallel vor; Merge in Persona-Reihenfolge."""
+    """Runde 1: Jede Persona schlägt parallel vor; Merge in Persona-Reihenfolge.
+
+    Jeder überlebende Vorschlag trägt seine ``persona`` (ID) — der
+    Aufrufer (``agent_evolve``) nutzt sie für die Archiv-Zuordnung.
+    """
 
     def call_one(persona_id: str) -> list[dict[str, str]]:
         try:
             raw = client.complete(
-                build_messages(digest, taken_names, per_persona, role=persona_id),
+                build_messages(digest, taken_names, per_persona, role=persona_id, archive_digest=archive_digest),
                 temperature=0.3,
             )
         except LLMError as exc:
@@ -333,6 +350,7 @@ def _round_proposals(
         for item in items[:per_persona]:
             proposal = _validate(item, taken)
             if proposal is not None:
+                proposal["persona"] = persona_id
                 out.append(proposal)
         logger.info("Agent-Proposer[%s]: %d Vorschläge, %d valide", persona_id, len(items), len(out))
         return out
@@ -450,9 +468,14 @@ def _round_refine(
             )
             return proposal
         logger.info("Agent-Proposer[refine:%s]: Vorschlag überarbeitet", proposal["name"])
-        # Name bleibt bei der Preregistrierung identisch, auch wenn der
-        # LLM in der Antwort einen anderen Namen liefert.
-        return {"name": proposal["name"], "claim": revised["claim"], "code": revised["code"]}
+        # Name und Persona bleiben bei der Preregistrierung identisch,
+        # auch wenn der LLM in der Antwort einen anderen Namen liefert.
+        return {
+            "name": proposal["name"],
+            "claim": revised["claim"],
+            "code": revised["code"],
+            "persona": proposal["persona"],
+        }
 
     with ThreadPoolExecutor(max_workers=max(1, len(pool))) as executor:
         futures = [executor.submit(refine_one, proposal) for proposal in pool]
@@ -466,6 +489,7 @@ def propose(
     *,
     max_candidates: int = 3,
     personas: tuple[tuple[str, str], ...] = PERSONAS,
+    archive_digest: str = "",
 ) -> list[dict[str, str]]:
     """Führt die dreirundige Persona-Diskussion aus.
 
@@ -475,12 +499,17 @@ def propose(
     ausgefallene Aufrufe fallen auf die vorherige Stufe zurück
     (Kritik fehlgeschlagen → Originalvorschläge; Revision ungültig →
     Originalvorschlag; Totalausfall → leere Liste).
+
+    ``archive_digest`` (Gate-Reflexion) wird nur an Runde 1 weiterge-
+    reicht; die Rückgabe trägt pro Vorschlag das ``persona``-Feld.
     """
     client.timeout = PROPOSER_TIMEOUT
     taken = frozenset(taken_names)
     per_persona = max(1, -(-max_candidates // max(1, len(personas))))
 
-    pool = _round_proposals(client, digest, taken_names, taken, per_persona, personas)[:max_candidates]
+    pool = _round_proposals(
+        client, digest, taken_names, taken, per_persona, personas, archive_digest=archive_digest
+    )[:max_candidates]
     if not pool:
         return []
 
