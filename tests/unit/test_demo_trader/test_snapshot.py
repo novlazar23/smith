@@ -64,3 +64,35 @@ class TestBuildAccountSnapshot:
             buy.commission + close.commission
         )
         assert snapshot["positions"] == []
+
+    def test_total_pnl_marks_position_to_market(self) -> None:
+        """total_pnl = Equity (mark-to-market) - Startkapital."""
+        executor = PaperExecutor(
+            initial_cash=100000.0,
+            default_slippage_pct=0.0,
+            default_commission_pct=0.0,
+        )
+        account = executor.create_account("demo")
+        executor.submit_order(account, "BTC/USDT", TradeDirection.BUY, 0.1, 50000.0)
+        account.positions["BTC/USDT"].mark_price = 51000.0
+
+        snapshot = build_account_snapshot(account)
+
+        # 0,1 BTC @ 51000 $ statt 50000 $ → +100 $ PnL
+        assert snapshot["equity"] == pytest.approx(100100.0)
+        assert snapshot["total_pnl"] == pytest.approx(100.0)
+
+    def test_total_pnl_after_close_reflects_costs(self) -> None:
+        """Nach dem Close bleibt der Kostenabrieb in total_pnl erhalten."""
+        executor = PaperExecutor(initial_cash=100000.0)
+        account = executor.create_account("demo")
+        executor.submit_order(account, "BTC/USDT", TradeDirection.BUY, 1.0, 50000.0)
+        executor.close_position(account, "BTC/USDT")
+
+        snapshot = build_account_snapshot(account)
+
+        assert snapshot["positions"] == []
+        assert snapshot["total_pnl"] < 0.0
+        assert snapshot["total_pnl"] == pytest.approx(
+            account.equity - account.initial_cash
+        )

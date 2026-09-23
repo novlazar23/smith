@@ -197,9 +197,9 @@ class PaperExecutor:
                 f"Insufficient position: need {quantity}, have {available_qty}"
             )
 
-        # Sell portion of position — update PnL
-        price_diff = pos.avg_price - filled_price
-        realized_pnl = price_diff * quantity
+        # Sell portion of position — update PnL (long: profit when the
+        # fill price is above the average entry price)
+        realized_pnl = (filled_price - pos.avg_price) * quantity
 
         account.cash += filled_price * quantity - commission
         account.total_commission += commission
@@ -506,13 +506,20 @@ class PaperExecutor:
     # ------------------------------------------------------------------
 
     def close_position(
-        self, account: PaperAccount, instrument: str
+        self,
+        account: PaperAccount,
+        instrument: str,
+        market_price: float | None = None,
     ) -> Trade | None:
         """Close the entire position for the given instrument.
 
         Args:
             account: The paper account holding the position.
             instrument: Symbol of the position to close.
+            market_price: Actual market price to close at. When omitted,
+                the position is closed at its average entry price
+                (legacy simulation behavior, zero price risk) — callers
+                with a live price should always pass it.
 
         Returns:
             The closing Trade, or None if no position exists.
@@ -524,18 +531,21 @@ class PaperExecutor:
         if pos.quantity <= 0:
             return None
 
-        # Use a dummy market price for the close (same as avg_price for simulation)
-        market_price = pos.avg_price
+        close_ref = (
+            market_price
+            if market_price is not None and market_price > 0
+            else pos.avg_price
+        )
         quantity = pos.quantity
 
         trade_id = str(uuid.uuid4())
         slippage = self.default_slippage_pct
 
         # Sell slippage reduces proceeds
-        filled_price = market_price * (1 - slippage)
+        filled_price = close_ref * (1 - slippage)
         commission = filled_price * quantity * self.default_commission_pct
 
-        realized_pnl = (market_price - pos.avg_price) * quantity
+        realized_pnl = (filled_price - pos.avg_price) * quantity
 
         trade = Trade(
             trade_id=trade_id,
@@ -543,7 +553,7 @@ class PaperExecutor:
             direction=TradeDirection.SELL,
             order_type=OrderType.MARKET,
             quantity=quantity,
-            price=market_price,
+            price=close_ref,
             slippage=slippage,
             commission=commission,
             filled_price=filled_price,

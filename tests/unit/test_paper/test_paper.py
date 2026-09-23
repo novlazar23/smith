@@ -58,6 +58,14 @@ class TestPaperPositionMarketValue:
         pos = PaperPosition(symbol="AAPL", quantity=-50.0, avg_price=100.0)
         assert pos.market_value == 5000.0
 
+    def test_market_value_uses_mark_price_when_set(self) -> None:
+        pos = PaperPosition(symbol="AAPL", quantity=10.0, avg_price=100.0, mark_price=120.0)
+        assert pos.market_value == 1200.0
+
+    def test_market_value_falls_back_to_avg_without_mark(self) -> None:
+        pos = PaperPosition(symbol="AAPL", quantity=10.0, avg_price=100.0, mark_price=0.0)
+        assert pos.market_value == 1000.0
+
 
 class TestPaperAccountEquity:
     """Test PaperAccount equity calculation."""
@@ -262,6 +270,64 @@ class TestExecutorClosePositionPnl:
         assert trade is not None
         assert trade.direction == TradeDirection.SELL
         assert trade.filled_quantity == 10.0
+
+    def test_close_at_market_price_profit(self) -> None:
+        executor = PaperExecutor(
+            initial_cash=100000.0,
+            default_slippage_pct=0.0,
+            default_commission_pct=0.0,
+        )
+        account = executor.create_account("acc12b")
+        executor.submit_order(account, "AAPL", TradeDirection.BUY, 10.0, price=100.0)
+        trade = executor.close_position(account, "AAPL", market_price=110.0)
+
+        assert trade is not None
+        assert trade.price == 110.0
+        assert trade.filled_price == 110.0
+        assert account.cash == pytest.approx(100000.0 + 10.0 * 10.0)
+        assert "AAPL" not in account.positions
+
+    def test_close_at_market_price_loss(self) -> None:
+        executor = PaperExecutor(
+            initial_cash=100000.0,
+            default_slippage_pct=0.0,
+            default_commission_pct=0.0,
+        )
+        account = executor.create_account("acc12c")
+        executor.submit_order(account, "AAPL", TradeDirection.BUY, 10.0, price=100.0)
+        trade = executor.close_position(account, "AAPL", market_price=90.0)
+
+        assert trade is not None
+        assert trade.price == 90.0
+        assert account.cash == pytest.approx(100000.0 - 10.0 * 10.0)
+        assert "AAPL" not in account.positions
+
+    def test_close_at_market_price_applies_slippage(self) -> None:
+        executor = PaperExecutor(
+            initial_cash=100000.0,
+            default_slippage_pct=0.001,
+            default_commission_pct=0.0,
+        )
+        account = executor.create_account("acc12d")
+        executor.submit_order(account, "AAPL", TradeDirection.BUY, 10.0, price=100.0)
+        executor.close_position(account, "AAPL", market_price=100.0)
+
+        # Slippage on the sell side reduces proceeds vs. cost basis
+        assert account.cash == pytest.approx(100000.0 - 10.0 * 100.0 * 0.001 - 10.0 * 100.0 * 0.001)
+
+    def test_partial_sell_realized_pnl_sign(self) -> None:
+        executor = PaperExecutor(
+            initial_cash=100000.0,
+            default_slippage_pct=0.0,
+            default_commission_pct=0.0,
+        )
+        account = executor.create_account("acc12e")
+        executor.submit_order(account, "AAPL", TradeDirection.BUY, 10.0, price=100.0)
+        executor.submit_order(account, "AAPL", TradeDirection.SELL, 4.0, price=110.0)
+
+        pos = account.positions["AAPL"]
+        assert pos.quantity == 6.0
+        assert pos.realized_pnl == pytest.approx(4.0 * 10.0)
 
 
 class TestExecutorMultipleTrades:

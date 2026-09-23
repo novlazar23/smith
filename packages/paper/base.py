@@ -56,6 +56,7 @@ class PaperPosition:
     symbol: str
     quantity: float
     avg_price: float = 0.0
+    mark_price: float = 0.0
     unrealized_pnl: float = 0.0
     realized_pnl: float = 0.0
     total_commission: float = 0.0
@@ -64,8 +65,13 @@ class PaperPosition:
 
     @property
     def market_value(self) -> float:
-        """Calculate market value from position data."""
-        return abs(self.quantity) * self.avg_price if self.avg_price > 0 else 0.0
+        """Calculate market value from position data.
+
+        Uses ``mark_price`` (last known market price) when set, falling
+        back to ``avg_price`` (cost basis) otherwise.
+        """
+        price = self.mark_price if self.mark_price > 0 else self.avg_price
+        return abs(self.quantity) * price if price > 0 else 0.0
 
 
 @dataclass

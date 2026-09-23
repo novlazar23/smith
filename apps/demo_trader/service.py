@@ -407,6 +407,11 @@ def build_account_snapshot(account: PaperAccount) -> dict[str, Any]:
         Dict mit account_id, cash, equity, initial_cash, total_pnl,
         total_commission, total_trades und positions (JSON-Liste aus
         instrument/quantity/avg_price/opened_at).
+
+        ``total_pnl`` ist die Gesamtabweichung der (mark-to-market
+        bewerteten) Equity vom Startkapital — damit umfasst sie auch
+        abgeschlossene Positionen und Funding-Settlements, die aus dem
+        Positions-Dict gefallen sind.
     """
     positions = [
         {
@@ -424,7 +429,7 @@ def build_account_snapshot(account: PaperAccount) -> dict[str, Any]:
         "cash": account.cash,
         "equity": account.equity,
         "initial_cash": account.initial_cash,
-        "total_pnl": account.total_pnl,
+        "total_pnl": account.equity - account.initial_cash,
         "total_commission": account.total_commission,
         "total_trades": account.total_trades,
         "positions": positions,
@@ -773,6 +778,19 @@ class DemoTrader:
             logger.warning("Heartbeat-Datei nicht schreibbar: %s", exc)
         return executed
 
+    def _mark_position(self, instrument: str, latest_close: float) -> None:
+        """Markt eine offene Position zum aktuellen Kurs (mark-to-market).
+
+        Ohne diesen Mark wäre die Account-Equity zur Kostengrundlage
+        bewertet und die Risiko-Regeln (Drawdown-Breaker, Heat-Cap)
+        würden Kursbewegungen nicht sehen.
+        """
+        position = self._account.positions.get(instrument)
+        if position is None or position.quantity <= 0:
+            return
+        position.mark_price = latest_close
+        position.unrealized_pnl = (latest_close - position.avg_price) * position.quantity
+
     def _check_exit_backstop(self, instrument: str, latest_close: float) -> str | None:
         """Prüft deterministische Exit-Backstops für eine offene Position.
 
@@ -874,10 +892,13 @@ class DemoTrader:
             return 0
 
         latest_close = float(window.close[-1])
+        self._mark_position(instrument, latest_close)
         self._settle_funding(instrument, latest_close)
         exit_reason = self._check_exit_backstop(instrument, latest_close)
         if exit_reason is not None:
-            trade = self._executor.close_position(self._account, instrument)
+            trade = self._executor.close_position(
+                self._account, instrument, market_price=latest_close
+            )
             if trade is None:
                 logger.info("%s: Backstop (%s), aber keine offene Position", instrument, exit_reason)
                 return 0
@@ -968,7 +989,9 @@ class DemoTrader:
                     )
         elif plan.action == ACTION_SELL:
             logger.info("%s: %s", instrument, plan.reason)
-            trade = self._executor.close_position(self._account, instrument)
+            trade = self._executor.close_position(
+                self._account, instrument, market_price=latest_close
+            )
             if trade is None:
                 logger.info("%s: keine offene Position → Glattstellung entfällt", instrument)
         else:
