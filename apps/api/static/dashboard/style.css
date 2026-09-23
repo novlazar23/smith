@@ -159,6 +159,7 @@ body {
 .news-panel { grid-column: span 4; }
 .evolved-panel { grid-column: span 4; }
 .evolution-panel { grid-column: span 6; }
+.cpcv-panel { grid-column: span 6; }
 
 
 /* ── Panels ─────────────────────────────────────────────────────────────── */
@@ -526,6 +527,7 @@ body {
   .news-panel { grid-column: span 12; }
   .evolved-panel { grid-column: span 12; }
   .evolution-panel { grid-column: span 12; }
+  .cpcv-panel { grid-column: span 12; }
 }
 
 @media (max-width: 900px) {

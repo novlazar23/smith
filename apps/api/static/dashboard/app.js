@@ -428,6 +428,55 @@ function renderEvolution(data) {
   body.innerHTML = html;
 }
 
+/* ── Overfitting-Validierung (CPCV/PBO/DSR) ──────────────────────────────── */
+
+const DSR_MIN = 0.95; // README-Heuristik: DSR > 0,95 übersteht die Trial-Deflation
+const PBO_MAX = 0.5; // README-Heuristik: PBO < 0,5 = Overfitting dominiert nicht
+
+function renderCpcv(data) {
+  const body = $("#cpcv-body");
+  const meta = $("#cpcv-meta");
+  const raw = data && typeof data.cpcv_validation === "object" && data.cpcv_validation !== null
+    ? data.cpcv_validation
+    : null;
+  if (!raw || Object.keys(raw).length === 0) {
+    meta.textContent = "CPCV · PBO · DSR";
+    body.innerHTML = emptyState("Noch kein CPCV-Lauf (backtest --cpcv)");
+    return;
+  }
+  const v = raw;
+  const params = v.params && typeof v.params === "object"
+    ? Object.entries(v.params).map(([k, val]) => `${k}=${val}`).join(", ")
+    : "";
+  meta.textContent = v.strategy || "CPCV · PBO · DSR";
+  const windowText = v.window_start && v.window_end
+    ? `${evoDate(v.window_start)} → ${evoDate(v.window_end)}`
+    : "—";
+  const folds = isNum(v.n_folds)
+    ? (isNum(v.expected_folds) ? `${v.n_folds}/${v.expected_folds}` : String(v.n_folds))
+    : "—";
+  const pbo = isNum(v.pbo) ? v.pbo : null;
+  const dsr = isNum(v.dsr) ? v.dsr : null;
+  const pboChip = pbo == null ? "" : `<span class="chip ${pbo < PBO_MAX ? "ch-up" : "ch-down"}">${pbo < PBO_MAX ? "OK" : "NG"}</span>`;
+  const dsrChip = dsr == null ? "" : `<span class="chip ${dsr > DSR_MIN ? "ch-up" : "ch-down"}">${dsr > DSR_MIN ? "OK" : "NG"}</span>`;
+  const ch = v.champion && typeof v.champion === "object" ? v.champion : {};
+  body.innerHTML =
+    `<dl class="acct-rows">` +
+    `<div><dt>Strategie</dt><dd>${esc(v.strategy || "—")}</dd></div>` +
+    (params ? `<div><dt>Parameter</dt><dd>${esc(params)}</dd></div>` : "") +
+    `<div><dt>Instrument</dt><dd>${esc(v.instrument || "—")} · ${esc(v.timeframe || "—")}</dd></div>` +
+    `<div><dt>Fenster</dt><dd>${esc(windowText)}</dd></div>` +
+    `<div><dt>Kerzen</dt><dd>${isNum(v.n_candles) ? fmtInt(v.n_candles) : "—"}</dd></div>` +
+    `<div><dt>Folds (CPCV)</dt><dd>${esc(folds)}${isNum(v.n_skipped_folds) && v.n_skipped_folds > 0 ? ` · ${v.n_skipped_folds} übersprungen` : ""}</dd></div>` +
+    `<div><dt>Trials</dt><dd>${isNum(v.n_trials) ? fmtInt(v.n_trials) : "—"}${isNum(v.n_zoo) ? ` · Zoo ${v.n_zoo}` : ""}</dd></div>` +
+    `<div><dt>PBO (max. 0,50)</dt><dd>${pbo == null ? "—" : `${pbo.toFixed(2)} ${pboChip}`}</dd></div>` +
+    `<div><dt>DSR (min. 0,95)</dt><dd>${dsr == null ? "—" : `${dsr.toFixed(2)} ${dsrChip}`}</dd></div>` +
+    `<div><dt>Champion-Sharpe</dt><dd class="${pnlClass(ch.sharpe_ratio)}">${isNum(ch.sharpe_ratio) ? ch.sharpe_ratio.toFixed(2) : "—"}</dd></div>` +
+    `<div><dt>Champion-Return</dt><dd class="${pnlClass(ch.total_return_pct)}">${isNum(ch.total_return_pct) ? `${fmtSigned(ch.total_return_pct)} %` : "—"}</dd></div>` +
+    `<div><dt>Champion-Trades</dt><dd>${isNum(ch.total_trades) ? fmtInt(ch.total_trades) : "—"}</dd></div>` +
+    `</dl>`;
+}
+
 /* ── Tabs / Embeds ───────────────────────────────────────────────────────── */
 
 const TAB_DEFAULT = "trading";
@@ -524,6 +573,7 @@ function render(data) {
   renderNews(Array.isArray(data.recent_news) ? data.recent_news : []);
   renderEvolved(Array.isArray(data.evolved_agents) ? data.evolved_agents : [], data.evolved_agents_last_run);
   renderEvolution(data);
+  renderCpcv(data);
 }
 
 function setConnected(ok) {

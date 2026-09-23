@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from apps.api.routers.dashboard import (
+    _fetch_cpcv_validation,
     _fetch_evolved_agents,
     _fetch_evolved_archive,
     _fetch_evolved_last_run,
@@ -207,3 +208,85 @@ def test_archive_caps_at_fifteen_newest_rejections(tmp_path: Path, monkeypatch: 
     result = _fetch_evolved_archive()
     assert len(result) == 15
     assert [entry["name"] for entry in result] == [f"agent_{i}" for i in range(5, 20)]
+
+
+def _write_cpcv_summary(tmp_path: Path, content: str) -> Path:
+    directory = tmp_path / "cpcv"
+    directory.mkdir(parents=True, exist_ok=True)
+    file = directory / "summary.json"
+    file.write_text(content, encoding="utf-8")
+    return file
+
+
+def test_cpcv_parses_valid_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    summary = {
+        "config": {
+            "instrument": "BTC/USDT",
+            "timeframe": "5m",
+            "strategy_name": "rsi_mean_reversion",
+            "strategy_params": {"period": 30.0, "buy_below": 20.0, "sell_above": 80.0},
+            "cpcv": {"n_splits": 6, "n_test_groups": 2},
+            "zoo": ["rsi_mean_reversion", "ema_cross", "supertrend"],
+        },
+        "data": {"n_candles": 561520, "start": "2021-05-01T00:00:00+00:00", "end": "2026-09-02T23:55:00+00:00"},
+        "n_folds": 15,
+        "expected_folds": 15,
+        "n_skipped_folds": 0,
+        "n_trials": 120,
+        "pbo": 0.0,
+        "dsr": 0.0,
+        "champion": {"sharpe_ratio": -45.27, "total_return_pct": -0.82, "total_trades": 34},
+    }
+    monkeypatch.setenv("EVOLVED_AGENTS_PATH", str(tmp_path / "evolved_agents.json"))
+    _write_cpcv_summary(tmp_path, json.dumps(summary))
+    assert _fetch_cpcv_validation() == {
+        "strategy": "rsi_mean_reversion",
+        "params": {"period": 30.0, "buy_below": 20.0, "sell_above": 80.0},
+        "instrument": "BTC/USDT",
+        "timeframe": "5m",
+        "window_start": "2021-05-01T00:00:00+00:00",
+        "window_end": "2026-09-02T23:55:00+00:00",
+        "n_candles": 561520,
+        "n_splits": 6,
+        "n_test_groups": 2,
+        "n_folds": 15,
+        "expected_folds": 15,
+        "n_skipped_folds": 0,
+        "n_trials": 120,
+        "n_zoo": 3,
+        "pbo": 0.0,
+        "dsr": 0.0,
+        "champion": {"sharpe_ratio": -45.27, "total_return_pct": -0.82, "total_trades": 34},
+    }
+
+
+def test_cpcv_missing_dir_returns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Kein CPCV-Lauf = Normalzustand → leer, kein Fehler.
+    monkeypatch.setenv("EVOLVED_AGENTS_PATH", str(tmp_path / "evolved_agents.json"))
+    assert _fetch_cpcv_validation() == {}
+
+
+def test_cpcv_corrupt_summary_raises_for_run_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Defekte Datei wirft — ``_run_source`` setzt das wie bei allen
+    # anderen Quellen in ``{}`` um (fail-soft).
+    monkeypatch.setenv("EVOLVED_AGENTS_PATH", str(tmp_path / "evolved_agents.json"))
+    _write_cpcv_summary(tmp_path, "{kaputt")
+    with pytest.raises(json.JSONDecodeError):
+        _fetch_cpcv_validation()
+
+
+def test_cpcv_non_dict_summary_returns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVOLVED_AGENTS_PATH", str(tmp_path / "evolved_agents.json"))
+    _write_cpcv_summary(tmp_path, "[1, 2, 3]")
+    assert _fetch_cpcv_validation() == {}
+
+
+def test_cpcv_minimal_summary_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVOLVED_AGENTS_PATH", str(tmp_path / "evolved_agents.json"))
+    _write_cpcv_summary(tmp_path, "{}")
+    result = _fetch_cpcv_validation()
+    assert result["strategy"] == ""
+    assert result["pbo"] is None
+    assert result["dsr"] is None
+    assert result["n_zoo"] is None
+    assert result["champion"] == {"sharpe_ratio": None, "total_return_pct": None, "total_trades": None}

@@ -10,6 +10,7 @@ Der Endpunkt ``GET /v1/dashboard`` bündelt in einer einzigen Antwort:
   - Evolved-Agents-Letzter-Lauf-Urteile (evolved_agents_last_run.json, Shared-Volume)
   - Evolved-Agents-Shadow-Survival (evolved_agents_shadow.json, Shared-Volume)
   - Evolved-Agents-Kandidaten-Archiv (evolved_agents_archive.jsonl, Shared-Volume)
+  - CPCV/DSR/PBO-Overfitting-Validierung (cpcv/summary.json, Shared-Volume)
 
 Alle Quellen werden defensiv abgefragt: eine ausgefallene Quelle liefert
 leere Listen bzw. ``None`` — der Endpunkt antwortet nie mit HTTP 500.
@@ -438,6 +439,68 @@ def _fetch_evolved_archive() -> list[dict[str, Any]]:
     return rejected[-15:]
 
 
+def _fetch_cpcv_validation() -> dict[str, Any]:
+    """Liest die CPCV/DSR/PBO-Validierung aus ``cpcv/summary.json``.
+
+    Pfad: Ordner von ``EVOLVED_AGENTS_PATH`` plus ``cpcv/`` (dorthin
+    schreibt ``python -m apps.backtest --cpcv`` auf dem Shared-Volume).
+    Fehlender Ordner/Datei = Normalzustand, solange noch kein CPCV-Lauf
+    stattfand → ``{}``; defekte JSON wirft, was ``_run_source`` wie bei
+    allen anderen Quellen in ``{}`` umsetzt (fail-soft). Die Schwellen
+    (DSR > 0,95, PBO < 0,5) bleiben Heuristik auf der UI-Seite — der
+    Endpunkt liefert nur die rohen Kennzahlen.
+    """
+    raw = os.environ.get("EVOLVED_AGENTS_PATH", "/app/backtest_reports/evolved_agents.json").strip()
+    if not raw:
+        return {}
+    file = Path(raw).parent / "cpcv" / "summary.json"
+    if not file.is_file():
+        return {}
+    data = json.loads(file.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return {}
+    config = data.get("config")
+    if not isinstance(config, dict):
+        config = {}
+    cpcv_cfg = config.get("cpcv")
+    if not isinstance(cpcv_cfg, dict):
+        cpcv_cfg = {}
+    params = config.get("strategy_params")
+    if not isinstance(params, dict):
+        params = {}
+    window = data.get("data")
+    if not isinstance(window, dict):
+        window = {}
+    champion = data.get("champion")
+    if not isinstance(champion, dict):
+        champion = {}
+    zoo = config.get("zoo")
+    n_zoo = len(zoo) if isinstance(zoo, list) else None
+    return {
+        "strategy": str(config.get("strategy_name") or ""),
+        "params": {str(k): _float(v) for k, v in params.items() if _float(v) is not None},
+        "instrument": str(config.get("instrument") or ""),
+        "timeframe": str(config.get("timeframe") or ""),
+        "window_start": str(window.get("start") or "") or None,
+        "window_end": str(window.get("end") or "") or None,
+        "n_candles": _int(window.get("n_candles")),
+        "n_splits": _int(cpcv_cfg.get("n_splits")),
+        "n_test_groups": _int(cpcv_cfg.get("n_test_groups")),
+        "n_folds": _int(data.get("n_folds")),
+        "expected_folds": _int(data.get("expected_folds")),
+        "n_skipped_folds": _int(data.get("n_skipped_folds")) or 0,
+        "n_trials": _int(data.get("n_trials")),
+        "n_zoo": n_zoo,
+        "pbo": _float(data.get("pbo")),
+        "dsr": _float(data.get("dsr")),
+        "champion": {
+            "sharpe_ratio": _float(champion.get("sharpe_ratio")),
+            "total_return_pct": _float(champion.get("total_return_pct")),
+            "total_trades": _int(champion.get("total_trades")),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Endpunkt
 # ---------------------------------------------------------------------------
@@ -500,6 +563,7 @@ async def dashboard() -> dict[str, Any]:
         evolved_agents_last_run,
         evolved_agents_shadow,
         evolved_agents_archive,
+        cpcv_validation,
     ) = await asyncio.gather(
         _status_or_fallback(),
         _run_source(_fetch_data_source, "synthetic"),
@@ -512,6 +576,7 @@ async def dashboard() -> dict[str, Any]:
         _run_source(_fetch_evolved_last_run, {}),
         _run_source(_fetch_evolved_shadow, {}),
         _run_source(_fetch_evolved_archive, []),
+        _run_source(_fetch_cpcv_validation, {}),
     )
     status_data = cast("dict[str, Any]", status_data)
     data_source = cast("str", data_source)
@@ -529,4 +594,5 @@ async def dashboard() -> dict[str, Any]:
         "evolved_agents_last_run": evolved_agents_last_run,
         "evolved_agents_shadow": evolved_agents_shadow,
         "evolved_agents_archive": evolved_agents_archive,
+        "cpcv_validation": cpcv_validation,
     }
