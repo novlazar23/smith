@@ -8,6 +8,8 @@ Der Endpunkt ``GET /v1/dashboard`` bündelt in einer einzigen Antwort:
   - Letzte Shadow-Entscheidungen und News-Events (PostgreSQL)
   - Zugelassene Evolved Agents (evolved_agents.json, Shared-Volume)
   - Evolved-Agents-Letzter-Lauf-Urteile (evolved_agents_last_run.json, Shared-Volume)
+  - Evolved-Agents-Shadow-Survival (evolved_agents_shadow.json, Shared-Volume)
+  - Evolved-Agents-Kandidaten-Archiv (evolved_agents_archive.jsonl, Shared-Volume)
 
 Alle Quellen werden defensiv abgefragt: eine ausgefallene Quelle liefert
 leere Listen bzw. ``None`` — der Endpunkt antwortet nie mit HTTP 500.
@@ -349,7 +351,9 @@ def _fetch_evolved_last_run() -> dict[str, Any]:
     Pfad abgeleitet aus ``EVOLVED_AGENTS_PATH`` (gleicher Ordner);
     fehlende Datei = Normalzustand vor dem ersten Lauf → ``{}``;
     defekte JSON wirft, was ``_run_source`` wie bei allen anderen
-    Quellen in ``{}`` umsetzt (fail-soft).
+    Quellen in ``{}`` umsetzt (fail-soft). Das ``shadow``-Feld
+    (Promotions-Kandidaten, s. Shadow-Tracker) wird als Sub-Dict
+    1:1 weitergereicht (fehlend → ``{}``).
     """
     raw = os.environ.get("EVOLVED_AGENTS_PATH", "/app/backtest_reports/evolved_agents.json").strip()
     if not raw:
@@ -374,7 +378,64 @@ def _fetch_evolved_last_run() -> dict[str, Any]:
                 "reasons": [str(r) for r in reasons if isinstance(r, str)] if isinstance(reasons, list) else [],
             }
         )
-    return {"run_at": str(data.get("run_at") or "") or None, "verdicts": verdicts}
+    shadow = data.get("shadow")
+    return {
+        "run_at": str(data.get("run_at") or "") or None,
+        "verdicts": verdicts,
+        "shadow": shadow if isinstance(shadow, dict) else {},
+    }
+
+
+def _fetch_evolved_shadow() -> dict[str, Any]:
+    """Liest den Shadow-Survival-Tracker aus ``evolved_agents_shadow.json``.
+
+    Pfad abgeleitet aus ``EVOLVED_AGENTS_PATH`` (gleicher Ordner);
+    fehlende Datei = Normalzustand vor dem ersten Lauf → ``{}``;
+    defekte JSON wirft, was ``_run_source`` wie bei allen anderen
+    Quellen in ``{}`` umsetzt (fail-soft). Inhalt: pro zugelassenem
+    Agent die Re-Check-Streak und Score-History (Promotions-Review).
+    """
+    raw = os.environ.get("EVOLVED_AGENTS_PATH", "/app/backtest_reports/evolved_agents.json").strip()
+    if not raw:
+        return {}
+    file = Path(raw).with_name("evolved_agents_shadow.json")
+    if not file.is_file():
+        return {}
+    data = json.loads(file.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else {}
+
+
+def _fetch_evolved_archive() -> list[dict[str, Any]]:
+    """Liest die jüngsten Ablehnungen aus ``evolved_agents_archive.jsonl``.
+
+    Pfad abgeleitet aus ``EVOLVED_AGENTS_PATH`` (gleicher Ordner);
+    die Datei ist append-only (älteste → neueste Zeile), fehlende
+    Datei = Normalzustand vor dem ersten Lauf → ``[]``. Korrupte
+    Zeilen werden übersprungen (selbes Muster wie Writer-Seite
+    ``candidate_archive.load_archive``); ein Lesefehler der Datei
+    selbst wirft, was ``_run_source`` wie bei allen anderen Quellen
+    in ``[]`` umsetzt (fail-soft). Rückgabe: maximal die 15
+    neuesten Zeilen mit ``admitted == False`` in Datei-Reihenfolge,
+    unverändert weitergereicht.
+    """
+    raw = os.environ.get("EVOLVED_AGENTS_PATH", "/app/backtest_reports/evolved_agents.json").strip()
+    if not raw:
+        return []
+    file = Path(raw).with_name("evolved_agents_archive.jsonl")
+    if not file.is_file():
+        return []
+    rejected: list[dict[str, Any]] = []
+    for line in file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry: Any = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(entry, dict) and entry.get("admitted") is False:
+            rejected.append(entry)
+    return rejected[-15:]
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +498,8 @@ async def dashboard() -> dict[str, Any]:
         news,
         evolved_agents,
         evolved_agents_last_run,
+        evolved_agents_shadow,
+        evolved_agents_archive,
     ) = await asyncio.gather(
         _status_or_fallback(),
         _run_source(_fetch_data_source, "synthetic"),
@@ -447,6 +510,8 @@ async def dashboard() -> dict[str, Any]:
         _run_source(_fetch_recent_news, []),
         _run_source(_fetch_evolved_agents, []),
         _run_source(_fetch_evolved_last_run, {}),
+        _run_source(_fetch_evolved_shadow, {}),
+        _run_source(_fetch_evolved_archive, []),
     )
     status_data = cast("dict[str, Any]", status_data)
     data_source = cast("str", data_source)
@@ -462,4 +527,6 @@ async def dashboard() -> dict[str, Any]:
         "recent_news": news,
         "evolved_agents": evolved_agents,
         "evolved_agents_last_run": evolved_agents_last_run,
+        "evolved_agents_shadow": evolved_agents_shadow,
+        "evolved_agents_archive": evolved_agents_archive,
     }

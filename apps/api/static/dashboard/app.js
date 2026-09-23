@@ -355,6 +355,79 @@ function renderEvolved(agents, lastRun) {
   body.innerHTML = html || emptyState("Noch keine zugelassenen Agenten");
 }
 
+/* ── Evolution (Stufe 2) ─────────────────────────────────────────────────── */
+
+const PROMOTION_DAYS = 14; // Promotions-Schwelle: 14 durchgehende tägliche Re-Checks
+
+function evoDate(ts) {
+  const d = ts ? new Date(ts) : null;
+  return d && !Number.isNaN(d.getTime())
+    ? d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" })
+    : "—";
+}
+
+function evoTruncate(str, max) {
+  const s = String(str || "");
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+function renderEvolution(data) {
+  const body = $("#evolution-body");
+  const shadow = data && typeof data.evolved_agents_shadow === "object" && data.evolved_agents_shadow !== null
+    ? data.evolved_agents_shadow
+    : {};
+  const lastRun = data && typeof data.evolved_agents_last_run === "object" && data.evolved_agents_last_run !== null
+    ? data.evolved_agents_last_run
+    : null;
+  const shadowMeta = lastRun && typeof lastRun.shadow === "object" && lastRun.shadow !== null
+    ? lastRun.shadow
+    : {};
+  const archive = data && Array.isArray(data.evolved_agents_archive) ? data.evolved_agents_archive : [];
+
+  const names = Object.keys(shadow).filter((n) => shadow[n] && typeof shadow[n] === "object");
+  let html = `<div class="evl-head">Shadow-Status</div>`;
+  html += names.length === 0
+    ? emptyState("Noch keine zugelassenen Agenten im Shadow-Tracking")
+    : names.map((name) => {
+        const s = shadow[name];
+        const hasPasses = isNum(s.consecutive_passes);
+        const passes = hasPasses ? Math.max(0, Math.floor(s.consecutive_passes)) : null;
+        // ready: Wert aus der Shadow-Datei; Fallback auf last_run.shadow[name].ready
+        const meta = shadowMeta[name];
+        const ready = hasPasses ? passes >= PROMOTION_DAYS : !!(meta && meta.ready === true);
+        const hist = Array.isArray(s.score_history) ? s.score_history.filter(isNum) : [];
+        const spread = hist.length < 2
+          ? "–"
+          : `${Math.min(...hist).toFixed(2)}–${Math.max(...hist).toFixed(2)}`;
+        return `<div class="ev-item">` +
+          `<div class="ev-head"><span class="ev-name" title="${esc(name)}">${esc(name)}</span>` +
+          (ready ? `<span class="chip d-long">BEREIT</span>` : "") +
+          `<span class="ev-ver">${passes == null ? "—" : passes}/${PROMOTION_DAYS} Tage</span></div>` +
+          `<div class="ev-meta">Score ${spread} · geprüft ${dateTimeStr(s.last_checked)}</div>` +
+          `</div>`;
+      }).join("");
+
+  const rejected = archive.filter((c) => c && typeof c === "object").slice(-15);
+  html += `<div class="evl-head">Letzte Ablehnungen${archive.length > 15 ? " · letzte 15" : ""}</div>`;
+  html += rejected.length === 0
+    ? emptyState("Noch keine abgelehnten Kandidaten archiviert")
+    : rejected.map((c) => {
+        const persona = typeof c.persona === "string" && c.persona.trim() !== "" ? c.persona : null;
+        const reason = Array.isArray(c.reasons)
+          ? String(c.reasons.find((r) => typeof r === "string" && r.trim() !== "") || "")
+          : "";
+        return `<div class="evl-item">` +
+          `<span class="evl-name" title="${esc(c.name)}">${esc(c.name || "—")}</span>` +
+          (persona ? `<span class="chip p-persona">${esc(persona)}</span>` : "") +
+          `<span class="evl-score">${isNum(c.score) ? c.score.toFixed(2) : "—"}</span>` +
+          `<span class="evo-date">${evoDate(c.run_at)}</span>` +
+          `</div>` +
+          (reason ? `<div class="evl-reason" title="${esc(reason)}">${esc(evoTruncate(reason, 60))}</div>` : "");
+      }).join("");
+
+  body.innerHTML = html;
+}
+
 /* ── Tabs / Embeds ───────────────────────────────────────────────────────── */
 
 const TAB_DEFAULT = "trading";
@@ -450,6 +523,7 @@ function render(data) {
   renderDecisions(Array.isArray(data.recent_decisions) ? data.recent_decisions : []);
   renderNews(Array.isArray(data.recent_news) ? data.recent_news : []);
   renderEvolved(Array.isArray(data.evolved_agents) ? data.evolved_agents : [], data.evolved_agents_last_run);
+  renderEvolution(data);
 }
 
 function setConnected(ok) {

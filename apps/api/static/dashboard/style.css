@@ -158,6 +158,7 @@ body {
 .trades-panel { grid-column: span 4; }
 .news-panel { grid-column: span 4; }
 .evolved-panel { grid-column: span 4; }
+.evolution-panel { grid-column: span 6; }
 
 
 /* ── Panels ─────────────────────────────────────────────────────────────── */
@@ -194,7 +195,7 @@ body {
 .panel-body { padding: 14px 16px; min-height: 120px; min-width: 0; }
 
 .feed { display: flex; flex-direction: column; overflow-y: auto; }
-#decisions-body, #trades-body, #news-body, #evolved-body { max-height: 356px; }
+#decisions-body, #trades-body, #news-body, #evolved-body, #evolution-body { max-height: 356px; }
 
 .panel-body::-webkit-scrollbar, .feed::-webkit-scrollbar, .table-wrap::-webkit-scrollbar { width: 8px; height: 8px; }
 .feed::-webkit-scrollbar-thumb, .table-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
@@ -510,6 +511,11 @@ body {
 .evl-score { font-family: var(--mono); font-size: 10.5px; color: var(--faint); flex: none; }
 .evl-reason { font-size: 11.5px; color: var(--dim); padding: 2px 4px 6px; line-height: 1.4; }
 
+/* ── Evolution (Stufe 2) ─────────────────────────────────────────────────── */
+
+.evo-date { font-family: var(--mono); font-size: 10.5px; color: var(--faint); flex: none; }
+.p-persona { color: var(--blue); border-color: rgba(87, 160, 255, 0.35); background: var(--blue-soft); }
+
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 
 @media (max-width: 1180px) {
@@ -519,6 +525,7 @@ body {
   .trades-panel { grid-column: span 12; }
   .news-panel { grid-column: span 12; }
   .evolved-panel { grid-column: span 12; }
+  .evolution-panel { grid-column: span 12; }
 }
 
 @media (max-width: 900px) {
