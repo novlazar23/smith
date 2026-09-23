@@ -157,14 +157,21 @@ def make_trader(
     pipeline: StubPipeline,
     executor: PaperExecutor | None = None,
 ) -> DemoTrader:
-    """Baut einen DemoTrader mit injizierten Stubs."""
-    return DemoTrader(
+    """Baut einen DemoTrader mit injizierten Stubs.
+
+    Die Rehydration-SELECTs der Konstruktion werden zurückgesetzt:
+    Zyklus-Tests starten mit sauberer Aufzeichnung (Rehydration wird
+    in test_rehydrate.py separat geprüft).
+    """
+    trader = DemoTrader(
         config=config,
         provider=provider,
         db=FakeDB(conn),
         executor=executor if executor is not None else PaperExecutor(initial_cash=config.initial_cash),
         pipeline_factory=lambda: pipeline,
     )
+    conn.executed.clear()
+    return trader
 
 
 def make_funding_trader(

@@ -56,8 +56,8 @@ def main() -> int:
         config.min_confidence,
     )
     logger.info(
-        "Paper-Konto '%s' wird in-Process gehalten — bei einem Neustart setzt es auf "
-        "initial_cash zurück (Trade-Historie bleibt in demo_trades erhalten)",
+        "Paper-Konto '%s' wird in-Process gehalten und nach einem Neustart aus dem "
+        "letzten Snapshot rehydriert (Trade-Historie bleibt in demo_trades erhalten)",
         config.account_id,
     )
     run_service(trader, stop_event.is_set)

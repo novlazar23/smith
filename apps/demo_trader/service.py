@@ -86,7 +86,14 @@ from apps.orchestrator_service.service import (
 from packages.consensus import ConsensusDecision
 from packages.observability.mlflow_client import MLflowClient
 from packages.orchestrator.pipeline import OrchestratorPipeline
-from packages.paper import OrderType, PaperAccount, PaperExecutor, Trade, TradeDirection
+from packages.paper import (
+    OrderType,
+    PaperAccount,
+    PaperExecutor,
+    PaperPosition,
+    Trade,
+    TradeDirection,
+)
 from packages.persistence.clickhouse.engine import (
     ClickHouseConfig,
     ClickHouseEngine,
@@ -158,6 +165,21 @@ UPSERT_DEMO_ACCOUNT = text(
         total_trades = EXCLUDED.total_trades,
         positions = EXCLUDED.positions,
         updated_at = now()
+    """
+)
+
+LOAD_DEMO_ACCOUNT = text(
+    """
+    SELECT cash, equity, initial_cash, total_commission,
+           total_trades, positions
+    FROM demo_account WHERE account_id = :account_id
+    """
+)
+
+LOAD_FUNDING_BOUNDARIES = text(
+    """
+    SELECT trade_id FROM demo_trades
+    WHERE instrument = :instrument AND trade_id LIKE 'demo-funding-%'
     """
 )
 
@@ -687,9 +709,12 @@ def update_drawdown_guard(
 class DemoTrader:
     """Führt den Demo-Zyklus (Analyse → Paper-Trade → Persistenz) aus.
 
-    Der PaperExecutor-Account lebt in-Process über alle Zyklen hinweg;
-    bei einem Neustart des Prozesses setzt er auf initial_cash zurück
-    (die Trade-Historie bleibt in ``demo_trades`` erhalten).
+    Der PaperExecutor-Account lebt in-Process über alle Zyklen hinweg.
+    Nach einem Neustart wird er aus dem letzten ``demo_account``-
+    Snapshot rehydriert (Cash, Positionen, Funding-Catch-Up-Stand);
+    die Trade-Historie bleibt in ``demo_trades`` erhalten. Fail-Soft:
+    fehlt die Zeile oder ist sie defekt, startet der Account frisch
+    bei initial_cash.
     """
 
     def __init__(
@@ -731,6 +756,7 @@ class DemoTrader:
         self._now = now if now is not None else lambda: datetime.now(UTC)
         self._last_funding: dict[str, datetime] = {}
         self._total_funding = 0.0
+        self._rehydrate_from_db()
 
     @property
     def config(self) -> DemoTraderConfig:
@@ -741,6 +767,89 @@ class DemoTrader:
     def account(self) -> PaperAccount:
         """Der in-Process Paper-Account."""
         return self._account
+
+    def _rehydrate_from_db(self) -> None:
+        """Stellt den Account nach einem Neustart aus dem letzten Snapshot her.
+
+        Fail-Soft: keine Zeile oder ein Lesefehler → frischer Account
+        (altes Verhalten). Die Equity-Re-Hydration nutzt mark_price=0
+        (Kostengrundlage bis der erste Zyklus markt).
+        """
+        try:
+            with self._db.engine.connect() as conn:
+                result = conn.execute(
+                    LOAD_DEMO_ACCOUNT, {"account_id": self._config.account_id}
+                )
+                row = result.fetchone() if result is not None else None
+            if row is None:
+                return
+            account = self._account
+            mapping = row._mapping
+            account.cash = float(mapping["cash"])
+            account.initial_cash = float(mapping["initial_cash"])
+            account.total_trades = int(mapping["total_trades"])
+            account.total_commission = float(mapping["total_commission"])
+            account.positions = {
+                entry["instrument"]: PaperPosition(
+                    symbol=entry["instrument"],
+                    quantity=float(entry["quantity"]),
+                    avg_price=float(entry["avg_price"]),
+                    opened_at=datetime.fromisoformat(entry["opened_at"])
+                    if entry.get("opened_at")
+                    else None,
+                )
+                for entry in mapping["positions"] or []
+            }
+            self._equity_peak = max(self._config.initial_cash, account.equity)
+            for instrument, position in account.positions.items():
+                self._rehydrate_funding_last(instrument, position.opened_at)
+            logger.info(
+                "Demo-Account rehydriert: cash=%.2f, %d Position(en), %d Trades",
+                account.cash,
+                len(account.positions),
+                account.total_trades,
+            )
+        except Exception as exc:
+            logger.warning("Account-Rehydration fehlgeschlagen → frischer Account: %s", exc)
+            self._account = self._executor.create_account(self._config.account_id)
+
+    def _rehydrate_funding_last(self, instrument: str, opened_at: datetime | None) -> None:
+        """Setzt den Funding-Catch-Up-Stand auf den letzten gebuchten 8h-Grenzwert.
+
+        Ohne diesen Stand würde der Catch-Up nach dem Neustart alle
+        Grenzwerte seit opened_at erneut buchen (Doppel-Settlement). Der
+        Grenzwert steckt in der FUNDING-Audit-Zeile:
+        trade_id = demo-funding-<ts>-<instrument>. Fail-Soft: unbekannt
+        → Standard-Startpunkt _floor_8h(opened_at) wie im Erstlauf.
+        """
+        try:
+            with self._db.engine.connect() as conn:
+                result = conn.execute(
+                    LOAD_FUNDING_BOUNDARIES, {"instrument": instrument}
+                )
+                rows = list(result.fetchall()) if result is not None else []
+        except Exception as exc:
+            logger.warning(
+                "Funding-Grenzwerte für %s nicht lesbar → Standard-Start: %s",
+                instrument,
+                exc,
+            )
+            rows = []
+        boundaries: list[datetime] = []
+        for row in rows:
+            parts = str(row[0]).split("-")
+            if len(parts) < 3:
+                continue
+            try:
+                boundaries.append(
+                    datetime.strptime(parts[2], "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+                )
+            except ValueError:
+                continue
+        if boundaries:
+            self._last_funding[instrument] = max(boundaries)
+        elif opened_at is not None:
+            self._last_funding[instrument] = _floor_8h(opened_at)
 
     def run_cycle(self) -> int:
         """Führt einen kompletten Demo-Zyklus aus.
