@@ -215,57 +215,57 @@ def _fetch_recent_trades() -> list[dict[str, Any]]:
 
 
 def _fetch_positions(market: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Leitet offene Positionen aus den Demo-Trades ab.
+    """Liest die offenen Positionen aus dem Demo-Account (Single Source of Truth).
 
-    Offene Position = Netto-Menge (BUY minus SELL) pro Instrument; der
-    Ø-Preis ist der gewichtete Kaufpreis. Marktpreis und unrealisierter
-    P&L kommen aus dem aktuellsten Close in ClickHouse (übergebenes
-    Markt-Fenster).
+    Die Netto-Ableitung aus der Trade-Historie wurde verworfen: Nach
+    Account-Neustarts/Resets hätte sie Phantom-Positionen aus alten
+    Perioden erzeugt. Marktpreis und unrealisierter P&L kommen aus dem
+    aktuellsten Close in ClickHouse (übergebenes Markt-Fenster).
     """
     last_prices = {entry["instrument"]: entry["last_price"] for entry in market}
     rows = _pg_rows(
-        "SELECT created_at, instrument, direction, quantity, price "
-        "FROM demo_trades ORDER BY created_at ASC"
+        "SELECT positions FROM demo_account WHERE account_id = 'demo'"
     )
-    open_positions: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        try:
-            instrument = str(row["instrument"])
-            quantity = float(row["quantity"])
-            price = float(row["price"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        entry = open_positions.setdefault(
-            instrument, {"qty": 0.0, "buy_qty": 0.0, "cost": 0.0, "opened_at": None}
-        )
-        if str(row.get("direction", "")).upper() == "BUY":
-            entry["qty"] += quantity
-            entry["buy_qty"] += quantity
-            entry["cost"] += quantity * price
-            if entry["opened_at"] is None:
-                entry["opened_at"] = _iso(row.get("created_at"))
-        else:
-            entry["qty"] -= quantity
+    entries: list[Any] = []
+    if rows:
+        raw = rows[0].get("positions")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                raw = None
+        if isinstance(raw, list):
+            entries = raw
 
     positions: list[dict[str, Any]] = []
-    for instrument, entry in open_positions.items():
-        if entry["qty"] <= 0 or entry["buy_qty"] <= 0:
+    for entry in entries:
+        if not isinstance(entry, dict):
             continue
-        avg_price = entry["cost"] / entry["buy_qty"]
+        instrument = str(entry.get("instrument", ""))
+        quantity = _float(entry.get("quantity")) or 0.0
+        avg_price = _float(entry.get("avg_price")) or 0.0
+        if quantity <= 0:
+            continue
+        opened_at = entry.get("opened_at")
+        if isinstance(opened_at, str):
+            try:
+                opened_at = datetime.fromisoformat(opened_at)
+            except ValueError:
+                opened_at = None
         market_price = last_prices.get(instrument)
         unrealized = (
-            round((market_price - avg_price) * entry["qty"], 2)
+            round((market_price - avg_price) * quantity, 2)
             if market_price is not None
             else None
         )
         positions.append(
             {
                 "instrument": instrument,
-                "quantity": round(entry["qty"], 8),
+                "quantity": round(quantity, 8),
                 "avg_price": round(avg_price, 2),
                 "market_price": market_price,
                 "unrealized_pnl": unrealized,
-                "opened_at": entry["opened_at"],
+                "opened_at": _iso(opened_at),
             }
         )
     positions.sort(key=lambda position: position["instrument"])
