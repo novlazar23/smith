@@ -17,12 +17,14 @@ import logging
 import sys
 import threading
 
+from apps.demo_trader.metrics import METRICS_PORT, REGISTRY
 from apps.demo_trader.service import (
     build_trader,
     config_from_env,
     install_signal_handlers,
     run_service,
 )
+from prometheus_client import start_http_server
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +47,18 @@ def main() -> int:
     trader = build_trader(config=config)
     stop_event = threading.Event()
     install_signal_handlers(stop_event)
+    start_http_server(METRICS_PORT, registry=REGISTRY)
     logger.info(
         "Demo-Trader gestartet: instruments=%s interval=%.0fs venue=%s "
-        "initial_cash=%.2f trade_notional=%.2f min_confidence=%.2f (Paper-Trading, imaginäres Geld)",
+        "initial_cash=%.2f trade_notional=%.2f min_confidence=%.2f "
+        "metrics_port=%d (Paper-Trading, imaginäres Geld)",
         list(config.instruments),
         config.interval_seconds,
         config.candle_venue,
         config.initial_cash,
         config.trade_notional,
         config.min_confidence,
+        METRICS_PORT,
     )
     logger.info(
         "Paper-Konto '%s' wird in-Process gehalten und nach einem Neustart aus dem "

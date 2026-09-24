@@ -74,6 +74,7 @@ from typing import Any, Protocol, cast
 
 import numpy as np
 from apps.champion_evals.evolve import load_champion_params
+from apps.demo_trader.metrics import update_metrics
 from apps.orchestrator_service.service import (
     CandleWindow,
     ContextualAgent,
@@ -756,6 +757,8 @@ class DemoTrader:
         self._now = now if now is not None else lambda: datetime.now(UTC)
         self._last_funding: dict[str, datetime] = {}
         self._total_funding = 0.0
+        # Letzte Ensemble-Konfidenz pro Instrument (für trading_signal_confidence)
+        self._last_confidences: dict[str, float] = {}
         self._rehydrate_from_db()
 
     @property
@@ -1028,6 +1031,7 @@ class DemoTrader:
         consensus = result.consensus
         decision = result.decision
         confidence = consensus.confidence if consensus is not None else 0.0
+        self._last_confidences[instrument] = confidence
         plan = plan_trade(
             decision,
             confidence,
@@ -1324,6 +1328,7 @@ def run_service(trader: DemoTrader, stop_flag: Callable[[], bool]) -> None:
     while True:
         try:
             trader.run_cycle()
+            update_metrics(trader)
         except Exception as exc:
             logger.exception("Zyklus fehlgeschlagen (Loop läuft weiter): %s", exc)
         if stop_flag():
