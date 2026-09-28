@@ -59,7 +59,8 @@ groups:
 
       # ─── Database Health ───────────────────────────────────────────────────
       - alert: PostgresDown
-        expr: up{job="postgres"} == 0
+        # pg_up misst die DB selbst (Exporter-Down wird von ServiceDown gemeldet)
+        expr: pg_up == 0
         for: 2m
         labels:
           severity: critical
@@ -68,7 +69,7 @@ groups:
           description: "PostgreSQL instance {{ $labels.instance }} has been down for more than 2 minutes."
 
       - alert: PostgresDiskSpaceHigh
-        expr: pg_database_size / 1024 / 1024 / 1024 > 10
+        expr: pg_database_size_bytes / 1024 / 1024 / 1024 > 10
         for: 10m
         labels:
           severity: warning
@@ -78,7 +79,8 @@ groups:
 
       # ─── Redis Health ───────────────────────────────────────────────────────
       - alert: RedisDown
-        expr: up{job="redis"} == 0
+        # redis_up misst die Instanz selbst (Exporter-Down wird von ServiceDown gemeldet)
+        expr: redis_up == 0
         for: 2m
         labels:
           severity: critical

@@ -159,6 +159,44 @@ services:
     networks:
       - backend
 
+  # ─── Exporter (Prometheus-Scrape-Ziele fuer die Health-Alerts) ────────────
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.16.0
+    restart: unless-stopped
+    # root: das Image laeuft Default als nobody, das darf /run/secrets nicht lesen
+    user: root
+    secrets:
+      - postgres_password
+    environment:
+      # DATA_SOURCE_URI nimmt nur Host (Doku): User/Pass separat, Pass aus Secret-Datei
+      DATA_SOURCE_URI: "postgres:5432/trading?sslmode=disable"
+      DATA_SOURCE_USER: orchestra
+      DATA_SOURCE_PASS_FILE: /run/secrets/postgres_password
+    networks:
+      - backend
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.63.0
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis:6379
+    networks:
+      - backend
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    pid: host
+    command:
+      - "--path.rootfs=/rootfs"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+      # Default-Set + fuse.* (AppImage-Mounts melden NaN)
+      - "--collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs|fuse\\..*)$"
+    volumes:
+      - /:/rootfs:ro
+    networks:
+      - backend
+
   # ─── API ────────────────────────────────────────────────────────────────────
   api:
     build:
