@@ -41,7 +41,9 @@ dependencies = [
     "scikit-learn>=1.5.0",
     "numba>=0.60.0",
     # Storage
-    "sqlalchemy>=2.0.36",
+    # <2.1: SQLAlchemy 2.1 loest das Default-Dialect-Verhalten fuer
+    # "postgresql://" (psycopg3 statt psycopg2); die App laeuft auf psycopg2.
+    "sqlalchemy>=2.0.36,<2.1",
     "asyncpg>=0.30.0",
     "psycopg2-binary>=2.9",
     "clickhouse-connect>=0.8.0",

@@ -338,6 +338,13 @@ def _floor_8h(moment: datetime) -> datetime:
     return moment.replace(hour=moment.hour - moment.hour % 8, minute=0, second=0, microsecond=0)
 
 
+# ponytail: Das funding_rates-Mirror lädt nur ~täglich ~13:0x UTC nach, deshalb
+# fehlt die Rate eines Grenzwerts im Moment des Settlements immer; der längste
+# Lag bis zum nächsten Mirror-Lauf ist ~29 h. 48 h Deckel: Grenzwerte, deren Rate
+# länger fehlt, werden übersprungen (Mirror-Defekt darf den Zyklus nicht ewig halten).
+MAX_PENDING_FUNDING_AGE = timedelta(hours=48)
+
+
 def build_active_ensemble(instrument: str, horizon: str) -> list[ContextualAgent]:
     """Erzeugt das kanonische Ensemble mit ``AgentStatus.ACTIVE``.
 
@@ -937,9 +944,12 @@ class DemoTrader:
         ``amount = quantity x latest_close x rate`` dem Cash belastet
         (positive Rate → Long zahlt, negative → Long erhält). Jede
         gebuchte Settlement erhält eine ``FUNDING``-Audit-Zeile in
-        ``demo_trades`` (Persistenzfehler nur warning, nie fatal). Eine
-        fehlende Rate wird nicht nachgeholt (Warning, Grenzwert wird
-        übersprungen); ohne offene Position wird der Eintrag gelöscht.
+        ``demo_trades`` (Persistenzfehler nur warning, nie fatal).
+        Eine noch fehlende Rate (das funding_rates-Mirror lädt ~täglich
+        nach) wird gehalten und im nächsten Zyklus erneut abgefragt;
+        Grenzwerte, deren Rate seit mehr als
+        :data:`MAX_PENDING_FUNDING_AGE` fehlt, werden übersprungen.
+        Ohne offene Position wird der Eintrag gelöscht.
         """
         position = self._account.positions.get(instrument)
         if position is None:
@@ -976,13 +986,23 @@ class DemoTrader:
                         persist_demo_trade(conn, trade)
                 except Exception as exc:
                     logger.warning("FUNDING-Audit-Zeile für %s nicht persistierbar: %s", instrument, exc)
-            else:
+                last = next_ts
+            elif now - next_ts > MAX_PENDING_FUNDING_AGE:
                 logger.warning(
-                    "Funding-Settlement %s %s nicht gebucht (keine Rate in funding_rates)",
+                    "Funding-Settlement %s %s nicht gebucht (Rate in funding_rates seit >48 h fehlt, "
+                    "Grenzwert wird übersprungen)",
                     instrument,
                     next_ts,
                 )
-            last = next_ts
+                last = next_ts
+            else:
+                logger.warning(
+                    "Funding-Settlement %s %s: Rate noch nicht in funding_rates (Mirror-Nachladung wartet), "
+                    "Grenzwert wird gehalten",
+                    instrument,
+                    next_ts,
+                )
+                break
         self._last_funding[instrument] = last
 
     def _run_instrument(self, instrument: str) -> int:

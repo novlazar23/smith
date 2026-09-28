@@ -148,13 +148,13 @@ class TestSettleFundingCycle:
         assert funding_rows(fake_conn) == []
         assert source.requests == []
 
-    def test_missing_rate_not_booked_and_not_retried(
+    def test_missing_rate_held_and_booked_on_retry(
         self,
         config: DemoTraderConfig,
         fake_conn: FakeConnection,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """(c) Rate fehlt → kein Cash, keine Zeile, kein Fehler; Grenzwert wird übersprungen."""
+        """(c) Rate fehlt → Grenzwert wird gehalten und gebucht, sobald die Rate da ist."""
         opened_at, boundary = _boundary_near_now()
         clock = FakeClock(boundary + timedelta(minutes=1))
         source = StubFundingSource()
@@ -166,13 +166,44 @@ class TestSettleFundingCycle:
 
         assert trader.account.cash == pytest.approx(INITIAL_CASH)
         assert funding_rows(fake_conn) == []
-        assert "keine Rate in funding_rates" in caplog.text
-        assert trader._last_funding[BTC] == boundary
-        # Nächster Zyklus im selben Fenster: keine erneute Rate-Abfrage.
+        assert "Grenzwert wird gehalten" in caplog.text
+        assert trader._last_funding[BTC] == _floor_8h(opened_at)
+        # Rate erscheint (Mirror nachgeladen) → nächster Zyklus bucht sie.
+        source.rates[boundary] = 0.01
         source.requests.clear()
+        caplog.clear()
+        clock.value = boundary + timedelta(minutes=6)
         trader.run_cycle()
-        assert source.requests == []
-        assert len(funding_rows(fake_conn)) == 0
+
+        assert trader.account.cash == pytest.approx(INITIAL_CASH - POSITION_QTY * MARK_PRICE * 0.01)
+        assert len(funding_rows(fake_conn)) == 1
+        assert funding_rows(fake_conn)[0]["price"] == pytest.approx(0.01)
+        assert source.requests == [(BTC, config.candle_venue, boundary)]
+        assert trader._last_funding[BTC] == boundary
+        assert "Grenzwert wird gehalten" not in caplog.text
+
+    def test_missing_rate_skipped_after_48h(
+        self,
+        config: DemoTraderConfig,
+        fake_conn: FakeConnection,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """(h) Rate >48 h lang fehlend → Grenzwert wird übersprungen (kein ewiges Halten)."""
+        last = _floor_8h(datetime.now(UTC))
+        opened_at = last + timedelta(minutes=1)
+        boundary = last + timedelta(hours=8)
+        clock = FakeClock(boundary + timedelta(hours=49))
+        source = StubFundingSource()
+        trader = make_funding_trader(config, fake_conn, source, clock)
+        open_position(trader, opened_at)
+
+        with caplog.at_level("WARNING"):
+            trader.run_cycle()
+
+        assert trader.account.cash == pytest.approx(INITIAL_CASH)
+        assert funding_rows(fake_conn) == []
+        assert "Grenzwert wird übersprungen" in caplog.text
+        assert trader._last_funding[BTC] == boundary
 
     def test_clock_jump_17h_books_two_settlements(
         self, config: DemoTraderConfig, fake_conn: FakeConnection

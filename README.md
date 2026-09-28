@@ -1068,8 +1068,10 @@ Credential-Status pro Venue).
   (`DEMO_MIN_MOVE_COST_MULTIPLE`) — `0` bzw. `false` schaltet die
    Regel aus. Offene Long-Positionen zahlen (bzw. bei negativer Rate
    erhalten) alle 8 Stunden Funding aus `trading_events.funding_rates`
-   (Catch-Up über übersprungene 00:00/08:00/16:00-UTC-Grenzwerte,
-   Fail-Soft bei fehlender Rate/Tabelle); jedes Settlement wird als
+   (Catch-Up über übersprungene 00:00/08:00/16:00-UTC-Grenzwerte; eine
+   noch fehlende Rate wird im nächsten Zyklus erneut abgefragt, da das
+   Mirror ~täglich nachlädt, Grenzwerte >48 h ohne Rate werden
+   übersprungen, Fail-Soft bei fehlender Tabelle); jedes Settlement wird als
    `FUNDING`-Zeile in `demo_trades` auditiert, die kumulierte
    Funding-Zahlung ist deren Summe (keine extra `demo_account`-Spalte).
    Alles sichtbar im Web-Dashboard unter

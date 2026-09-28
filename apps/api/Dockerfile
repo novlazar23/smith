@@ -22,8 +22,10 @@ WORKDIR /app
 
 # Install Python dependencies
 COPY pyproject.toml README.md ./
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -e ".[paper]"
+# PIP_DEFAULT_TIMEOUT: pypi.org-Simple-Index-Requests fallen sporadisch
+# mit Read-Timeouts aus (15s pip-Default reicht nicht) -> ResolutionImpossible.
+RUN PIP_DEFAULT_TIMEOUT=120 pip install --upgrade pip && \
+    PIP_DEFAULT_TIMEOUT=120 pip install --no-cache-dir -e ".[paper]"
 
 # ---------- Production ----------
 FROM base AS production
